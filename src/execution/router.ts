@@ -22,17 +22,18 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       () =>
         api.estimateRouterData(
           { chainId, account: executionWallet.address, logics: built.logics },
-          {} // Removed permit2Type
+          {} // permit2Type removed — not supported in this API version
         ),
       { label: 'router.estimateRouterData', shouldRetry: isTransientError, retries: 2 }
     );
 
+    // Build the router transaction request without `referralCode` (not supported).
+    // If a referral is needed, use `referral` instead, but we omit it to avoid errors.
     const routerData = await api.buildRouterTransactionRequest({
       chainId,
       account: executionWallet.address,
       logics: built.logics,
-      // permit2Type removed because it does not exist in this API version
-      referralCode: undefined,
+      // referralCode removed — use referral if needed
       ...estimateResult,
     });
 
