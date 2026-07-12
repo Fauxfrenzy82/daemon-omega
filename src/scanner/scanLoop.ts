@@ -1,11 +1,11 @@
 import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
-import { uniswapV3Source } from './sources/uniswapV3';
+// Uniswap V3 removed — ParaSwap and OpenOcean aggregate its liquidity.
+// import { uniswapV3Source } from './sources/uniswapV3';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
-// Balancer V2 removed because its API changed and is not currently supported
-// import { balancerV2Source } from './sources/balancerV2';
+// Balancer V2 removed because its API changed and is not currently supported.
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -18,7 +18,8 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-const SOURCES: PriceSource[] = [uniswapV3Source, paraswapV5Source, openOceanV2Source]; // Balancer removed
+// ParaSwap V5 + OpenOcean V2 are sufficient; they cover Uniswap V3 pools via aggregation.
+const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
 
 let cachedNativeUsdPrice = 0.5;
 
