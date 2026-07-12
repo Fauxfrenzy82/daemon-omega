@@ -10,31 +10,28 @@ import { createLogger } from './utils/logger';
 
 const log = createLogger('main');
 
-const SWEEP_INTERVAL_MS = 5 * 60 * 1000; // periodic sweep, independent of scan cycle
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * Fetches the live POL/USD price from CoinGecko.
- * Falls back to a safe default (0.50) if the API fails.
+ * Fetches live POL/USD price from CoinGecko.
+ * Falls back to a safe default if API fails.
  */
 async function getPolUsdPrice(): Promise<number> {
   try {
     const response = await fetch(
       'https://api.coingecko.com/api/v3/simple/price?ids=matic-network&vs_currencies=usd',
       {
-        headers: {
-          'Accept': 'application/json',
-        },
-        // Timeout after 5 seconds
+        headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(5000),
       }
     );
 
     if (!response.ok) {
       log.warn('CoinGecko API returned non-200 status', { status: response.status });
-      return 0.50;
+      return 0.08;
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     const price = data['matic-network']?.usd;
 
     if (price && typeof price === 'number' && price > 0) {
@@ -42,21 +39,20 @@ async function getPolUsdPrice(): Promise<number> {
       return price;
     }
 
-    log.warn('CoinGecko response missing price data', { data });
-    return 0.50;
+    log.warn('CoinGecko response missing price data, using fallback', { fallback: 0.08 });
+    return 0.08;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    log.warn('Failed to fetch POL/USD price from CoinGecko, using fallback', {
+    log.warn('Failed to fetch POL/USD price, using fallback', {
       error: message,
-      fallback: 0.50,
+      fallback: 0.08,
     });
-    return 0.50;
+    return 0.08;
   }
 }
 
 /**
- * Fetches live native token price with retry and caching.
- * The price is used for gas estimation and sweep calculations.
+ * Fetches live native token price with retry.
  */
 async function getNativeUsdPriceWithRetry(attempts: number = 3): Promise<number> {
   let lastError: Error | null = null;
@@ -77,10 +73,10 @@ async function getNativeUsdPriceWithRetry(attempts: number = 3): Promise<number>
 
   log.warn('All price fetch attempts failed, using fallback', {
     attempts,
-    fallback: 0.50,
+    fallback: 0.08,
     lastError: lastError?.message,
   });
-  return 0.50;
+  return 0.08;
 }
 
 async function bootstrap(): Promise<void> {
@@ -88,6 +84,7 @@ async function bootstrap(): Promise<void> {
     env: env.NODE_ENV,
     executionWallet: executionWallet.address,
     discordAlerts: isDiscordConfigured() ? 'enabled' : 'disabled (logging only)',
+    gasReserveUsd: env.SWEEP_KEEP_GAS_RESERVE_USD,
   });
 
   await initSchema();
@@ -99,8 +96,7 @@ async function bootstrap(): Promise<void> {
 
   startScanLoop();
 
-  // Fetch live POL price once at startup for the sweep logic.
-  // The price is re-fetched on every sweep cycle to stay current.
+  // Fetch live POL price once at startup.
   const nativePrice = await getNativeUsdPriceWithRetry();
   log.info('Initial native token price fetched', { nativePrice });
 
