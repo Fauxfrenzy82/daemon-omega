@@ -12,6 +12,7 @@
     "resolveJsonModule": true,
     "moduleResolution": "node",
     "ignoreDeprecations": "6.0",
+    "types": ["node"],
     "declaration": false,
     "sourceMap": true,
     "noUnusedLocals": false,
