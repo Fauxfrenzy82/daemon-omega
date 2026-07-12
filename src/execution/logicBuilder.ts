@@ -20,7 +20,7 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // FIX: Added `id` and `isLoan` as required by the current Protocolink API.
+  // Flash loan logic (Aave V3)
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
     id: 'aave-v3-flashloan',
     isLoan: true,
@@ -39,34 +39,42 @@ export async function buildArbitrageLogics(
   });
   logics.push(flashLoanLogic);
 
-  const buySwapLogic = await buildSwapLogic(
-    opp.spreadOpp.buySource,
+  // Buy-side swap
+  let buySource = opp.spreadOpp.buySource;
+  let buySwapLogic = await buildSwapLogicWithFallback(
+    buySource,
     opp.pair.quote,
     opp.pair.base,
     flashLoanAmountRaw
   );
 
   if (!buySwapLogic) {
-    throw new Error(`Failed to build buy-side swap logic for source ${opp.spreadOpp.buySource}`);
+    throw new Error(`Failed to build buy-side swap logic for source ${buySource}`);
   }
   logics.push(buySwapLogic);
 
-  const sellSwapLogic = await buildSwapLogic(
-    opp.spreadOpp.sellSource,
+  // Sell-side swap (amount is auto, but we need to get the output amount from previous logic)
+  // In Protocolink, the output of the first swap is the input of the second if we chain them.
+  // For simplicity, we assume the amount is `auto` and the SDK handles it.
+  // However, we need to pass `auto` as a string.
+  const sellAmount = 'auto';
+  let sellSource = opp.spreadOpp.sellSource;
+  let sellSwapLogic = await buildSwapLogicWithFallback(
+    sellSource,
     opp.pair.base,
     opp.pair.quote,
-    'auto'
+    sellAmount
   );
 
   if (!sellSwapLogic) {
-    throw new Error(`Failed to build sell-side swap logic for source ${opp.spreadOpp.sellSource}`);
+    throw new Error(`Failed to build sell-side swap logic for source ${sellSource}`);
   }
   logics.push(sellSwapLogic);
 
   log.info('Built arbitrage logic sequence', {
     pairId: opp.pair.id,
-    buySource: opp.spreadOpp.buySource,
-    sellSource: opp.spreadOpp.sellSource,
+    buySource,
+    sellSource,
     steps: logics.length,
   });
 
@@ -77,7 +85,41 @@ export async function buildArbitrageLogics(
   };
 }
 
-async function buildSwapLogic(
+/**
+ * Attempts to build swap logic for a given source. If the source fails,
+ * it falls back to OpenOcean (if available) and then to Uniswap V3.
+ */
+async function buildSwapLogicWithFallback(
+  source: string,
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  amountIn: string
+): Promise<any | null> {
+  const chainId = getChainId();
+
+  // Try the requested source first
+  let swapLogic = await buildSwapLogicSingle(source, tokenIn, tokenOut, amountIn);
+  if (swapLogic) return swapLogic;
+
+  // Fallback to OpenOcean
+  if (source !== 'openoceanv2') {
+    log.info(`Falling back to OpenOcean for swap (${tokenIn.symbol}->${tokenOut.symbol})`);
+    swapLogic = await buildSwapLogicSingle('openoceanv2', tokenIn, tokenOut, amountIn);
+    if (swapLogic) return swapLogic;
+  }
+
+  // Fallback to Uniswap V3
+  if (source !== 'uniswapv3') {
+    log.info(`Falling back to Uniswap V3 for swap (${tokenIn.symbol}->${tokenOut.symbol})`);
+    swapLogic = await buildSwapLogicSingle('uniswapv3', tokenIn, tokenOut, amountIn);
+    if (swapLogic) return swapLogic;
+  }
+
+  log.warn('All swap sources failed', { tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol, source });
+  return null;
+}
+
+async function buildSwapLogicSingle(
   source: string,
   tokenIn: TokenInfo,
   tokenOut: TokenInfo,
@@ -111,13 +153,12 @@ async function buildSwapLogic(
         });
         return api.protocols.openoceanv2.newSwapTokenLogic(quotation);
       }
-      // Balancer V2 removed because its API no longer supports getSwapTokenQuotation/newSwapTokenLogic in this version.
       default:
         log.warn('Unsupported swap source requested', { source });
         return null;
     }
   } catch (err) {
-    log.error('Swap logic build failed', {
+    log.warn('Swap logic build failed', {
       source,
       tokenIn: tokenIn.symbol,
       tokenOut: tokenOut.symbol,
