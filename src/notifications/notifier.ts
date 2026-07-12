@@ -1,5 +1,3 @@
-// src/notifications/notifier.ts (modified)
-
 import axios from 'axios';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
@@ -22,72 +20,70 @@ export interface AlertFields {
 
 /**
  * Sanitize fields before sending to Discord:
- * - Remove any object that contains 'url' with 'alchemy' or 'rpc' (API key redaction)
- * - Truncate long hex strings (like raw transaction)
- * - Remove any field named 'params' that contains an array with a hex string
+ * - Redact Alchemy API keys in URLs
+ * - Truncate long hex strings (raw transaction data)
+ * - Convert any non-primitive values to strings to avoid Discord embed issues
  */
 function sanitizeFields(fields: AlertFields): AlertFields {
   const sanitized: AlertFields = {};
 
   for (const [key, value] of Object.entries(fields)) {
-    // Skip if value is undefined
     if (value === undefined) continue;
 
-    // Redact any field that looks like a URL with API key
+    // Redact API keys in URLs
     if (typeof value === 'string' && value.includes('alchemy.com/v2/')) {
       sanitized[key] = value.replace(/\/v2\/[^\/\s]+/, '/v2/REDACTED');
       continue;
     }
 
-    // Redact raw transaction hex (long hex string starting with 0x)
+    // Truncate long hex strings (raw transactions, etc.)
     if (typeof value === 'string' && value.startsWith('0x') && value.length > 100) {
       sanitized[key] = value.slice(0, 30) + '...' + value.slice(-6);
       continue;
     }
 
-    // If it's an object, recursively sanitize (avoid circular)
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      sanitized[key] = sanitizeFields(value as AlertFields);
+    // If it's an object or array, stringify it (Discord embed fields expect primitives)
+    if (typeof value === 'object' && value !== null) {
+      try {
+        sanitized[key] = JSON.stringify(value);
+      } catch {
+        sanitized[key] = '[unserializable object]';
+      }
       continue;
     }
 
-    // If it's an array, look for hex strings
-    if (Array.isArray(value)) {
-      sanitized[key] = value.map(item => {
-        if (typeof item === 'string' && item.startsWith('0x') && item.length > 100) {
-          return item.slice(0, 30) + '...' + item.slice(-6);
-        }
-        return item;
-      });
-      continue;
-    }
-
-    // Otherwise, keep as is
+    // Keep primitives as-is
     sanitized[key] = value;
   }
 
   return sanitized;
 }
 
+/**
+ * Central alert dispatcher with sanitization.
+ * Always logs locally, then sends to Discord if webhook is configured.
+ */
 export async function sendAlert(
   level: AlertLevel,
   title: string,
   fields: AlertFields = {}
 ): Promise<void> {
-  // Always log locally, but with sanitization
-  const sanitized = sanitizeFields(fields);
+  // Sanitize before logging and before sending to Discord
+  const safeFields = sanitizeFields(fields);
+
+  // Always log locally (sanitized)
   const logFn = level === 'error' ? log.error : level === 'warn' ? log.warn : log.info;
-  logFn(title, sanitized);
+  logFn(title, safeFields);
 
   if (!env.DISCORD_WEBHOOK_URL) {
-    return;
+    return; // No webhook configured — log line above is the full alert
   }
 
   try {
     const embed = {
       title,
       color: LEVEL_COLOR[level],
-      fields: Object.entries(sanitized)
+      fields: Object.entries(safeFields)
         .filter(([, v]) => v !== undefined)
         .map(([name, value]) => ({
           name,
@@ -107,9 +103,54 @@ export async function sendAlert(
       { label: 'notifier.discord', shouldRetry: isTransientError, retries: 2 }
     );
   } catch (err) {
-    // Discord post failure should never break the bot
+    // A failed Discord post must never break the trading flow — log and move on.
     log.warn('Discord alert failed to send', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+}
+
+export function isDiscordConfigured(): boolean {
+  return env.DISCORD_WEBHOOK_URL !== '';
+}
+
+// ============================================================================
+// Convenience wrappers for common alert types across the system.
+// Each wrapper calls sendAlert with the appropriate level and field structure.
+// ============================================================================
+
+export function alertTradeExecuted(pairId: string, netProfitUsd: number, txHash: string): Promise<void> {
+  return sendAlert('success', 'Trade Executed', {
+    pair: pairId,
+    netProfitUsd: netProfitUsd.toFixed(4),
+    txHash,
+  });
+}
+
+export function alertTradeFailed(pairId: string, reason: string): Promise<void> {
+  return sendAlert('warn', 'Trade Failed', { pair: pairId, reason });
+}
+
+export function alertSweepCompleted(tokenSymbol: string, amountUsd: number, txHash: string): Promise<void> {
+  return sendAlert('success', 'Profit Swept to Treasury', {
+    token: tokenSymbol,
+    amountUsd: amountUsd.toFixed(4),
+    txHash,
+  });
+}
+
+export function alertSweepFailed(tokenSymbol: string, reason: string): Promise<void> {
+  return sendAlert('error', 'Sweep Failed', { token: tokenSymbol, reason });
+}
+
+export function alertCircuitBreakerTripped(reason: string): Promise<void> {
+  return sendAlert('error', 'Circuit Breaker TRIPPED --- Trading Halted', { reason });
+}
+
+export function alertCircuitBreakerReset(reason: string): Promise<void> {
+  return sendAlert('info', 'Circuit Breaker Reset --- Trading Resumed', { reason });
+}
+
+export function alertSystemStarted(executionWallet: string): Promise<void> {
+  return sendAlert('info', 'System Started', { executionWallet });
 }
