@@ -18,7 +18,7 @@ export const PAIRS: PairConfig[] = [
     quote: getToken('USDC'),
     minProfitUsd: 0.5,
     minSpreadBps: 5,
-    maxPositionUsd: 1000,
+    maxPositionUsd: 100,
     enabled: true,
   },
   {
