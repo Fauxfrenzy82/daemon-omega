@@ -16,8 +16,8 @@ export const PAIRS: PairConfig[] = [
     id: 'WETH-USDC',
     base: getToken('WETH'),
     quote: getToken('USDC'),
-    minProfitUsd: 0.5,      // lowered from 5
-    minSpreadBps: 5,        // lowered from 25
+    minProfitUsd: 0.5,
+    minSpreadBps: 5,
     maxPositionUsd: 100,
     enabled: true,
   },
