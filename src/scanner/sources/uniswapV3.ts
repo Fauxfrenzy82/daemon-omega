@@ -6,13 +6,13 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('uniswapV3-source');
 
-const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21';
+// Wrapped with ethers.utils.getAddress() to ensure correct checksum
+const QUOTER_V2_ADDRESS = ethers.utils.getAddress('0x61fFE014bA17989E743c5F6cB21bF9697530B21');
+const FACTORY_ADDRESS = ethers.utils.getAddress('0x1F98431c8aD98523631AE4a59f267346ea31F984');
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
 ];
-
-const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
 
 const FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
@@ -23,7 +23,7 @@ const POOL_ABI = [
   'function slot0() external view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
 ];
 
-const FEE_TIERS = [100, 500, 3000, 10000];
+const FEE_TIERS = [100, 500, 3000, 10000]; // 0.01%, 0.05%, 0.3%, 1%
 
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
