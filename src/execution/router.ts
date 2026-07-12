@@ -22,7 +22,7 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       () =>
         api.estimateRouterData(
           { chainId, account: executionWallet.address, logics: built.logics },
-          { permit2Type: 'permit' }
+          {} // Removed permit2Type
         ),
       { label: 'router.estimateRouterData', shouldRetry: isTransientError, retries: 2 }
     );
@@ -31,7 +31,7 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       chainId,
       account: executionWallet.address,
       logics: built.logics,
-      permit2Type: 'permit',
+      // permit2Type removed because it does not exist in this API version
       referralCode: undefined,
       ...estimateResult,
     });
