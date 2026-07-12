@@ -1,9 +1,11 @@
 import * as api from '@protocolink/api';
+import { ethers } from 'ethers';
 import { executionWallet } from '../treasury/wallets';
 import { getChainId } from './protocolinkClient';
 import { BuiltLogics } from './logicBuilder';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
+import { getSafeGasPrices } from '../utils/gas';
 
 const log = createLogger('router');
 
@@ -22,25 +24,27 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       () =>
         api.estimateRouterData(
           { chainId, account: executionWallet.address, logics: built.logics },
-          {} // permit2Type removed — not supported in this API version
+          {}
         ),
       { label: 'router.estimateRouterData', shouldRetry: isTransientError, retries: 2 }
     );
 
-    // Build the router transaction request without `referralCode` (not supported).
-    // If a referral is needed, use `referral` instead, but we omit it to avoid errors.
     const routerData = await api.buildRouterTransactionRequest({
       chainId,
       account: executionWallet.address,
       logics: built.logics,
-      // referralCode removed — use referral if needed
       ...estimateResult,
     });
+
+    // FIX: Get safe gas prices with 25 Gwei minimum tip
+    const gasPrices = await getSafeGasPrices();
 
     const tx = await executionWallet.sendTransaction({
       to: routerData.to,
       data: routerData.data,
       value: routerData.value ?? '0',
+      maxPriorityFeePerGas: gasPrices.maxPriorityFeePerGas,
+      maxFeePerGas: gasPrices.maxFeePerGas,
     });
 
     log.info('Router transaction submitted', { txHash: tx.hash });
