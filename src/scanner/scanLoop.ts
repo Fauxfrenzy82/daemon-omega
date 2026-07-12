@@ -2,10 +2,8 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 // Uniswap V3 removed — ParaSwap and OpenOcean aggregate its liquidity.
-// import { uniswapV3Source } from './sources/uniswapV3';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
-// Balancer V2 removed because its API changed and is not currently supported.
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
