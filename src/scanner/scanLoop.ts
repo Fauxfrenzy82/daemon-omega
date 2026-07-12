@@ -13,11 +13,14 @@ import { hasExecutionCapacity } from '../execution/concurrency';
 import { evaluateCircuitBreaker, isBreakerTripped } from '../risk/circuitBreaker';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
+import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
 const SOURCES: PriceSource[] = [uniswapV3Source, paraswapV5Source, openOceanV2Source, balancerV2Source];
 
+// Simplified native-token USD reference for gas costing.
+// Refined later with a dedicated price feed if needed.
 let cachedNativeUsdPrice = 0.5;
 
 function toRawAmount(amountHuman: number, token: TokenInfo): string {
@@ -25,19 +28,17 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
 }
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
-  const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
+  const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote); // quote token as base unit for sizing simplicity
 
   const requests = SOURCES.map((source) =>
-    source
-      .getQuote({
-        tokenIn: pair.quote,
-        tokenOut: pair.base,
-        amountIn: positionRaw,
-      })
-      .catch((err) => {
-        log.debug('Source quote threw', { source: source.name, pairId: pair.id, error: String(err) });
-        return null;
-      })
+    source.getQuote({
+      tokenIn: pair.quote,
+      tokenOut: pair.base,
+      amountIn: positionRaw,
+    }).catch((err) => {
+      log.debug('Source quote threw', { source: source.name, pairId: pair.id, error: String(err) });
+      return null;
+    })
   );
 
   const results = await Promise.all(requests);
@@ -52,17 +53,17 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   }
 
   const spreadOpp = findBestSpread(pair.id, quotes);
-
   if (!spreadOpp) {
     return null;
   }
 
   const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
-
   return evaluated;
 }
 
 async function runScanCycle(): Promise<void> {
+  recordScanCycle(); // liveness signal for /health — fires even on early returns below
+
   await evaluateCircuitBreaker();
 
   if (isBreakerTripped()) {
@@ -76,15 +77,10 @@ async function runScanCycle(): Promise<void> {
   }
 
   const pairs = enabledPairs();
-
-  const results = await Promise.all(
-    pairs.map((pair) =>
-      scanPair(pair).catch((err) => {
-        log.error('Pair scan failed', { pairId: pair.id, error: err instanceof Error ? err.message : String(err) });
-        return null;
-      })
-    )
-  );
+  const results = await Promise.all(pairs.map((pair) => scanPair(pair).catch((err) => {
+    log.error('Pair scan failed', { pairId: pair.id, error: err instanceof Error ? err.message : String(err) });
+    return null;
+  })));
 
   const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
 
