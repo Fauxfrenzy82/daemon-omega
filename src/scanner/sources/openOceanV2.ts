@@ -3,6 +3,7 @@ import { PriceSource, QuoteRequest, QuoteResult } from '../priceSource';
 import { env } from '../../config/env';
 import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
+import { openOceanLimiter } from '../../utils/rateLimiter';
 
 const log = createLogger('openOceanV2-source');
 
@@ -20,6 +21,12 @@ export const openOceanV2Source: PriceSource = {
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
+      // Wait for a rate-limit token before firing the request, rather
+      // than firing and hoping — this keeps every call under
+      // OpenOcean's published 2 req/sec public-plan cap regardless of
+      // how many pairs the scanner is checking per cycle.
+      await openOceanLimiter.acquire();
+
       const params = {
         inTokenAddress: req.tokenIn.address,
         outTokenAddress: req.tokenOut.address,
@@ -41,7 +48,6 @@ export const openOceanV2Source: PriceSource = {
       }
 
       const data = response.data.data;
-
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
       const amountOutHuman = Number(data.outAmount) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
