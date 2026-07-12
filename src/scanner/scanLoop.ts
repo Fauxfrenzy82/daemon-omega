@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
-import { uniswapV3Source } from './sources/uniswapV3';   // re-enabled
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
 import { PriceSource, QuoteResult } from './priceSource';
@@ -16,8 +15,8 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// Include Uniswap V3 again
-const SOURCES: PriceSource[] = [uniswapV3Source, paraswapV5Source, openOceanV2Source];
+// Only ParaSwap and OpenOcean — Uniswap removed due to address validation issues.
+const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
 
 let cachedNativeUsdPrice = 0.5;
 
