@@ -1,8 +1,7 @@
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
-import fs from 'fs';
-import path from 'path';
+import { SCHEMA_SQL } from './schema'; // <-- import embedded SQL
 
 const logger = createLogger('db');
 
@@ -54,9 +53,8 @@ export async function withTransaction<T>(
 }
 
 export async function initSchema(): Promise<void> {
-  const schemaPath = path.join(__dirname, 'schema.sql');
-  const sql = fs.readFileSync(schemaPath, 'utf-8');
-  await pool.query(sql);
+  // Use embedded SQL constant instead of reading from file system
+  await pool.query(SCHEMA_SQL);
   logger.info('Schema initialized');
 }
 
