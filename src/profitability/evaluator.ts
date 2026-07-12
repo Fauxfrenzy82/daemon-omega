@@ -57,6 +57,22 @@ export async function evaluateOpportunity(
 
   const executable = thresholdCheck.passes && slippageOk && liquidityOk;
 
+  // Detailed logging to see why a potential trade is not executable
+  if (!executable) {
+    log.debug('Opportunity rejected', {
+      pairId: pair.id,
+      spreadBps: spreadOpp.spreadBps,
+      grossProfitUsd,
+      netProfitUsd,
+      gasCostUsd: cost.gasCostUsd,
+      protocolFeeUsd: cost.protocolFeeUsd,
+      thresholdPasses: thresholdCheck.passes,
+      slippageOk,
+      liquidityOk,
+      threshold: thresholdCheck,
+    });
+  }
+
   const evaluated: EvaluatedOpportunity = {
     pair,
     spreadOpp,
