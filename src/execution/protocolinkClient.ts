@@ -17,16 +17,10 @@ export function getChainId(): number {
   return activeChain.chainId;
 }
 
-// FIX: getAgent may not exist in current SDK — if this breaks at runtime,
-// the fallback is to use executionWallet.address directly.
+// FIX: getAgent may not exist; fallback to execution wallet address.
 export async function getAgentAddress(): Promise<string> {
-  try {
-    return await api.getAgent(activeChain.chainId, executionWallet.address);
-  } catch {
-    // Fallback: use the execution wallet address directly.
-    // Protocolink's Router can accept the wallet as the agent.
-    return executionWallet.address;
-  }
+  // The Router can use the execution wallet as the agent directly.
+  return executionWallet.address;
 }
 
 export { api };
