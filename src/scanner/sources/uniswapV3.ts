@@ -6,10 +6,9 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('uniswapV3-source');
 
-// Convert to lower case so ethers.Contract will accept them.
-// Ethers will automatically compute the correct checksum from lowercased addresses.
-const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21'.toLowerCase();
-const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984'.toLowerCase();
+// Use plain string — no checksum validation.
+const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21';
+const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
@@ -28,7 +27,6 @@ const FEE_TIERS = [100, 500, 3000, 10000];
 
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
-// Ethers will now accept these addresses because they are lowercased.
 const quoter = new ethers.Contract(QUOTER_V2_ADDRESS, QUOTER_ABI, provider);
 const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
 
