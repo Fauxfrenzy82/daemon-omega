@@ -20,9 +20,10 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // FIX: Removed 'chainId' from newFlashLoanLogic — the current
-  // Protocolink API version does not accept it in this object.
+  // FIX: Added `id` and `isLoan` as required by the current Protocolink API.
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
+    id: 'aave-v3-flashloan',
+    isLoan: true,
     loans: [
       {
         token: {
@@ -110,13 +111,7 @@ async function buildSwapLogic(
         });
         return api.protocols.openoceanv2.newSwapTokenLogic(quotation);
       }
-      case 'balancerv2': {
-        const quotation = await api.protocols.balancerv2.getSwapTokenQuotation(chainId, {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-        });
-        return api.protocols.balancerv2.newSwapTokenLogic(quotation);
-      }
+      // Balancer V2 removed because its API no longer supports getSwapTokenQuotation/newSwapTokenLogic in this version.
       default:
         log.warn('Unsupported swap source requested', { source });
         return null;
