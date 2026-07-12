@@ -59,17 +59,18 @@ export async function evaluateOpportunity(
 
   // Detailed logging to see why a potential trade is not executable
   if (!executable) {
-    log.debug('Opportunity rejected', {
+    log.info('🔍 Opportunity rejected — details:', {
       pairId: pair.id,
       spreadBps: spreadOpp.spreadBps,
-      grossProfitUsd,
-      netProfitUsd,
-      gasCostUsd: cost.gasCostUsd,
-      protocolFeeUsd: cost.protocolFeeUsd,
+      grossProfitUsd: grossProfitUsd.toFixed(4),
+      netProfitUsd: netProfitUsd.toFixed(4),
+      gasCostUsd: cost.gasCostUsd.toFixed(4),
+      protocolFeeUsd: cost.protocolFeeUsd.toFixed(4),
       thresholdPasses: thresholdCheck.passes,
-      slippageOk,
-      liquidityOk,
-      threshold: thresholdCheck,
+      slippageOk: slippageOk,
+      liquidityOk: liquidityOk,
+      minSpreadRequired: thresholdCheck.minSpreadBps,
+      minProfitRequired: thresholdCheck.minProfitUsd,
     });
   }
 
@@ -86,13 +87,6 @@ export async function evaluateOpportunity(
     liquidityOk,
     executable,
   };
-
-  log.debug('Opportunity evaluated', {
-    pairId: pair.id,
-    spreadBps: spreadOpp.spreadBps,
-    netProfitUsd,
-    executable,
-  });
 
   return evaluated;
 }
