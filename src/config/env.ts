@@ -50,11 +50,11 @@ export const env = {
   DATABASE_URL: required('DATABASE_URL'),
 
   // Risk / thresholds
-  DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 5),
-  DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 30),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 1000),
+  DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.5),
+  DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 5),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 100),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
-  MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 50),
+  MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 100),
 
   // Circuit breaker
   MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 3),
@@ -72,7 +72,7 @@ export const env = {
   DISCORD_WEBHOOK_URL: optional('DISCORD_WEBHOOK_URL', ''),
 
   // Scanner
-  SCAN_INTERVAL_MS: optionalNumber('SCAN_INTERVAL_MS', 3000),
+  SCAN_INTERVAL_MS: optionalNumber('SCAN_INTERVAL_MS', 15000),
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
 };
