@@ -9,7 +9,7 @@ const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
 // Lower gas estimate for testing (realistic for simple swaps)
 export const ESTIMATED_GAS_UNITS = {
-  flashloanArbitrage: 250000, // reduced from 550000
+  flashloanArbitrage: 250000,
 };
 
 export interface GasCostEstimate {
@@ -59,8 +59,6 @@ export async function estimateFullCost(
     protocolFeeUsd,
     totalCostUsd: gas.costUsd + protocolFeeUsd,
   };
-
-  log.debug('Full cost estimate', estimate);
 
   return estimate;
 }
