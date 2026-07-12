@@ -20,8 +20,9 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
+  // FIX: Removed 'chainId' from newFlashLoanLogic — the current
+  // Protocolink API version does not accept it in this object.
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
-    chainId,
     loans: [
       {
         token: {
