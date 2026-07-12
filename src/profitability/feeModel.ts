@@ -7,8 +7,9 @@ const log = createLogger('feeModel');
 
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
+// Lower gas estimate for testing (realistic for simple swaps)
 export const ESTIMATED_GAS_UNITS = {
-  flashloanArbitrage: 550000,
+  flashloanArbitrage: 250000, // reduced from 550000
 };
 
 export interface GasCostEstimate {
