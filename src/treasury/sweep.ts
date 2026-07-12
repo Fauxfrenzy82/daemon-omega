@@ -7,6 +7,7 @@ import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
 import { getChainId, api } from '../execution/protocolinkClient';
 import { alertSweepCompleted, alertSweepFailed } from '../notifications/notifier';
+import { getSafeGasPrices } from '../utils/gas';
 
 const log = createLogger('sweep');
 
@@ -65,7 +66,7 @@ async function consolidateTokenToTarget(token: TokenInfo): Promise<void> {
       () =>
         api.estimateRouterData(
           { chainId, account: executionWallet.address, logics: [swapLogic] },
-          {} // permit2Type removed
+          {}
         ),
       { label: `sweep.consolidate.estimate.${token.symbol}`, shouldRetry: isTransientError, retries: 2 }
     );
@@ -74,15 +75,18 @@ async function consolidateTokenToTarget(token: TokenInfo): Promise<void> {
       chainId,
       account: executionWallet.address,
       logics: [swapLogic],
-      // permit2Type removed
       ...estimateResult,
     });
 
-    // Cast tx to TransactionResponse to access .wait()
+    // FIX: Get safe gas prices with 25 Gwei minimum tip
+    const gasPrices = await getSafeGasPrices();
+
     const tx = await executionWallet.sendTransaction({
       to: routerData.to,
       data: routerData.data,
       value: routerData.value ?? '0',
+      maxPriorityFeePerGas: gasPrices.maxPriorityFeePerGas,
+      maxFeePerGas: gasPrices.maxFeePerGas,
     }) as ethers.providers.TransactionResponse;
 
     const receipt = await tx.wait();
@@ -127,10 +131,19 @@ async function sweepTargetToTreasury(): Promise<void> {
   try {
     const contract = getErc20Contract(SWEEP_TARGET.address, executionWallet);
 
+    // FIX: Get safe gas prices with 25 Gwei minimum tip
+    const gasPrices = await getSafeGasPrices();
+
     const tx = await withRetry(
-      () => contract.transfer(treasury, balance),
+      async () => {
+        const txResponse = await contract.transfer(treasury, balance, {
+          maxPriorityFeePerGas: gasPrices.maxPriorityFeePerGas,
+          maxFeePerGas: gasPrices.maxFeePerGas,
+        });
+        return txResponse as ethers.providers.TransactionResponse;
+      },
       { label: `sweep.transfer.${SWEEP_TARGET.symbol}`, shouldRetry: isTransientError, retries: 2 }
-    ) as ethers.providers.TransactionResponse;
+    );
 
     log.info('Sweep transaction submitted', {
       symbol: SWEEP_TARGET.symbol,
@@ -186,7 +199,15 @@ export async function sweepNativeExcess(nativeUsdPrice: number): Promise<void> {
   });
 
   try {
-    const tx = await executionWallet.sendTransaction({ to: treasury, value: excessWei }) as ethers.providers.TransactionResponse;
+    // FIX: Get safe gas prices with 25 Gwei minimum tip
+    const gasPrices = await getSafeGasPrices();
+
+    const tx = await executionWallet.sendTransaction({
+      to: treasury,
+      value: excessWei,
+      maxPriorityFeePerGas: gasPrices.maxPriorityFeePerGas,
+      maxFeePerGas: gasPrices.maxFeePerGas,
+    }) as ethers.providers.TransactionResponse;
 
     log.info('Native sweep submitted', { txHash: tx.hash, excessUsd });
 
