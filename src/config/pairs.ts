@@ -10,50 +10,51 @@ export interface PairConfig {
   enabled: boolean;
 }
 
+// Lower thresholds for testing — executable should become > 0.
 export const PAIRS: PairConfig[] = [
   {
     id: 'WETH-USDC',
     base: getToken('WETH'),
     quote: getToken('USDC'),
-    minProfitUsd: 5,
-    minSpreadBps: 25,
-    maxPositionUsd: 1000,
+    minProfitUsd: 0.5,      // lowered from 5
+    minSpreadBps: 5,        // lowered from 25
+    maxPositionUsd: 100,
     enabled: true,
   },
   {
     id: 'WBTC-USDC',
     base: getToken('WBTC'),
     quote: getToken('USDC'),
-    minProfitUsd: 8,
-    minSpreadBps: 30,
-    maxPositionUsd: 1000,
+    minProfitUsd: 0.5,
+    minSpreadBps: 5,
+    maxPositionUsd: 100,
     enabled: true,
   },
   {
     id: 'WMATIC-USDC',
     base: getToken('WMATIC'),
     quote: getToken('USDC'),
-    minProfitUsd: 3,
-    minSpreadBps: 40,
-    maxPositionUsd: 500,
+    minProfitUsd: 0.2,
+    minSpreadBps: 5,
+    maxPositionUsd: 50,
     enabled: true,
   },
   {
     id: 'USDCe-USDT',
     base: getToken('USDCe'),
     quote: getToken('USDT'),
-    minProfitUsd: 2,
-    minSpreadBps: 15,
-    maxPositionUsd: 800,
+    minProfitUsd: 0.1,
+    minSpreadBps: 3,
+    maxPositionUsd: 50,
     enabled: true,
   },
   {
     id: 'DAI-USDC',
     base: getToken('DAI'),
     quote: getToken('USDC'),
-    minProfitUsd: 2,
-    minSpreadBps: 15,
-    maxPositionUsd: 800,
+    minProfitUsd: 0.1,
+    minSpreadBps: 3,
+    maxPositionUsd: 50,
     enabled: true,
   },
 ];
