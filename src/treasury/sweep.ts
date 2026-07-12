@@ -65,7 +65,7 @@ async function consolidateTokenToTarget(token: TokenInfo): Promise<void> {
       () =>
         api.estimateRouterData(
           { chainId, account: executionWallet.address, logics: [swapLogic] },
-          {}
+          {} // permit2Type removed
         ),
       { label: `sweep.consolidate.estimate.${token.symbol}`, shouldRetry: isTransientError, retries: 2 }
     );
@@ -74,11 +74,11 @@ async function consolidateTokenToTarget(token: TokenInfo): Promise<void> {
       chainId,
       account: executionWallet.address,
       logics: [swapLogic],
-      referralCode: undefined,
+      // permit2Type removed
       ...estimateResult,
     });
 
-    // FIX: cast tx to TransactionResponse so we can call .wait()
+    // Cast tx to TransactionResponse to access .wait()
     const tx = await executionWallet.sendTransaction({
       to: routerData.to,
       data: routerData.data,
