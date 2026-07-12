@@ -65,7 +65,7 @@ async function consolidateTokenToTarget(token: TokenInfo): Promise<void> {
       () =>
         api.estimateRouterData(
           { chainId, account: executionWallet.address, logics: [swapLogic] },
-          { permit2Type: 'permit' }
+          {}
         ),
       { label: `sweep.consolidate.estimate.${token.symbol}`, shouldRetry: isTransientError, retries: 2 }
     );
@@ -74,16 +74,16 @@ async function consolidateTokenToTarget(token: TokenInfo): Promise<void> {
       chainId,
       account: executionWallet.address,
       logics: [swapLogic],
-      permit2Type: 'permit',
       referralCode: undefined,
       ...estimateResult,
     });
 
+    // FIX: cast tx to TransactionResponse so we can call .wait()
     const tx = await executionWallet.sendTransaction({
       to: routerData.to,
       data: routerData.data,
       value: routerData.value ?? '0',
-    });
+    }) as ethers.providers.TransactionResponse;
 
     const receipt = await tx.wait();
 
@@ -130,7 +130,7 @@ async function sweepTargetToTreasury(): Promise<void> {
     const tx = await withRetry(
       () => contract.transfer(treasury, balance),
       { label: `sweep.transfer.${SWEEP_TARGET.symbol}`, shouldRetry: isTransientError, retries: 2 }
-    );
+    ) as ethers.providers.TransactionResponse;
 
     log.info('Sweep transaction submitted', {
       symbol: SWEEP_TARGET.symbol,
@@ -186,7 +186,7 @@ export async function sweepNativeExcess(nativeUsdPrice: number): Promise<void> {
   });
 
   try {
-    const tx = await executionWallet.sendTransaction({ to: treasury, value: excessWei });
+    const tx = await executionWallet.sendTransaction({ to: treasury, value: excessWei }) as ethers.providers.TransactionResponse;
 
     log.info('Native sweep submitted', { txHash: tx.hash, excessUsd });
 
