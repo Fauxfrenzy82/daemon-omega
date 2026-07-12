@@ -4,7 +4,8 @@ import { TokenInfo } from '../config/tokens';
 import { uniswapV3Source } from './sources/uniswapV3';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
-import { balancerV2Source } from './sources/balancerV2';
+// Balancer V2 removed because its API changed and is not currently supported
+// import { balancerV2Source } from './sources/balancerV2';
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -17,10 +18,8 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-const SOURCES: PriceSource[] = [uniswapV3Source, paraswapV5Source, openOceanV2Source, balancerV2Source];
+const SOURCES: PriceSource[] = [uniswapV3Source, paraswapV5Source, openOceanV2Source]; // Balancer removed
 
-// Simplified native-token USD reference for gas costing.
-// Refined later with a dedicated price feed if needed.
 let cachedNativeUsdPrice = 0.5;
 
 function toRawAmount(amountHuman: number, token: TokenInfo): string {
@@ -28,7 +27,7 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
 }
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
-  const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote); // quote token as base unit for sizing simplicity
+  const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
 
   const requests = SOURCES.map((source) =>
     source.getQuote({
@@ -62,7 +61,7 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
 }
 
 async function runScanCycle(): Promise<void> {
-  recordScanCycle(); // liveness signal for /health — fires even on early returns below
+  recordScanCycle();
 
   await evaluateCircuitBreaker();
 
