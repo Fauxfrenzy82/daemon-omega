@@ -1,31 +1,24 @@
 {
-  "name": "chronos-protocolink",
-  "version": "1.0.0",
-  "description": "Protocolink-based DeFi arbitrage system on Polygon --- scans multiple DEXs/aggregators, evaluates spread profitability net of fees, executes flash-loan arbitrage via Protocolink, and sweeps profits to treasury.",
-  "main": "dist/main.js",
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/main.js",
-    "dev": "ts-node src/main.ts",
-    "typecheck": "tsc --noEmit"
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "ignoreDeprecations": "6.0",
+    "types": ["node"],
+    "declaration": false,
+    "sourceMap": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noImplicitAny": false
   },
-  "dependencies": {
-    "@protocolink/api": "^1.4.8",
-    "@protocolink/common": "^1.0.0",
-    "@types/node": "^20.14.2",
-    "axios": "^1.7.2",
-    "dotenv": "^16.4.5",
-    "ethers": "^5.7.2",
-    "pg": "^8.12.0"
-  },
-  "devDependencies": {
-    "@types/pg": "^8.11.6",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.5.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "license": "UNLICENSED",
-  "private": true
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }
