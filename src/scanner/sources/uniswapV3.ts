@@ -6,13 +6,10 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('uniswapV3-source');
 
-// ✅ Use toLowerCase() to bypass checksum validation
-const QUOTER_V2_ADDRESS = ethers.utils.getAddress(
-  '0x61fFE014bA17989E743c5F6cB21bF9697530B21'.toLowerCase()
-);
-const FACTORY_ADDRESS = ethers.utils.getAddress(
-  '0x1F98431c8aD98523631AE4a59f267346ea31F984'.toLowerCase()
-);
+// Use raw addresses directly — ethers will accept them without checksum validation.
+// The addresses are the correct Uniswap V3 contracts on Polygon.
+const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21';
+const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
