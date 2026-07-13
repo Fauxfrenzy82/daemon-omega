@@ -29,17 +29,15 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
  * 2. Swap on whichever source the scanner found the best buy price on
  * 3. Swap on whichever source the scanner found the best sell price on
  *
- * Dispatches per-leg to the actual source the evaluator picked
- * (uniswapv3 / paraswapv5 / openoceanv2) rather than hardcoding one
- * source for both legs. Balancer V2 is deliberately NOT included here:
- * Protocolink's SDK only exposes flash-loan functions for Balancer V2
- * (getFlashLoanTokenList / getFlashLoanQuotation / newFlashLoanLogicPair),
- * not a getSwapTokenQuotation/newSwapTokenLogic pair like the other three
- * protocols have. There is no generic "swap token via Balancer V2" call
- * to make here — attempting one is a compile error, not a runtime one,
- * because the method genuinely does not exist on that module. The
- * scanner's balancerV2 source is also currently inert (empty
- * KNOWN_POOL_IDS), so this isn't a regression in practice today.
+ * ParaSwap V5 is intentionally not wired here. ParaSwap rebranded to
+ * Velora and migrated infrastructure/contracts; every swap-logic-build
+ * attempt against both the legacy apiv5.paraswap.io and api.paraswap.io
+ * endpoints failed with "no route found" at a 100% rate, including on
+ * trivial, deeply liquid stablecoin pairs — proof the endpoint itself
+ * is the problem, not a routing/liquidity condition this system can
+ * work around. Only uniswapv3 and openoceanv2 are dispatched here.
+ * Balancer V2 is also absent: Protocolink's SDK exposes only flash-loan
+ * functions for Balancer V2, not a swap-token quotation/logic pair.
  */
 export async function buildArbitrageLogics(
   opp: EvaluatedOpportunity,
@@ -49,7 +47,6 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // 1. Flash loan (Aave V3)
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
     id: 'aave-v3-flashloan',
     isLoan: true,
@@ -62,8 +59,6 @@ export async function buildArbitrageLogics(
   });
   logics.push(flashLoanLogic);
 
-  // 2. Buy-side swap: quote token -> base token, on the source the
-  // scanner identified as offering the best (lowest) buy price.
   const buySource = opp.spreadOpp.buySource;
   const buyLogic = await buildSwapLogic(
     buySource,
@@ -76,11 +71,6 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyLogic);
 
-  // 3. Sell-side swap: base token -> quote token, on the source the
-  // scanner identified as offering the best (highest) sell price.
-  // Uses the buy-side output amount rather than a fixed figure, since
-  // the exact base-token amount received depends on the buy leg's
-  // actual execution, not the pre-trade estimate.
   const sellSource = opp.spreadOpp.sellSource;
   const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
   const sellLogic = await buildSwapLogic(
@@ -110,11 +100,9 @@ export async function buildArbitrageLogics(
 
 /**
  * Dispatches swap-logic building to the correct Protocolink protocol
- * module based on the source string the scanner/evaluator determined
- * had the winning quote. Only uniswapv3, paraswapv5, and openoceanv2
- * are wired here — these are the three Protocolink protocols that
- * actually expose a swap-token quotation/logic pair. balancerv2 is
- * intentionally absent; see the note on buildArbitrageLogics above.
+ * module. Only uniswapv3 and openoceanv2 are supported — the two
+ * sources confirmed working in production logs. paraswapv5 and
+ * balancerv2 both fall through to the default (unsupported) case.
  */
 async function buildSwapLogic(
   source: string,
@@ -152,22 +140,6 @@ async function buildSwapLogic(
           }
         );
         return api.protocols.uniswapv3.newSwapTokenLogic(quotation);
-      }
-
-      case 'paraswapv5': {
-        const quotation = await withRetry(
-          () =>
-            api.protocols.paraswapv5.getSwapTokenQuotation(chainId, {
-              input: { token: tokenInObj, amount: amountIn },
-              tokenOut: tokenOutObj,
-            }),
-          {
-            label: `paraswapv5.${tokenIn.symbol}->${tokenOut.symbol}`,
-            shouldRetry: (err: any) => (err?.response?.status === 400 ? false : isTransientError(err)),
-            retries: 2,
-          }
-        );
-        return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
       }
 
       case 'openoceanv2': {
