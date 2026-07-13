@@ -182,13 +182,30 @@ export async function logCircuitBreakerEvent(
   );
 }
 
-export async function getRecentTradeOutcomes(limit: number): Promise<{ status: string }[]> {
-  const result = await query<{ status: string }>(
-    `SELECT status FROM trades
-     WHERE status IN ('confirmed','failed','reverted')
-     ORDER BY created_at DESC
-     LIMIT $1`,
-    [limit]
-  );
+/**
+ * Get recent trade outcomes, optionally filtered by a timestamp.
+ * If `since` is provided, only trades after that time are returned.
+ */
+export async function getRecentTradeOutcomes(
+  limit: number,
+  since?: Date
+): Promise<{ status: string; created_at: string }[]> {
+  let queryText = `
+    SELECT status, created_at FROM trades
+    WHERE status IN ('confirmed','failed','reverted')
+  `;
+  const params: any[] = [];
+
+  if (since) {
+    queryText += ` AND created_at >= $1`;
+    params.push(since.toISOString());
+    queryText += ` ORDER BY created_at DESC LIMIT $2`;
+    params.push(limit);
+  } else {
+    queryText += ` ORDER BY created_at DESC LIMIT $1`;
+    params.push(limit);
+  }
+
+  const result = await query<{ status: string; created_at: string }>(queryText, params);
   return result.rows;
 }
