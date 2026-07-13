@@ -30,7 +30,6 @@ const quoter = new ethers.Contract(QUOTER_V2_ADDRESS, QUOTER_ABI, provider);
 const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
 
 async function findBestPool(tokenA: string, tokenB: string): Promise<{ pool: string; fee: number } | null> {
-  // Use a typed array for results
   const results: { fee: number; pool: string }[] = [];
   for (const fee of FEE_TIERS) {
     try {
@@ -43,7 +42,6 @@ async function findBestPool(tokenA: string, tokenB: string): Promise<{ pool: str
       log.debug('Pool check failed', { tokenA, tokenB, fee, error: String(err) });
     }
   }
-  // Log all results for debugging
   log.debug('Pool search results', { tokenA, tokenB, results });
   return null;
 }
@@ -60,6 +58,7 @@ async function estimatePoolLiquidityUsd(poolAddress: string): Promise<number | u
 
 export const uniswapV3Source: PriceSource = {
   name: 'uniswapv3',
+  supportsExecution: true, // ✅ Can execute trades
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
@@ -109,6 +108,7 @@ export const uniswapV3Source: PriceSource = {
         amountIn: req.amountIn,
         amountOut: amountOut.toString(),
         price,
+        supportsExecution: true, // ✅ Include flag in result
         estLiquidityUsd,
         raw: { pool: poolInfo.pool, fee: poolInfo.fee },
       };
