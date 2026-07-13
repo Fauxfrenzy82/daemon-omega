@@ -28,22 +28,16 @@ export async function evaluateOpportunity(
   nativeUsdPrice: number,
   smallSizeQuoteForSlippage?: { buy?: any; sell?: any }
 ): Promise<EvaluatedOpportunity> {
-  // DYNAMIC POSITION SIZING: Use the full allowed position size.
-  // The position size is capped by the pair's maxPositionUsd and the global max.
   const positionSizeUsd = Math.min(pair.maxPositionUsd, env.MAX_POSITION_SIZE_USD);
-
-  // Gross profit = position size × spread in basis points
   const grossProfitUsd = positionSizeUsd * (spreadOpp.spreadBps / 10000);
 
-  // Estimate gas and other costs
   const cost = await estimateFullCost(positionSizeUsd, nativeUsdPrice);
   const netProfitUsd = grossProfitUsd - cost.totalCostUsd;
 
-  // Check if net profit meets minimum threshold (can be very low)
   const thresholdCheck = checkThresholds(pair, spreadOpp.spreadBps, netProfitUsd);
 
-  // Slippage check
   let slippageOk = true;
+  let slippageReason = 'no slippage check';
   if (smallSizeQuoteForSlippage?.buy && smallSizeQuoteForSlippage?.sell) {
     const buyAssessment = assessSlippage(
       smallSizeQuoteForSlippage.buy,
@@ -56,35 +50,56 @@ export async function evaluateOpportunity(
       env.MAX_SLIPPAGE_BPS
     );
     slippageOk = buyAssessment.sufficient && sellAssessment.sufficient;
+    if (!slippageOk) {
+      slippageReason = `buy=${buyAssessment.estSlippageBps.toFixed(1)} bps, sell=${sellAssessment.estSlippageBps.toFixed(1)} bps (max=${env.MAX_SLIPPAGE_BPS} bps)`;
+    }
   }
 
-  // Liquidity check
   const liquidityOk =
     meetsLiquidityFloor(spreadOpp.buyQuote, positionSizeUsd) &&
     meetsLiquidityFloor(spreadOpp.sellQuote, positionSizeUsd);
 
-  // Executable if all checks pass
   const executable = thresholdCheck.passes && slippageOk && liquidityOk;
 
-  // Log detailed rejection reasons
+  // Detailed rejection logging — every pair gets logged
   if (!executable) {
-    log.info('🔍 Opportunity rejected — details:', {
-      pairId: pair.id,
+    const reasons: string[] = [];
+
+    if (!thresholdCheck.passes) {
+      if (!thresholdCheck.passesSpread) {
+        reasons.push(`spread ${spreadOpp.spreadBps.toFixed(1)} bps < ${thresholdCheck.minSpreadBps} bps`);
+      }
+      if (!thresholdCheck.passesProfit) {
+        reasons.push(`net profit $${netProfitUsd.toFixed(4)} < $${thresholdCheck.minProfitUsd}`);
+      }
+    }
+    if (!slippageOk) {
+      reasons.push(`slippage: ${slippageReason}`);
+    }
+    if (!liquidityOk) {
+      reasons.push('insufficient liquidity');
+    }
+
+    log.info(`🔍 Opportunity REJECTED for ${pair.id}:`, {
       spreadBps: spreadOpp.spreadBps,
       positionSizeUsd,
       grossProfitUsd: grossProfitUsd.toFixed(4),
       netProfitUsd: netProfitUsd.toFixed(4),
       gasCostUsd: cost.gasCostUsd.toFixed(4),
       protocolFeeUsd: cost.protocolFeeUsd.toFixed(4),
-      thresholdPasses: thresholdCheck.passes,
-      slippageOk,
-      liquidityOk,
-      minSpreadRequired: thresholdCheck.minSpreadBps,
-      minProfitRequired: thresholdCheck.minProfitUsd,
+      buySource: spreadOpp.buySource,
+      sellSource: spreadOpp.sellSource,
+      reasons: reasons.join('; '),
+    });
+  } else {
+    log.info(`✅ Opportunity ACCEPTABLE for ${pair.id}:`, {
+      spreadBps: spreadOpp.spreadBps,
+      netProfitUsd: netProfitUsd.toFixed(4),
+      positionSizeUsd,
     });
   }
 
-  const evaluated: EvaluatedOpportunity = {
+  return {
     pair,
     spreadOpp,
     positionSizeUsd,
@@ -97,8 +112,6 @@ export async function evaluateOpportunity(
     liquidityOk,
     executable,
   };
-
-  return evaluated;
 }
 
 export function rankExecutable(evaluated: EvaluatedOpportunity[]): EvaluatedOpportunity[] {
