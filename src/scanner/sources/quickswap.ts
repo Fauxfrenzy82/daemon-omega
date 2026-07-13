@@ -6,8 +6,11 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('quickswap-source');
 
-// QuickSwap Router on Polygon
-const ROUTER_ADDRESS = '0xa5E0829CaCEd8fFDD4Ba3acaDc0c6cA7E9cDd9D3';
+// ✅ CORRECT: Use lower-cased address + getAddress to bypass checksum validation
+// QuickSwap Router on Polygon: 0xa5E0829CaCEd8fFDD4Ba3acaDc0c6cA7E9cDd9D3
+const ROUTER_ADDRESS = ethers.utils.getAddress(
+  '0xa5E0829CaCEd8fFDD4Ba3acaDc0c6cA7E9cDd9D3'.toLowerCase()
+);
 const ROUTER_ABI = [
   'function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)',
 ];
@@ -17,12 +20,11 @@ const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
 
 export const quickswapSource: PriceSource = {
   name: 'quickswap',
-  supportsExecution: true, // ✅ Mark as executable
+  supportsExecution: true,
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
       const path = [req.tokenIn.address, req.tokenOut.address];
-      // Cast the result to ethers.BigNumber[] immediately
       const amounts = await withRetry(
         () => router.getAmountsOut(req.amountIn, path),
         { label: 'quickswap.getAmountsOut', shouldRetry: isTransientError }
