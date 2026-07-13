@@ -1,8 +1,9 @@
 import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
-import { paraswapV5Source } from './sources/paraswapV5';
+import { uniswapV3Source } from './sources/uniswapV3';
 import { openOceanV2Source } from './sources/openOceanV2';
+import { balancerV2Source } from './sources/balancerV2';
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -15,7 +16,14 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
+// ParaSwap V5 removed entirely: ParaSwap rebranded to Velora and
+// migrated to a new contract/infrastructure. Both the legacy
+// apiv5.paraswap.io and api.paraswap.io endpoints returned "no route
+// found or price impact too high" on 100% of swap-logic-build attempts,
+// including trivial stablecoin pairs (USDT->USDC.e) with deep real
+// liquidity — proving the issue is the endpoint itself, not routing
+// conditions. Uniswap V3 and OpenOcean V2 remain as working sources.
+const SOURCES: PriceSource[] = [uniswapV3Source, openOceanV2Source, balancerV2Source];
 
 let cachedNativeUsdPrice = 0.5;
 
