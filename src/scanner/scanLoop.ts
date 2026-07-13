@@ -2,8 +2,6 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
-// OpenOcean V2 removed because Protocolink does NOT support OpenOcean V2 swap logic on Polygon
-// Uniswap V3 removed temporarily due to address/revert issues
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -16,7 +14,6 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// Only use ParaSwap V5 — it aggregates the deepest liquidity and is fully supported on Polygon.
 const SOURCES: PriceSource[] = [paraswapV5Source];
 
 let cachedNativeUsdPrice = 0.5;
@@ -27,6 +24,7 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
+  log.debug(`Getting quotes for ${pair.id} with amount ${positionRaw}`);
 
   const requests = SOURCES.map((source) =>
     source.getQuote({
@@ -40,26 +38,33 @@ async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   );
 
   const results = await Promise.all(requests);
-  return results.filter((r): r is QuoteResult => r !== null);
+  const valid = results.filter((r): r is QuoteResult => r !== null);
+  log.debug(`Got ${valid.length} valid quotes for ${pair.id}`);
+  return valid;
 }
 
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
+  log.debug(`Scanning pair: ${pair.id}`);
   const quotes = await getQuotesForPair(pair);
 
   if (quotes.length < 2) {
+    log.debug(`Not enough quotes for ${pair.id} (got ${quotes.length})`);
     return null;
   }
 
   const spreadOpp = findBestSpread(pair.id, quotes);
   if (!spreadOpp) {
+    log.debug(`No spread found for ${pair.id}`);
     return null;
   }
 
+  log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps} bps`);
   const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
   return evaluated;
 }
 
 async function runScanCycle(): Promise<void> {
+  log.info('🔄 Scan cycle started');
   recordScanCycle();
 
   await evaluateCircuitBreaker();
@@ -75,20 +80,25 @@ async function runScanCycle(): Promise<void> {
   }
 
   const pairs = enabledPairs();
+  log.info(`Evaluating ${pairs.length} enabled pairs`);
+
   const results = await Promise.all(pairs.map((pair) => scanPair(pair).catch((err) => {
     log.error('Pair scan failed', { pairId: pair.id, error: err instanceof Error ? err.message : String(err) });
     return null;
   })));
 
   const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
+  log.info(`Scan cycle complete: ${evaluated.length} opportunities found`);
 
   if (evaluated.length === 0) {
+    log.debug('No executable opportunities this cycle');
     return;
   }
 
+  const executable = evaluated.filter((e) => e.executable);
   log.info('Scan cycle found opportunities', {
     total: evaluated.length,
-    executable: evaluated.filter((e) => e.executable).length,
+    executable: executable.length,
   });
 
   await processOpportunityBatch(evaluated);
