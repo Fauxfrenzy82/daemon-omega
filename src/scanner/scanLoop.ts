@@ -2,7 +2,8 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
-// 1inch and OpenOcean disabled for now — only ParaSwap
+import { openOceanV2Source } from './sources/openOceanV2';
+// 1inch removed — using OpenOcean for scanning only
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -15,8 +16,9 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// Only ParaSwap V5 — simplest configuration for debugging
-const SOURCES: PriceSource[] = [paraswapV5Source];
+// ParaSwap V5 (execution) + OpenOcean V2 (scanning only)
+// OpenOcean is used ONLY for price discovery — execution ALWAYS falls back to ParaSwap.
+const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
 
 let cachedNativeUsdPrice = 0.5;
 
@@ -48,11 +50,8 @@ async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const quotes = await getQuotesForPair(pair);
 
-  // With only ParaSwap, we need at least 1 quote (no cross-source spread possible)
-  // But ParaSwap alone can't produce a spread — we need at least 2 sources.
-  // For now, just log and return null.
   if (quotes.length < 2) {
-    log.debug(`Not enough quotes for ${pair.id} (got ${quotes.length} — ParaSwap only, need 2+)`);
+    log.debug(`Not enough quotes for ${pair.id} (got ${quotes.length})`);
     return null;
   }
 
@@ -84,7 +83,7 @@ async function runScanCycle(): Promise<void> {
   }
 
   const pairs = enabledPairs();
-  log.info(`Evaluating ${pairs.length} enabled pairs (ParaSwap only)`);
+  log.info(`Evaluating ${pairs.length} enabled pairs`);
 
   const results = await Promise.all(pairs.map((pair) => scanPair(pair).catch((err) => {
     log.error('Pair scan failed', { pairId: pair.id, error: err instanceof Error ? err.message : String(err) });
@@ -109,7 +108,7 @@ let loopHandle: NodeJS.Timeout | null = null;
 export function startScanLoop(): void {
   if (loopHandle) return;
 
-  log.info('Starting scan loop (ParaSwap only)', { intervalMs: env.SCAN_INTERVAL_MS });
+  log.info('Starting scan loop', { intervalMs: env.SCAN_INTERVAL_MS });
 
   loopHandle = setInterval(() => {
     runScanCycle().catch((err) => {
