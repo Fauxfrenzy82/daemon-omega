@@ -24,7 +24,7 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
-  log.debug(`Getting quotes for ${pair.id} with amount ${positionRaw}`);
+  log.debug(`Getting quotes for ${pair.id}`);
 
   const requests = SOURCES.map((source) =>
     source.getQuote({
@@ -44,7 +44,6 @@ async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
 }
 
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
-  log.debug(`Scanning pair: ${pair.id}`);
   const quotes = await getQuotesForPair(pair);
 
   if (quotes.length < 2) {
@@ -58,7 +57,7 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps} bps`);
+  log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps`);
   const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
   return evaluated;
 }
@@ -88,18 +87,19 @@ async function runScanCycle(): Promise<void> {
   })));
 
   const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
-  log.info(`Scan cycle complete: ${evaluated.length} opportunities found`);
+  const executable = evaluated.filter((e) => e.executable);
+
+  log.info(`🔄 Scan cycle complete: ${evaluated.length} evaluated, ${executable.length} executable`);
 
   if (evaluated.length === 0) {
-    log.debug('No executable opportunities this cycle');
+    log.debug('No evaluated opportunities this cycle');
     return;
   }
 
-  const executable = evaluated.filter((e) => e.executable);
-  log.info('Scan cycle found opportunities', {
-    total: evaluated.length,
-    executable: executable.length,
-  });
+  if (executable.length === 0) {
+    log.debug('No executable opportunities this cycle');
+    return;
+  }
 
   await processOpportunityBatch(evaluated);
 }
