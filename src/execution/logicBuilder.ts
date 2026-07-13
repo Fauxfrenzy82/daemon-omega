@@ -38,7 +38,6 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // Flash loan from Aave V3
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
     id: 'aave-v3-flashloan',
     isLoan: true,
@@ -51,7 +50,6 @@ export async function buildArbitrageLogics(
   });
   logics.push(flashLoanLogic);
 
-  // Buy-side swap
   const buySource = opp.spreadOpp.buySource;
   const buyRequiresRequote = options.buyRequiresRequote || false;
   const buyLogic = await buildSwapLogic(
@@ -67,7 +65,6 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyLogic);
 
-  // Sell-side swap
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
   const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
@@ -96,4 +93,140 @@ export async function buildArbitrageLogics(
     flashLoanAmount: flashLoanAmountRaw,
     flashLoanToken,
   };
+}
+
+async function buildSwapLogic(
+  source: string,
+  requiresRequote: boolean,
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  amountIn: string,
+  opp: EvaluatedOpportunity
+): Promise<any | null> {
+  const chainId = getChainId();
+  const tokenInObj = toProtocolinkToken(chainId, tokenIn);
+  const tokenOutObj = toProtocolinkToken(chainId, tokenOut);
+
+  if (!amountIn || amountIn === '0') {
+    log.warn('Swap amount is zero or invalid', {
+      source,
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      amountIn,
+    });
+    return null;
+  }
+
+  const executionSource = requiresRequote ? 'paraswap-v5' : source;
+
+  if (requiresRequote) {
+    log.info(`🔄 Re-quoting ${source} → ${executionSource} (${tokenIn.symbol}→${tokenOut.symbol})`, {
+      amountIn,
+      positionSizeUsd: opp.positionSizeUsd,
+    });
+  }
+
+  // Protocolink's `slippage` field is in BASIS POINTS, not a decimal
+  // fraction — 100 = 1%. A prior value of 0.01 meant ~0.0001%
+  // tolerance, which made almost any real quote fail with
+  // "no route found or price impact too high" regardless of source.
+  const params = {
+    input: { token: tokenInObj, amount: amountIn },
+    tokenOut: tokenOutObj,
+    slippage: 100,
+  };
+
+  try {
+    switch (executionSource) {
+      case 'paraswap-v5':
+      case 'paraswapv5': {
+        const quote = await withRetry(
+          () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
+          {
+            label: `paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => {
+              if (err?.response?.status === 400) return false;
+              return isTransientError(err);
+            },
+            retries: 2,
+          }
+        );
+        return api.protocols.paraswapv5.newSwapTokenLogic(quote);
+      }
+
+      case 'uniswap-v3':
+      case 'uniswapv3': {
+        const quote = await withRetry(
+          () => api.protocols.uniswapv3.getSwapTokenQuotation(chainId, params),
+          {
+            label: `uniswap-v3.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => {
+              if (err?.response?.status === 400) return false;
+              return isTransientError(err);
+            },
+            retries: 2,
+          }
+        );
+        return api.protocols.uniswapv3.newSwapTokenLogic(quote);
+      }
+
+      case 'zeroex-v4':
+      case 'zeroexv4': {
+        const apiKey = env.ZEROEX_API_KEY || '';
+        if (!apiKey) {
+          log.warn('ZEROEX_API_KEY not set — falling back to ParaSwap for zeroex-v4');
+          const fallbackQuote = await withRetry(
+            () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
+            {
+              label: `fallback.paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
+              shouldRetry: (err: any) => {
+                if (err?.response?.status === 400) return false;
+                return isTransientError(err);
+              },
+              retries: 2,
+            }
+          );
+          return api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
+        }
+
+        const quote = await withRetry(
+          () => api.protocols.zeroexv4.getSwapTokenQuotation(chainId, {
+            ...params,
+            apiKey,
+          }),
+          {
+            label: `zeroex-v4.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => {
+              if (err?.response?.status === 400) return false;
+              return isTransientError(err);
+            },
+            retries: 2,
+          }
+        );
+        return api.protocols.zeroexv4.newSwapTokenLogic(quote);
+      }
+
+      default:
+        log.error(`No execution builder available for source: ${source}`);
+        return null;
+    }
+  } catch (err) {
+    const error = err as any;
+    const statusCode = error?.response?.status;
+    const responseData = error?.response?.data;
+
+    log.error(`Swap logic build failed (${executionSource}) — DETAILED:`, {
+      originalSource: source,
+      requiresRequote,
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      tokenInAddress: tokenIn.address,
+      tokenOutAddress: tokenOut.address,
+      amountIn,
+      statusCode,
+      responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
+      errorMessage: error?.message || String(err),
+    });
+    return null;
+  }
 }
