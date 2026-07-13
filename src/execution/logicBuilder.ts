@@ -13,6 +13,11 @@ export interface BuiltLogics {
   flashLoanToken: TokenInfo;
 }
 
+export interface RequoteOptions {
+  buyRequiresRequote?: boolean;
+  sellRequiresRequote?: boolean;
+}
+
 function toProtocolinkToken(chainId: number, token: TokenInfo) {
   return {
     chainId,
@@ -26,7 +31,8 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
 export async function buildArbitrageLogics(
   opp: EvaluatedOpportunity,
   flashLoanToken: TokenInfo,
-  flashLoanAmountRaw: string
+  flashLoanAmountRaw: string,
+  options: RequoteOptions = {}
 ): Promise<BuiltLogics> {
   const chainId = getChainId();
   const logics: any[] = [];
@@ -46,7 +52,7 @@ export async function buildArbitrageLogics(
 
   // 2. Buy-side swap
   const buySource = opp.spreadOpp.buySource;
-  const buyRequiresRequote = opp.buyRequiresRequote || false;
+  const buyRequiresRequote = options.buyRequiresRequote || false;
   const buyLogic = await buildSwapLogicWithRequote(
     buySource,
     buyRequiresRequote,
@@ -62,7 +68,7 @@ export async function buildArbitrageLogics(
 
   // 3. Sell-side swap
   const sellSource = opp.spreadOpp.sellSource;
-  const sellRequiresRequote = opp.sellRequiresRequote || false;
+  const sellRequiresRequote = options.sellRequiresRequote || false;
   const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
   const sellLogic = await buildSwapLogicWithRequote(
     sellSource,
@@ -91,10 +97,6 @@ export async function buildArbitrageLogics(
   };
 }
 
-/**
- * Builds swap logic, re-quoting if the source is not executable.
- * If the source is quote-only, we re-quote using ParaSwap V5.
- */
 async function buildSwapLogicWithRequote(
   source: string,
   requiresRequote: boolean,
@@ -117,7 +119,6 @@ async function buildSwapLogicWithRequote(
     return null;
   }
 
-  // Determine the actual source to use for execution
   const executionSource = requiresRequote ? 'paraswap-v5' : source;
 
   if (requiresRequote) {
@@ -155,16 +156,8 @@ async function buildSwapLogicWithRequote(
           }
         );
 
-        // Log the fresh quote result
-        const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
-        const amountOutHuman = Number(quotation.amountOut) / 10 ** tokenOut.decimals;
-        const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
-
-        log.info(`📊 Fresh quote from ${executionSource}: ${tokenIn.symbol}→${tokenOut.symbol}`, {
-          amountIn: amountInHuman,
-          amountOut: amountOutHuman,
-          price,
-        });
+        // Log the fresh quote result (don't access amountOut if not available)
+        log.info(`📊 Fresh quote from ${executionSource}: ${tokenIn.symbol}→${tokenOut.symbol} obtained`);
 
         return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
       }
