@@ -44,14 +44,14 @@ export const env = {
 
   DATABASE_URL: required('DATABASE_URL'),
 
-  // Risk / thresholds — LOWERED to catch all positive spreads
-  DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.05),
-  DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 2),
+  // Risk / thresholds — READ FROM ENV VARS
+  DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.1),
+  DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
   MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 500),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
 
-  // Circuit breaker — lookback window (minutes) and max losses
+  // Circuit breaker
   MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 999),
   CIRCUIT_BREAKER_LOOKBACK_MINUTES: optionalNumber('CIRCUIT_BREAKER_LOOKBACK_MINUTES', 5),
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
