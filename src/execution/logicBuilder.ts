@@ -13,6 +13,28 @@ export interface BuiltLogics {
   flashLoanToken: TokenInfo;
 }
 
+function toProtocolinkToken(chainId: number, token: TokenInfo) {
+  return {
+    chainId,
+    address: token.address,
+    decimals: token.decimals,
+    symbol: token.symbol,
+    name: token.name,
+  };
+}
+
+/**
+ * Builds the ordered logic array for a single arbitrage round-trip:
+ * 1. Aave V3 flashloan of the base position size
+ * 2. Swap on whichever source the scanner found the best buy price on
+ * 3. Swap on whichever source the scanner found the best sell price on
+ *
+ * Critically, this dispatches per-leg to the actual source the evaluator
+ * picked (uniswapv3 / paraswapv5 / openoceanv2 / balancerv2) rather than
+ * hardcoding ParaSwap for both legs. If ParaSwap genuinely has no route
+ * for a pair at the current size, forcing it anyway just fails — using
+ * the source the scanner already confirmed has a live quote is the fix.
+ */
 export async function buildArbitrageLogics(
   opp: EvaluatedOpportunity,
   flashLoanToken: TokenInfo,
@@ -27,30 +49,40 @@ export async function buildArbitrageLogics(
     isLoan: true,
     loans: [
       {
-        token: {
-          chainId,
-          address: flashLoanToken.address,
-          decimals: flashLoanToken.decimals,
-          symbol: flashLoanToken.symbol,
-          name: flashLoanToken.name,
-        },
+        token: toProtocolinkToken(chainId, flashLoanToken),
         amount: flashLoanAmountRaw,
       },
     ],
   });
   logics.push(flashLoanLogic);
 
-  // 2. Buy-side swap: use the scanner's buy quote (same amountIn)
-  const buyQuote = opp.spreadOpp.buyQuote;
-  const buyLogic = await buildBuySwapLogic(buyQuote.source, buyQuote);
+  // 2. Buy-side swap: quote token -> base token, on the source the
+  // scanner identified as offering the best (lowest) buy price.
+  const buySource = opp.spreadOpp.buySource;
+  const buyLogic = await buildSwapLogic(
+    buySource,
+    opp.pair.quote,
+    opp.pair.base,
+    flashLoanAmountRaw
+  );
   if (!buyLogic) {
-    throw new Error(`Failed to build buy swap logic for source ${buyQuote.source}`);
+    throw new Error(`Failed to build buy swap logic for source ${buySource}`);
   }
   logics.push(buyLogic);
 
-  // 3. Sell-side swap: use the scanner's sell source, set amountIn = "auto"
+  // 3. Sell-side swap: base token -> quote token, on the source the
+  // scanner identified as offering the best (highest) sell price.
+  // Uses the buy-side output amount rather than a fixed figure, since
+  // the exact base-token amount received depends on the buy leg's
+  // actual execution, not the pre-trade estimate.
   const sellSource = opp.spreadOpp.sellSource;
-  const sellLogic = await buildSellSwapLogic(sellSource, opp.pair.base, opp.pair.quote);
+  const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
+  const sellLogic = await buildSwapLogic(
+    sellSource,
+    opp.pair.base,
+    opp.pair.quote,
+    buyOutputAmount
+  );
   if (!sellLogic) {
     throw new Error(`Failed to build sell swap logic for source ${sellSource}`);
   }
@@ -58,7 +90,7 @@ export async function buildArbitrageLogics(
 
   log.info('Built arbitrage logic sequence', {
     pairId: opp.pair.id,
-    buySource: buyQuote.source,
+    buySource,
     sellSource,
     steps: logics.length,
   });
@@ -70,15 +102,26 @@ export async function buildArbitrageLogics(
   };
 }
 
-async function buildBuySwapLogic(source: string, quote: any): Promise<any | null> {
+/**
+ * Dispatches swap-logic building to the correct Protocolink protocol
+ * module based on the source string the scanner/evaluator determined
+ * had the winning quote. Each protocol's getSwapTokenQuotation has a
+ * slightly different accepted params shape per Protocolink's docs, so
+ * each branch builds its own params object rather than sharing one
+ * generic shape across all four.
+ */
+async function buildSwapLogic(
+  source: string,
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  amountIn: string
+): Promise<any | null> {
   const chainId = getChainId();
-  const tokenIn = quote.tokenIn;
-  const tokenOut = quote.tokenOut;
-  const amountIn = quote.amountIn;
+  const tokenInObj = toProtocolinkToken(chainId, tokenIn);
+  const tokenOutObj = toProtocolinkToken(chainId, tokenOut);
 
-  // Validate amount is not zero
-  if (!amountIn || amountIn === '0' || BigInt(amountIn) === 0n) {
-    log.warn('Buy swap amount is zero or invalid', {
+  if (!amountIn || amountIn === '0') {
+    log.warn('Swap amount is zero or invalid, skipping', {
       source,
       tokenIn: tokenIn.symbol,
       tokenOut: tokenOut.symbol,
@@ -88,137 +131,91 @@ async function buildBuySwapLogic(source: string, quote: any): Promise<any | null
   }
 
   try {
-    const params = {
-      input: { token: tokenIn, amount: amountIn },
-      tokenOut: tokenOut,
-    };
+    switch (source) {
+      case 'uniswapv3': {
+        const quotation = await withRetry(
+          () =>
+            api.protocols.uniswapv3.getSwapTokenQuotation(chainId, {
+              input: { token: tokenInObj, amount: amountIn },
+              tokenOut: tokenOutObj,
+            }),
+          {
+            label: `uniswapv3.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => (err?.response?.status === 400 ? false : isTransientError(err)),
+            retries: 2,
+          }
+        );
+        return api.protocols.uniswapv3.newSwapTokenLogic(quotation);
+      }
 
-    log.debug('Requesting ParaSwap V5 quote', {
+      case 'paraswapv5': {
+        const quotation = await withRetry(
+          () =>
+            api.protocols.paraswapv5.getSwapTokenQuotation(chainId, {
+              input: { token: tokenInObj, amount: amountIn },
+              tokenOut: tokenOutObj,
+            }),
+          {
+            label: `paraswapv5.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => (err?.response?.status === 400 ? false : isTransientError(err)),
+            retries: 2,
+          }
+        );
+        return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
+      }
+
+      case 'openoceanv2': {
+        const quotation = await withRetry(
+          () =>
+            api.protocols.openoceanv2.getSwapTokenQuotation(chainId, {
+              input: { token: tokenInObj, amount: amountIn },
+              tokenOut: tokenOutObj,
+            }),
+          {
+            label: `openoceanv2.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => (err?.response?.status === 400 ? false : isTransientError(err)),
+            retries: 2,
+          }
+        );
+        return api.protocols.openoceanv2.newSwapTokenLogic(quotation);
+      }
+
+      case 'balancerv2': {
+        const quotation = await withRetry(
+          () =>
+            api.protocols.balancerv2.getSwapTokenQuotation(chainId, {
+              input: { token: tokenInObj, amount: amountIn },
+              tokenOut: tokenOutObj,
+            }),
+          {
+            label: `balancerv2.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => (err?.response?.status === 400 ? false : isTransientError(err)),
+            retries: 2,
+          }
+        );
+        return api.protocols.balancerv2.newSwapTokenLogic(quotation);
+      }
+
+      default:
+        log.warn('Unsupported swap source requested', { source });
+        return null;
+    }
+  } catch (err) {
+    const error = err as any;
+    const statusCode = error?.response?.status;
+    const responseData = error?.response?.data;
+
+    log.error('Swap logic build failed', {
       source,
       tokenIn: tokenIn.symbol,
       tokenOut: tokenOut.symbol,
-      amountIn,
       tokenInAddress: tokenIn.address,
       tokenOutAddress: tokenOut.address,
+      amountIn,
+      statusCode,
+      response: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
+      error: error?.message || String(err),
     });
-
-    const quotation = await withRetry(
-      () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
-      {
-        label: `paraswapv5.${tokenIn.symbol}->${tokenOut.symbol}`,
-        shouldRetry: (err: any) => {
-          // Don't retry on 400 (bad request) — it won't succeed
-          if (err?.response?.status === 400) return false;
-          return isTransientError(err);
-        },
-        retries: 2,
-      }
-    );
-    return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-  } catch (err) {
-    // Cast to any so we can access properties
-    const error = err as any;
-    const errorMsg = error?.message || String(err);
-    const statusCode = error?.response?.status;
-    const responseData = error?.response?.data;
-
-    // Log full error details for debugging
-    if (statusCode === 400) {
-      log.error('🔴 ParaSwap V5 400 Bad Request — DETAILED:', {
-        source,
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        tokenInAddress: tokenIn.address,
-        tokenOutAddress: tokenOut.address,
-        amountIn,
-        statusCode,
-        response: typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2),
-      });
-      log.error('➡️  Full ParaSwap request params:', {
-        tokenIn: tokenIn,
-        tokenOut: tokenOut,
-        amountIn,
-      });
-    } else {
-      log.warn('Buy swap source failed', {
-        source,
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        error: errorMsg,
-        statusCode,
-      });
-    }
-    return null;
-  }
-}
-
-async function buildSellSwapLogic(source: string, tokenIn: TokenInfo, tokenOut: TokenInfo): Promise<any | null> {
-  const chainId = getChainId();
-  const tokenInObj = {
-    chainId,
-    address: tokenIn.address,
-    decimals: tokenIn.decimals,
-    symbol: tokenIn.symbol,
-    name: tokenIn.name,
-  };
-  const tokenOutObj = {
-    chainId,
-    address: tokenOut.address,
-    decimals: tokenOut.decimals,
-    symbol: tokenOut.symbol,
-    name: tokenOut.name,
-  };
-
-  try {
-    const amountIn = 'auto';
-    const params = {
-      input: { token: tokenInObj, amount: amountIn },
-      tokenOut: tokenOutObj,
-    };
-
-    const quotation = await withRetry(
-      () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
-      {
-        label: `paraswapv5.${tokenIn.symbol}->${tokenOut.symbol}`,
-        shouldRetry: (err: any) => {
-          if (err?.response?.status === 400) return false;
-          return isTransientError(err);
-        },
-        retries: 2,
-      }
-    );
-    return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-  } catch (err) {
-    const error = err as any;
-    const errorMsg = error?.message || String(err);
-    const statusCode = error?.response?.status;
-    const responseData = error?.response?.data;
-
-    if (statusCode === 400) {
-      log.error('🔴 ParaSwap V5 400 Bad Request (SELL) — DETAILED:', {
-        source,
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        tokenInAddress: tokenIn.address,
-        tokenOutAddress: tokenOut.address,
-        amountIn: 'auto',
-        statusCode,
-        response: typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2),
-      });
-      log.error('➡️  Full ParaSwap request params (SELL):', {
-        tokenIn: tokenInObj,
-        tokenOut: tokenOutObj,
-        amountIn: 'auto',
-      });
-    } else {
-      log.warn('Sell swap source failed', {
-        source,
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        error: errorMsg,
-        statusCode,
-      });
-    }
     return null;
   }
 }
