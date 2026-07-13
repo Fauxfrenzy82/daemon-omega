@@ -26,7 +26,14 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
           { chainId, account: executionWallet.address, logics: built.logics },
           {}
         ),
-      { label: 'router.estimateRouterData', shouldRetry: isTransientError, retries: 2 }
+      {
+        label: 'router.estimateRouterData',
+        shouldRetry: (err: any) => {
+          if (err?.response?.status === 400) return false; // don't retry a bad request, capture it
+          return isTransientError(err);
+        },
+        retries: 2,
+      }
     );
 
     const routerData = await api.buildRouterTransactionRequest({
@@ -36,7 +43,6 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       ...estimateResult,
     });
 
-    // FIX: Get safe gas prices with 25 Gwei minimum tip
     const gasPrices = await getSafeGasPrices();
 
     const tx = await executionWallet.sendTransaction({
@@ -59,8 +65,30 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       return { success: false, txHash: tx.hash, errorMessage: 'transaction reverted' };
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.error('Router execution failed', { error: message });
-    return { success: false, errorMessage: message };
+    const error = err as any;
+    const statusCode = error?.response?.status;
+    const responseData = error?.response?.data;
+
+    // Previously only err.message was logged here — a generic string
+    // like "Request failed with status code 400" that says nothing
+    // about *why*. Protocolink puts the actual reason in
+    // err.response.data, the same place we already capture it in
+    // logicBuilder.ts's catch block. Without this, a router-level
+    // rejection (distinct from a per-logic quote rejection) was a
+    // black box — this is the fix needed to actually diagnose it.
+    log.error('Router execution failed — DETAILED', {
+      statusCode,
+      responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
+      errorMessage: error?.message || String(err),
+      logicsCount: built.logics.length,
+      flashLoanToken: built.flashLoanToken.symbol,
+      flashLoanAmount: built.flashLoanAmount,
+    });
+
+    const detailedMessage = responseData
+      ? (typeof responseData === 'string' ? responseData : JSON.stringify(responseData))
+      : (error?.message || String(err));
+
+    return { success: false, errorMessage: detailedMessage };
   }
 }
