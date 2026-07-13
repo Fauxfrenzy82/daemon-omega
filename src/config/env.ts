@@ -30,34 +30,29 @@ function optionalBool(key: string, fallback: boolean): boolean {
 }
 
 export const env = {
-  // Blockchain / RPC
   RPC_URL: required('RPC_URL'),
   RPC_WS_URL: optional('RPC_WS_URL', ''),
   CHAIN_ID: optionalNumber('CHAIN_ID', 137),
 
-  // Wallets
   EXECUTION_PRIVATE_KEY: required('EXECUTION_PRIVATE_KEY'),
   TREASURY_ADDRESS: required('TREASURY_ADDRESS'),
 
-  // Protocolink
   PROTOCOLINK_API_KEY: optional('PROTOCOLINK_API_KEY', ''),
 
-  // ParaSwap / OpenOcean
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
   OPENOCEAN_API_URL: optional('OPENOCEAN_API_URL', 'https://open-api.openocean.finance/v3/polygon'),
 
-  // Database
   DATABASE_URL: required('DATABASE_URL'),
 
-  // Risk / thresholds
-  DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.1),
-  DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 3),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 50),
-  MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 1),
-  MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 500),
+  // Risk / thresholds — LOWERED to catch all positive spreads
+  DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.05),
+  DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 2),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 500),
+  MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
+  MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
 
   // Circuit breaker — lookback window (minutes) and max losses
-  MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 50),
+  MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 999),
   CIRCUIT_BREAKER_LOOKBACK_MINUTES: optionalNumber('CIRCUIT_BREAKER_LOOKBACK_MINUTES', 5),
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
   CIRCUIT_BREAKER_COOLDOWN_MS: optionalNumber('CIRCUIT_BREAKER_COOLDOWN_MS', 15 * 60 * 1000),
@@ -69,10 +64,8 @@ export const env = {
   SWEEP_TARGET_SYMBOL: optional('SWEEP_TARGET_SYMBOL', 'USDC'),
   SWEEP_DUST_THRESHOLD_USD: optionalNumber('SWEEP_DUST_THRESHOLD_USD', 0.01),
 
-  // Alerts
   DISCORD_WEBHOOK_URL: optional('DISCORD_WEBHOOK_URL', ''),
 
-  // Scanner
   SCAN_INTERVAL_MS: optionalNumber('SCAN_INTERVAL_MS', 15000),
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
