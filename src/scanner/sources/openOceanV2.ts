@@ -21,10 +21,6 @@ export const openOceanV2Source: PriceSource = {
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
-      // Wait for a rate-limit token before firing the request, rather
-      // than firing and hoping — this keeps every call under
-      // OpenOcean's published 2 req/sec public-plan cap regardless of
-      // how many pairs the scanner is checking per cycle.
       await openOceanLimiter.acquire();
 
       const params = {
@@ -33,6 +29,14 @@ export const openOceanV2Source: PriceSource = {
         amount: (Number(req.amountIn) / 10 ** req.tokenIn.decimals).toString(),
         gasPrice: '50',
       };
+
+      log.debug('OpenOcean quote request', {
+        tokenIn: req.tokenIn.symbol,
+        tokenOut: req.tokenOut.symbol,
+        amount: params.amount,
+        inTokenAddress: req.tokenIn.address,
+        outTokenAddress: req.tokenOut.address,
+      });
 
       const response = await withRetry(
         () =>
@@ -44,6 +48,10 @@ export const openOceanV2Source: PriceSource = {
       );
 
       if (response.data.code !== 200 || !response.data.data) {
+        log.warn('OpenOcean quote returned non-200 code', {
+          code: response.data.code,
+          data: response.data.data,
+        });
         return null;
       }
 
@@ -62,10 +70,16 @@ export const openOceanV2Source: PriceSource = {
         raw: data,
       };
     } catch (err) {
-      log.warn('Quote failed', {
+      const error = err as any;
+      log.error('OpenOcean quote failed — DETAILED:', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
-        error: err instanceof Error ? err.message : String(err),
+        amountIn: req.amountIn,
+        tokenInAddress: req.tokenIn.address,
+        tokenOutAddress: req.tokenOut.address,
+        statusCode: error?.response?.status,
+        responseData: error?.response?.data,
+        errorMessage: error?.message || String(err),
       });
       return null;
     }
