@@ -79,14 +79,14 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
   });
 
   try {
+    // CRITICAL FIX: The flash loan amount should be the position size in the quote token,
+    // not divided by the buy price. The quote token is USDC (or the token we're trading with).
+    // Since positionSizeUsd is in USD and the quote token is USDC, we just parse it directly.
     const flashLoanAmountRaw = ethers.utils
-      .parseUnits(
-        (opp.positionSizeUsd / opp.spreadOpp.buyQuote.price || 1).toFixed(opp.pair.quote.decimals),
-        opp.pair.quote.decimals
-      )
+      .parseUnits(opp.positionSizeUsd.toString(), opp.pair.quote.decimals)
       .toString();
 
-    // Pass requote flags from the opportunity to the logic builder
+    // Build the arbitrage logics with requote options
     const built = await buildArbitrageLogics(
       opp,
       opp.pair.quote,
