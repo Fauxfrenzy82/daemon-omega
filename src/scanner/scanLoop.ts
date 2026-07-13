@@ -4,8 +4,8 @@ import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
 import { PriceSource, QuoteResult } from './priceSource';
-import { findBestSpread, SpreadOpportunity } from './spreadCalculator';
-import { isExecutableOpportunity } from './executionCapability';
+import { findBestSpread } from './spreadCalculator';
+import { validateExecutionCapability } from './executionCapability';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
 import { processOpportunityBatch } from '../execution/queue';
 import { hasExecutionCapacity } from '../execution/concurrency';
@@ -54,23 +54,34 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
+  // Step 1: Find the best spread using ALL quotes
   const spreadOpp = findBestSpread(pair.id, quotes);
   if (!spreadOpp) {
     log.debug(`No spread found for ${pair.id}`);
     return null;
   }
 
-  // NEW: Check if this spread is actually executable
-  const executionCheck = isExecutableOpportunity(spreadOpp);
-  if (!executionCheck.executable) {
-    log.debug(`Spread for ${pair.id} is not executable: ${executionCheck.reason}`);
-    // Log the spread anyway for debugging
-    log.debug(`Non-executable spread: ${spreadOpp.buySource} → ${spreadOpp.sellSource} (${spreadOpp.spreadBps.toFixed(2)} bps)`);
+  log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps (${spreadOpp.buySource} → ${spreadOpp.sellSource})`);
+
+  // Step 2: Validate if this spread is executable
+  // If a leg is quote-only, we'll mark it for re-quote later
+  const validationResult = validateExecutionCapability(spreadOpp);
+  if (!validationResult.executable) {
+    log.debug(`Spread for ${pair.id} not executable: ${validationResult.reason}`);
     return null;
   }
 
-  log.debug(`Found executable spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps`);
-  const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
+  // Step 3: Evaluate profitability
+  const evaluated = await evaluateOpportunity(
+    pair,
+    spreadOpp,
+    cachedNativeUsdPrice,
+    {
+      buyRequiresRequote: validationResult.buyRequiresRequote || false,
+      sellRequiresRequote: validationResult.sellRequiresRequote || false,
+    }
+  );
+
   return evaluated;
 }
 
