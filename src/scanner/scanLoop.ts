@@ -1,11 +1,9 @@
 import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
-import { quickswapSource } from './sources/quickswap';
-import { balancerV2Source } from './sources/balancerV2';
-import { curveSource } from './sources/curve';
-import { kyberswapSource } from './sources/kyberswap';
-// Removed: uniswapV3 (broken), paraswapV5 (execution fails), sushiswap (no SDK)
+import { paraswapV5Source } from './sources/paraswapV5';
+import { uniswapV3Source } from './sources/uniswapV3';
+import { zeroexV4Source } from './sources/zeroexV4';
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
@@ -19,12 +17,11 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// Reliable sources only
+// 3 reliable sources on Polygon
 const SOURCES: PriceSource[] = [
-  quickswapSource,
-  balancerV2Source,
-  curveSource,
-  kyberswapSource,
+  paraswapV5Source,
+  uniswapV3Source,
+  zeroexV4Source,
 ];
 
 let cachedNativeUsdPrice = 0.5;
@@ -131,7 +128,9 @@ let loopHandle: NodeJS.Timeout | null = null;
 
 export function startScanLoop(): void {
   if (loopHandle) return;
+
   log.info('Starting scan loop', { intervalMs: env.SCAN_INTERVAL_MS });
+
   loopHandle = setInterval(() => {
     runScanCycle().catch((err) => {
       log.error('Scan cycle threw an unhandled error', {
