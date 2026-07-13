@@ -29,11 +29,17 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
  * 2. Swap on whichever source the scanner found the best buy price on
  * 3. Swap on whichever source the scanner found the best sell price on
  *
- * Critically, this dispatches per-leg to the actual source the evaluator
- * picked (uniswapv3 / paraswapv5 / openoceanv2 / balancerv2) rather than
- * hardcoding ParaSwap for both legs. If ParaSwap genuinely has no route
- * for a pair at the current size, forcing it anyway just fails — using
- * the source the scanner already confirmed has a live quote is the fix.
+ * Dispatches per-leg to the actual source the evaluator picked
+ * (uniswapv3 / paraswapv5 / openoceanv2) rather than hardcoding one
+ * source for both legs. Balancer V2 is deliberately NOT included here:
+ * Protocolink's SDK only exposes flash-loan functions for Balancer V2
+ * (getFlashLoanTokenList / getFlashLoanQuotation / newFlashLoanLogicPair),
+ * not a getSwapTokenQuotation/newSwapTokenLogic pair like the other three
+ * protocols have. There is no generic "swap token via Balancer V2" call
+ * to make here — attempting one is a compile error, not a runtime one,
+ * because the method genuinely does not exist on that module. The
+ * scanner's balancerV2 source is also currently inert (empty
+ * KNOWN_POOL_IDS), so this isn't a regression in practice today.
  */
 export async function buildArbitrageLogics(
   opp: EvaluatedOpportunity,
@@ -105,10 +111,10 @@ export async function buildArbitrageLogics(
 /**
  * Dispatches swap-logic building to the correct Protocolink protocol
  * module based on the source string the scanner/evaluator determined
- * had the winning quote. Each protocol's getSwapTokenQuotation has a
- * slightly different accepted params shape per Protocolink's docs, so
- * each branch builds its own params object rather than sharing one
- * generic shape across all four.
+ * had the winning quote. Only uniswapv3, paraswapv5, and openoceanv2
+ * are wired here — these are the three Protocolink protocols that
+ * actually expose a swap-token quotation/logic pair. balancerv2 is
+ * intentionally absent; see the note on buildArbitrageLogics above.
  */
 async function buildSwapLogic(
   source: string,
@@ -180,24 +186,8 @@ async function buildSwapLogic(
         return api.protocols.openoceanv2.newSwapTokenLogic(quotation);
       }
 
-      case 'balancerv2': {
-        const quotation = await withRetry(
-          () =>
-            api.protocols.balancerv2.getSwapTokenQuotation(chainId, {
-              input: { token: tokenInObj, amount: amountIn },
-              tokenOut: tokenOutObj,
-            }),
-          {
-            label: `balancerv2.${tokenIn.symbol}->${tokenOut.symbol}`,
-            shouldRetry: (err: any) => (err?.response?.status === 400 ? false : isTransientError(err)),
-            retries: 2,
-          }
-        );
-        return api.protocols.balancerv2.newSwapTokenLogic(quotation);
-      }
-
       default:
-        log.warn('Unsupported swap source requested', { source });
+        log.warn('Unsupported or unavailable swap source requested', { source });
         return null;
     }
   } catch (err) {
