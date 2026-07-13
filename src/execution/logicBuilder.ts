@@ -44,10 +44,12 @@ export async function buildArbitrageLogics(
   });
   logics.push(flashLoanLogic);
 
-  // 2. Buy-side swap: Use the scanner's buy source
+  // 2. Buy-side swap
   const buySource = opp.spreadOpp.buySource;
-  const buyLogic = await buildSwapLogicForSource(
+  const buyRequiresRequote = opp.buyRequiresRequote || false;
+  const buyLogic = await buildSwapLogicWithRequote(
     buySource,
+    buyRequiresRequote,
     opp.pair.quote,
     opp.pair.base,
     flashLoanAmountRaw,
@@ -58,11 +60,13 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyLogic);
 
-  // 3. Sell-side swap: Use the scanner's sell source
+  // 3. Sell-side swap
   const sellSource = opp.spreadOpp.sellSource;
+  const sellRequiresRequote = opp.sellRequiresRequote || false;
   const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
-  const sellLogic = await buildSwapLogicForSource(
+  const sellLogic = await buildSwapLogicWithRequote(
     sellSource,
+    sellRequiresRequote,
     opp.pair.base,
     opp.pair.quote,
     buyOutputAmount,
@@ -75,8 +79,8 @@ export async function buildArbitrageLogics(
 
   log.info('Built arbitrage logic sequence', {
     pairId: opp.pair.id,
-    buySource,
-    sellSource,
+    buySource: buyRequiresRequote ? `${buySource}→requoted` : buySource,
+    sellSource: sellRequiresRequote ? `${sellSource}→requoted` : sellSource,
     steps: logics.length,
   });
 
@@ -88,11 +92,12 @@ export async function buildArbitrageLogics(
 }
 
 /**
- * Builds swap logic for a specific source.
- * NO FALLBACK — if the source doesn't have an implementation, it fails.
+ * Builds swap logic, re-quoting if the source is not executable.
+ * If the source is quote-only, we re-quote using ParaSwap V5.
  */
-async function buildSwapLogicForSource(
+async function buildSwapLogicWithRequote(
   source: string,
+  requiresRequote: boolean,
   tokenIn: TokenInfo,
   tokenOut: TokenInfo,
   amountIn: string,
@@ -112,10 +117,20 @@ async function buildSwapLogicForSource(
     return null;
   }
 
-  log.info(`🔄 Building swap logic for ${source} (${tokenIn.symbol}→${tokenOut.symbol})`, {
-    amountIn,
-    positionSizeUsd: opp.positionSizeUsd,
-  });
+  // Determine the actual source to use for execution
+  const executionSource = requiresRequote ? 'paraswap-v5' : source;
+
+  if (requiresRequote) {
+    log.info(`🔄 Re-quoting ${source} → ${executionSource} (${tokenIn.symbol}→${tokenOut.symbol})`, {
+      amountIn,
+      positionSizeUsd: opp.positionSizeUsd,
+    });
+  } else {
+    log.debug(`Building swap logic for ${executionSource} (${tokenIn.symbol}→${tokenOut.symbol})`, {
+      amountIn,
+      positionSizeUsd: opp.positionSizeUsd,
+    });
+  }
 
   const params = {
     input: { token: tokenInObj, amount: amountIn },
@@ -124,10 +139,10 @@ async function buildSwapLogicForSource(
   };
 
   try {
-    switch (source) {
+    switch (executionSource) {
       case 'paraswap-v5':
       case 'paraswapv5': {
-        const normalizedSource = source === 'paraswapv5' ? 'paraswap-v5' : source;
+        const normalizedSource = executionSource === 'paraswapv5' ? 'paraswap-v5' : executionSource;
         const quotation = await withRetry(
           () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
           {
@@ -139,10 +154,22 @@ async function buildSwapLogicForSource(
             retries: 2,
           }
         );
+
+        // Log the fresh quote result
+        const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
+        const amountOutHuman = Number(quotation.amountOut) / 10 ** tokenOut.decimals;
+        const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
+
+        log.info(`📊 Fresh quote from ${executionSource}: ${tokenIn.symbol}→${tokenOut.symbol}`, {
+          amountIn: amountInHuman,
+          amountOut: amountOutHuman,
+          price,
+        });
+
         return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
       }
       default:
-        log.error(`No execution builder available for source: ${source}`);
+        log.error(`No execution builder available for source: ${executionSource}`);
         return null;
     }
   } catch (err) {
@@ -150,7 +177,9 @@ async function buildSwapLogicForSource(
     const statusCode = error?.response?.status;
     const responseData = error?.response?.data;
 
-    log.error(`Swap logic build failed (${source}) — DETAILED:`, {
+    log.error(`Swap logic build failed (${executionSource}) — DETAILED:`, {
+      originalSource: source,
+      requiresRequote,
       tokenIn: tokenIn.symbol,
       tokenOut: tokenOut.symbol,
       tokenInAddress: tokenIn.address,
