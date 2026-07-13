@@ -2,7 +2,8 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
-import { openOceanV2Source } from './sources/openOceanV2';
+// OpenOcean V2 removed because Protocolink does NOT support OpenOcean V2 swap logic on Polygon
+// Uniswap V3 removed temporarily due to address/revert issues
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -15,8 +16,8 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// REMOVED uniswapV3Source to avoid revert errors
-const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
+// Only use ParaSwap V5 — it aggregates the deepest liquidity and is fully supported on Polygon.
+const SOURCES: PriceSource[] = [paraswapV5Source];
 
 let cachedNativeUsdPrice = 0.5;
 
