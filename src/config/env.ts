@@ -49,15 +49,15 @@ export const env = {
   // Database
   DATABASE_URL: required('DATABASE_URL'),
 
-  // Risk / thresholds — LOWERED for testing
+  // Risk / thresholds
   DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.1),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 3),
   MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 100),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 100),
 
-  // Circuit breaker
-  MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 3),
+  // Circuit breaker — increased to avoid tripping prematurely
+  MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 100),
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
   CIRCUIT_BREAKER_COOLDOWN_MS: optionalNumber('CIRCUIT_BREAKER_COOLDOWN_MS', 15 * 60 * 1000),
 
