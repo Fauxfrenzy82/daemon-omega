@@ -1,4 +1,4 @@
-import dotenv from 'dotenv';
+fimport dotenv from 'dotenv';
 
 dotenv.config();
 
