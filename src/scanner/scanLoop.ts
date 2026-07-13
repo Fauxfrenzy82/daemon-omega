@@ -1,11 +1,11 @@
 import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
-import { paraswapV5Source } from './sources/paraswapV5';
 import { quickswapSource } from './sources/quickswap';
-import { sushiswapSource } from './sources/sushiswap';
-import { uniswapV3Source } from './sources/uniswapV3';
-// OpenOcean removed — quote-only source was causing false positives
+import { balancerV2Source } from './sources/balancerV2';
+import { curveSource } from './sources/curve';
+import { kyberswapSource } from './sources/kyberswap';
+// Removed: uniswapV3 (broken), paraswapV5 (execution fails), sushiswap (no SDK)
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
@@ -19,25 +19,24 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// DEX-only sources (all support execution)
+// Reliable sources only
 const SOURCES: PriceSource[] = [
-  paraswapV5Source,
   quickswapSource,
-  sushiswapSource,
-  uniswapV3Source,
+  balancerV2Source,
+  curveSource,
+  kyberswapSource,
 ];
 
 let cachedNativeUsdPrice = 0.5;
 
 function toRawAmount(amountHuman: number, token: TokenInfo): string {
-  // Ensure amount is properly scaled to token decimals
   if (amountHuman <= 0) return '0';
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
 }
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
-  log.debug(`Getting quotes for ${pair.id} (${positionRaw} raw units)`);
+  log.debug(`Getting quotes for ${pair.id}`);
 
   const requests = SOURCES.map((source) =>
     source.getQuote({
@@ -64,7 +63,6 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  // Step 1: Find the best spread using ALL quotes
   const spreadOpp = findBestSpread(pair.id, quotes);
   if (!spreadOpp) {
     log.debug(`No spread found for ${pair.id}`);
@@ -73,17 +71,12 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
 
   log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps (${spreadOpp.buySource} → ${spreadOpp.sellSource})`);
 
-  // Step 2: CRITICAL — Validate if this spread is executable
-  // This gate rejects any spread using a quote-only source
   const validationResult = validateExecutionCapability(spreadOpp);
   if (!validationResult.executable) {
     log.debug(`Spread for ${pair.id} REJECTED by execution gate: ${validationResult.reason}`);
     return null;
   }
 
-  log.debug(`Spread for ${pair.id} passed execution gate`);
-
-  // Step 3: Evaluate profitability
   const evaluated = await evaluateOpportunity(
     pair,
     spreadOpp,
@@ -138,9 +131,7 @@ let loopHandle: NodeJS.Timeout | null = null;
 
 export function startScanLoop(): void {
   if (loopHandle) return;
-
   log.info('Starting scan loop', { intervalMs: env.SCAN_INTERVAL_MS });
-
   loopHandle = setInterval(() => {
     runScanCycle().catch((err) => {
       log.error('Scan cycle threw an unhandled error', {
