@@ -104,26 +104,27 @@ async function buildBuySwapLogic(source: string, quote: any): Promise<any | null
 
     const quotation = await withRetry(
       () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
-      { 
+      {
         label: `paraswapv5.${tokenIn.symbol}->${tokenOut.symbol}`,
-        shouldRetry: (err) => {
-          // Don't retry on 400 (bad request) - it won't succeed
+        shouldRetry: (err: any) => {
+          // Don't retry on 400 (bad request) — it won't succeed
           if (err?.response?.status === 400) return false;
           return isTransientError(err);
         },
-        retries: 2 
+        retries: 2,
       }
     );
     return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-  } catch (err: any) {
-    const errorMsg = err?.message || String(err);
-    const statusCode = err?.response?.status;
-    const responseData = err?.response?.data;
-    const requestData = err?.config?.data;
+  } catch (err) {
+    // Cast to any so we can access properties
+    const error = err as any;
+    const errorMsg = error?.message || String(err);
+    const statusCode = error?.response?.status;
+    const responseData = error?.response?.data;
 
     // Log full error details for debugging
     if (statusCode === 400) {
-      log.error('ParaSwap V5 400 Bad Request — DETAILED:', {
+      log.error('🔴 ParaSwap V5 400 Bad Request — DETAILED:', {
         source,
         tokenIn: tokenIn.symbol,
         tokenOut: tokenOut.symbol,
@@ -131,8 +132,12 @@ async function buildBuySwapLogic(source: string, quote: any): Promise<any | null
         tokenOutAddress: tokenOut.address,
         amountIn,
         statusCode,
-        response: JSON.stringify(responseData, null, 2),
-        requestData: requestData ? JSON.stringify(requestData) : undefined,
+        response: typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2),
+      });
+      log.error('➡️  Full ParaSwap request params:', {
+        tokenIn: tokenIn,
+        tokenOut: tokenOut,
+        amountIn,
       });
     } else {
       log.warn('Buy swap source failed', {
@@ -173,23 +178,24 @@ async function buildSellSwapLogic(source: string, tokenIn: TokenInfo, tokenOut: 
 
     const quotation = await withRetry(
       () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
-      { 
+      {
         label: `paraswapv5.${tokenIn.symbol}->${tokenOut.symbol}`,
-        shouldRetry: (err) => {
+        shouldRetry: (err: any) => {
           if (err?.response?.status === 400) return false;
           return isTransientError(err);
         },
-        retries: 2 
+        retries: 2,
       }
     );
     return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-  } catch (err: any) {
-    const errorMsg = err?.message || String(err);
-    const statusCode = err?.response?.status;
-    const responseData = err?.response?.data;
+  } catch (err) {
+    const error = err as any;
+    const errorMsg = error?.message || String(err);
+    const statusCode = error?.response?.status;
+    const responseData = error?.response?.data;
 
     if (statusCode === 400) {
-      log.error('ParaSwap V5 400 Bad Request (SELL) — DETAILED:', {
+      log.error('🔴 ParaSwap V5 400 Bad Request (SELL) — DETAILED:', {
         source,
         tokenIn: tokenIn.symbol,
         tokenOut: tokenOut.symbol,
@@ -197,7 +203,12 @@ async function buildSellSwapLogic(source: string, tokenIn: TokenInfo, tokenOut: 
         tokenOutAddress: tokenOut.address,
         amountIn: 'auto',
         statusCode,
-        response: JSON.stringify(responseData, null, 2),
+        response: typeof responseData === 'string' ? responseData : JSON.stringify(responseData, null, 2),
+      });
+      log.error('➡️  Full ParaSwap request params (SELL):', {
+        tokenIn: tokenInObj,
+        tokenOut: tokenOutObj,
+        amountIn: 'auto',
       });
     } else {
       log.warn('Sell swap source failed', {
