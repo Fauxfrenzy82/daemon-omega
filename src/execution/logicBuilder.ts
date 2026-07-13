@@ -19,6 +19,11 @@ export interface RequoteOptions {
   sellRequiresRequote?: boolean;
 }
 
+interface SwapBuildResult {
+  logic: any;
+  actualOutputAmount: string;
+}
+
 function toProtocolinkToken(chainId: number, token: TokenInfo) {
   return {
     chainId,
@@ -50,9 +55,10 @@ export async function buildArbitrageLogics(
   });
   logics.push(flashLoanLogic);
 
+  // Buy-side swap
   const buySource = opp.spreadOpp.buySource;
   const buyRequiresRequote = options.buyRequiresRequote || false;
-  const buyLogic = await buildSwapLogic(
+  const buyResult = await buildSwapLogic(
     buySource,
     buyRequiresRequote,
     opp.pair.quote,
@@ -60,31 +66,40 @@ export async function buildArbitrageLogics(
     flashLoanAmountRaw,
     opp
   );
-  if (!buyLogic) {
+  if (!buyResult) {
     throw new Error(`Failed to build buy swap logic for source ${buySource}`);
   }
-  logics.push(buyLogic);
+  logics.push(buyResult.logic);
 
+  // Sell-side swap — uses the buy leg's ACTUAL execution-time output
+  // amount (from its fresh quotation response), not the scan-time
+  // opp.spreadOpp.buyQuote.amountOut. That scan-time figure can be
+  // several seconds stale by the time the sell leg is built, and
+  // even small price movement in that gap causes the sell request to
+  // ask for an amount that no longer has a valid route — this was the
+  // root cause of "no route found" on the sell leg specifically,
+  // while the buy leg (which always uses fresh quotes) succeeded.
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
-  const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
-  const sellLogic = await buildSwapLogic(
+  const sellResult = await buildSwapLogic(
     sellSource,
     sellRequiresRequote,
     opp.pair.base,
     opp.pair.quote,
-    buyOutputAmount,
+    buyResult.actualOutputAmount,
     opp
   );
-  if (!sellLogic) {
+  if (!sellResult) {
     throw new Error(`Failed to build sell swap logic for source ${sellSource}`);
   }
-  logics.push(sellLogic);
+  logics.push(sellResult.logic);
 
   log.info('Built arbitrage logic sequence', {
     pairId: opp.pair.id,
     buySource: buyRequiresRequote ? `${buySource}→requoted` : buySource,
     sellSource: sellRequiresRequote ? `${sellSource}→requoted` : sellSource,
+    buyActualOutput: buyResult.actualOutputAmount,
+    scanTimeEstimate: opp.spreadOpp.buyQuote.amountOut,
     steps: logics.length,
   });
 
@@ -102,7 +117,7 @@ async function buildSwapLogic(
   tokenOut: TokenInfo,
   amountIn: string,
   opp: EvaluatedOpportunity
-): Promise<any | null> {
+): Promise<SwapBuildResult | null> {
   const chainId = getChainId();
   const tokenInObj = toProtocolinkToken(chainId, tokenIn);
   const tokenOutObj = toProtocolinkToken(chainId, tokenOut);
@@ -126,14 +141,10 @@ async function buildSwapLogic(
     });
   }
 
-  // Protocolink's `slippage` field is in BASIS POINTS, not a decimal
-  // fraction — 100 = 1%. A prior value of 0.01 meant ~0.0001%
-  // tolerance, which made almost any real quote fail with
-  // "no route found or price impact too high" regardless of source.
   const params = {
     input: { token: tokenInObj, amount: amountIn },
     tokenOut: tokenOutObj,
-    slippage: 100,
+    slippage: 100, // 1%, in basis points per Protocolink's convention
   };
 
   try {
@@ -151,7 +162,8 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-        return api.protocols.paraswapv5.newSwapTokenLogic(quote);
+        const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
+        return { logic, actualOutputAmount: quote.output.amount };
       }
 
       case 'uniswap-v3':
@@ -167,7 +179,8 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-        return api.protocols.uniswapv3.newSwapTokenLogic(quote);
+        const logic = api.protocols.uniswapv3.newSwapTokenLogic(quote);
+        return { logic, actualOutputAmount: quote.output.amount };
       }
 
       case 'zeroex-v4':
@@ -186,7 +199,8 @@ async function buildSwapLogic(
               retries: 2,
             }
           );
-          return api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
+          const logic = api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
+          return { logic, actualOutputAmount: fallbackQuote.output.amount };
         }
 
         const quote = await withRetry(
@@ -203,7 +217,8 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-        return api.protocols.zeroexv4.newSwapTokenLogic(quote);
+        const logic = api.protocols.zeroexv4.newSwapTokenLogic(quote);
+        return { logic, actualOutputAmount: quote.output.amount };
       }
 
       default:
