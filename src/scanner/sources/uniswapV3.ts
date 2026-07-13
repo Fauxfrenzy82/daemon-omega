@@ -30,7 +30,8 @@ const quoter = new ethers.Contract(QUOTER_V2_ADDRESS, QUOTER_ABI, provider);
 const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
 
 async function findBestPool(tokenA: string, tokenB: string): Promise<{ pool: string; fee: number } | null> {
-  const results = [];
+  // Use a typed array for results
+  const results: { fee: number; pool: string }[] = [];
   for (const fee of FEE_TIERS) {
     try {
       const poolAddr: string = await factory.getPool(tokenA, tokenB, fee);
