@@ -18,7 +18,8 @@ interface ParaswapPriceResponse {
 }
 
 export const paraswapV5Source: PriceSource = {
-  name: 'paraswapv5',
+  // Use 'paraswap-v5' to match Protocolink's official identifier
+  name: 'paraswap-v5',
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
@@ -51,7 +52,7 @@ export const paraswapV5Source: PriceSource = {
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
 
       return {
-        source: 'paraswapv5',
+        source: 'paraswap-v5',
         tokenIn: req.tokenIn,
         tokenOut: req.tokenOut,
         amountIn: req.amountIn,
