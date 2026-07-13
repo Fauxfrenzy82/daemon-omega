@@ -4,6 +4,7 @@ import { EvaluatedOpportunity } from '../profitability/evaluator';
 import { getChainId } from './protocolinkClient';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
+import { env } from '../config/env';
 
 const log = createLogger('logicBuilder');
 
@@ -120,7 +121,6 @@ async function buildSwapLogic(
   }
 
   // Determine the actual execution source
-  // If re-quote is needed, fallback to ParaSwap
   const executionSource = requiresRequote ? 'paraswap-v5' : source;
 
   if (requiresRequote) {
@@ -172,8 +172,29 @@ async function buildSwapLogic(
 
       case 'zeroex-v4':
       case 'zeroexv4': {
+        const apiKey = env.ZEROEX_API_KEY || '';
+        if (!apiKey) {
+          log.warn('ZEROEX_API_KEY not set — falling back to ParaSwap for zeroex-v4');
+          // Fallback to ParaSwap
+          const fallbackQuote = await withRetry(
+            () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
+            {
+              label: `fallback.paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
+              shouldRetry: (err: any) => {
+                if (err?.response?.status === 400) return false;
+                return isTransientError(err);
+              },
+              retries: 2,
+            }
+          );
+          return api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
+        }
+
         const quote = await withRetry(
-          () => api.protocols.zeroexv4.getSwapTokenQuotation(chainId, params),
+          () => api.protocols.zeroexv4.getSwapTokenQuotation(chainId, {
+            ...params,
+            apiKey,
+          }),
           {
             label: `zeroex-v4.${tokenIn.symbol}->${tokenOut.symbol}`,
             shouldRetry: (err: any) => {
