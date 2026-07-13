@@ -3,7 +3,6 @@ import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
-// 1inch removed — using OpenOcean for scanning only
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -16,8 +15,7 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// ParaSwap V5 (execution) + OpenOcean V2 (scanning only)
-// OpenOcean is used ONLY for price discovery — execution ALWAYS falls back to ParaSwap.
+// ParaSwap V5 + OpenOcean V2 for price discovery
 const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
 
 let cachedNativeUsdPrice = 0.5;
