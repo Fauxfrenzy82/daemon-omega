@@ -42,22 +42,22 @@ export const env = {
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
   OPENOCEAN_API_URL: optional('OPENOCEAN_API_URL', 'https://open-api.openocean.finance/v3/polygon'),
 
+  // 1inch API key (free at https://portal.1inch.dev)
+  ONEINCH_API_KEY: optional('ONEINCH_API_KEY', ''),
+
   DATABASE_URL: required('DATABASE_URL'),
 
-  // Risk / thresholds — READ FROM ENV VARS
   DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.1),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 500),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 100),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
 
-  // Circuit breaker
   MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 999),
   CIRCUIT_BREAKER_LOOKBACK_MINUTES: optionalNumber('CIRCUIT_BREAKER_LOOKBACK_MINUTES', 5),
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
   CIRCUIT_BREAKER_COOLDOWN_MS: optionalNumber('CIRCUIT_BREAKER_COOLDOWN_MS', 15 * 60 * 1000),
 
-  // Sweep (disabled during testing)
   SWEEP_ENABLED: optionalBool('SWEEP_ENABLED', false),
   SWEEP_MIN_BALANCE_USD: optionalNumber('SWEEP_MIN_BALANCE_USD', 20),
   SWEEP_KEEP_GAS_RESERVE_USD: optionalNumber('SWEEP_KEEP_GAS_RESERVE_USD', 1),
