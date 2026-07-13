@@ -43,17 +43,22 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
-    id: 'aave-v3-flashloan',
-    isLoan: true,
-    loans: [
-      {
-        token: toProtocolinkToken(chainId, flashLoanToken),
-        amount: flashLoanAmountRaw,
-      },
-    ],
-  });
-  logics.push(flashLoanLogic);
+  // Flash loan: Protocolink requires BOTH a loan logic entry AND a
+  // matching repay logic entry — newFlashLoanLogicPair returns the
+  // pair together. The repay entry must be the LAST item in the
+  // logics array (after every swap/other logic), so the router can
+  // validate that borrowed funds are settled at the end of the
+  // transaction. Every "flash loan logic should have repay logic"
+  // 400 was because this repay step never existed here — only the
+  // loan half was ever built.
+  const loans = [
+    {
+      token: toProtocolinkToken(chainId, flashLoanToken),
+      amount: flashLoanAmountRaw,
+    },
+  ];
+  const [flashLoanLoanLogic, flashLoanRepayLogic] = api.protocols.aavev3.newFlashLoanLogicPair(loans);
+  logics.push(flashLoanLoanLogic);
 
   // Buy-side swap
   const buySource = opp.spreadOpp.buySource;
@@ -72,13 +77,7 @@ export async function buildArbitrageLogics(
   logics.push(buyResult.logic);
 
   // Sell-side swap — uses the buy leg's ACTUAL execution-time output
-  // amount (from its fresh quotation response), not the scan-time
-  // opp.spreadOpp.buyQuote.amountOut. That scan-time figure can be
-  // several seconds stale by the time the sell leg is built, and
-  // even small price movement in that gap causes the sell request to
-  // ask for an amount that no longer has a valid route — this was the
-  // root cause of "no route found" on the sell leg specifically,
-  // while the buy leg (which always uses fresh quotes) succeeded.
+  // amount, not the stale scan-time estimate.
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
   const sellResult = await buildSwapLogic(
@@ -93,6 +92,10 @@ export async function buildArbitrageLogics(
     throw new Error(`Failed to build sell swap logic for source ${sellSource}`);
   }
   logics.push(sellResult.logic);
+
+  // Repay logic goes LAST, after every other step, per Protocolink's
+  // documented flashloan pattern.
+  logics.push(flashLoanRepayLogic);
 
   log.info('Built arbitrage logic sequence', {
     pairId: opp.pair.id,
@@ -144,7 +147,7 @@ async function buildSwapLogic(
   const params = {
     input: { token: tokenInObj, amount: amountIn },
     tokenOut: tokenOutObj,
-    slippage: 100, // 1%, in basis points per Protocolink's convention
+    slippage: 100,
   };
 
   try {
