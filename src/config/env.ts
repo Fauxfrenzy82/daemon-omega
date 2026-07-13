@@ -42,7 +42,7 @@ export const env = {
   // Protocolink
   PROTOCOLINK_API_KEY: optional('PROTOCOLINK_API_KEY', ''),
 
-  // ParaSwap / OpenOcean API endpoints
+  // ParaSwap / OpenOcean
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
   OPENOCEAN_API_URL: optional('OPENOCEAN_API_URL', 'https://open-api.openocean.finance/v3/polygon'),
 
@@ -52,17 +52,18 @@ export const env = {
   // Risk / thresholds
   DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.1),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 3),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 100),
-  MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
-  MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 100),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 50),
+  MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 1),
+  MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 500),
 
-  // Circuit breaker — increased to avoid tripping prematurely
-  MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 100),
+  // Circuit breaker — lookback window (minutes) and max losses
+  MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 50),
+  CIRCUIT_BREAKER_LOOKBACK_MINUTES: optionalNumber('CIRCUIT_BREAKER_LOOKBACK_MINUTES', 5),
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
   CIRCUIT_BREAKER_COOLDOWN_MS: optionalNumber('CIRCUIT_BREAKER_COOLDOWN_MS', 15 * 60 * 1000),
 
-  // Sweep
-  SWEEP_ENABLED: optionalBool('SWEEP_ENABLED', true),
+  // Sweep (disabled during testing)
+  SWEEP_ENABLED: optionalBool('SWEEP_ENABLED', false),
   SWEEP_MIN_BALANCE_USD: optionalNumber('SWEEP_MIN_BALANCE_USD', 20),
   SWEEP_KEEP_GAS_RESERVE_USD: optionalNumber('SWEEP_KEEP_GAS_RESERVE_USD', 1),
   SWEEP_TARGET_SYMBOL: optional('SWEEP_TARGET_SYMBOL', 'USDC'),
