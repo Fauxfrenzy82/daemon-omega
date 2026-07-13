@@ -4,6 +4,7 @@ import { PriceSource, QuoteRequest, QuoteResult } from '../priceSource';
 import { activeChain } from '../../config/chains';
 import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
+import { env } from '../../config/env';
 
 const log = createLogger('zeroexV4-source');
 
@@ -32,6 +33,14 @@ export const zeroexV4Source: PriceSource = {
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
+      // Get API key from environment
+      const apiKey = env.ZEROEX_API_KEY || '';
+
+      if (!apiKey) {
+        log.warn('ZEROEX_API_KEY not set — skipping 0x V4 quotes');
+        return null;
+      }
+
       const params = {
         sellToken: req.tokenIn.address,
         buyToken: req.tokenOut.address,
@@ -45,6 +54,7 @@ export const zeroexV4Source: PriceSource = {
           timeout: 5000,
           headers: {
             'Accept': 'application/json',
+            '0x-api-key': apiKey,
           },
         }),
         { label: 'zeroexV4.getQuote', shouldRetry: isTransientError }
@@ -62,14 +72,6 @@ export const zeroexV4Source: PriceSource = {
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
       const amountOutHuman = Number(data.buyAmount) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
-
-      log.debug('0x V4 quote received', {
-        tokenIn: req.tokenIn.symbol,
-        tokenOut: req.tokenOut.symbol,
-        price,
-        amountInHuman,
-        amountOutHuman,
-      });
 
       return {
         source: 'zeroex-v4',
