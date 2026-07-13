@@ -22,12 +22,13 @@ export const quickswapSource: PriceSource = {
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
       const path = [req.tokenIn.address, req.tokenOut.address];
+      // Cast the result to ethers.BigNumber[] immediately
       const amounts = await withRetry(
         () => router.getAmountsOut(req.amountIn, path),
         { label: 'quickswap.getAmountsOut', shouldRetry: isTransientError }
-      );
-      // Cast amounts to ethers.BigNumber[]
-      const amountOut = (amounts as ethers.BigNumber[])[amounts.length - 1];
+      ) as ethers.BigNumber[];
+
+      const amountOut = amounts[amounts.length - 1];
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
       const amountOutHuman = Number(amountOut) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
@@ -39,7 +40,7 @@ export const quickswapSource: PriceSource = {
         amountIn: req.amountIn,
         amountOut: amountOut.toString(),
         price,
-        supportsExecution: true, // ✅ Include flag in result
+        supportsExecution: true,
         raw: { amounts },
       };
     } catch (err) {
