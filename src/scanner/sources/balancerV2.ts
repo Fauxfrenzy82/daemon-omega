@@ -7,13 +7,11 @@ import { withRetry, isTransientError } from '../../utils/retry';
 const log = createLogger('balancerV2-source');
 
 const VAULT_ADDRESS = '0xBA12222222228d8Ba445958a75a0704d566BF00';
-
 const QUERY_BATCH_SWAP_ABI = [
   'function queryBatchSwap(uint8 kind, (bytes32 poolId,uint256 assetInIndex,uint256 assetOutIndex,uint256 amount,bytes userData)[] swaps, address[] assets, (address sender,bool fromInternalBalance,address recipient,bool toInternalBalance) funds) returns (int256[] assetDeltas)',
 ];
 
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
-
 const vault = new ethers.Contract(VAULT_ADDRESS, QUERY_BATCH_SWAP_ABI, provider);
 
 export const KNOWN_POOL_IDS: Record<string, string> = {
@@ -23,6 +21,7 @@ export const KNOWN_POOL_IDS: Record<string, string> = {
 
 export const balancerV2Source: PriceSource = {
   name: 'balancerv2',
+  supportsExecution: true, // ✅ Can execute trades (once pool IDs are provided)
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     const pairKey = `${req.tokenIn.symbol}-${req.tokenOut.symbol}`;
@@ -69,6 +68,7 @@ export const balancerV2Source: PriceSource = {
         amountIn: req.amountIn,
         amountOut: amountOut.toString(),
         price,
+        supportsExecution: true, // ✅ Include flag in result
         raw: { poolId },
       };
     } catch (err) {
