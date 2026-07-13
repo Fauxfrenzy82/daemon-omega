@@ -16,9 +16,13 @@ export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpp
   const valid = quotes.filter((q) => q && q.price > 0);
 
   if (valid.length < 2) {
-    log.debug('Not enough valid quotes to compare', { pairId, count: valid.length });
+    log.debug(`Not enough valid quotes to compare for ${pairId}`, { count: valid.length });
     return null;
   }
+
+  // Log all valid prices
+  const priceLog = valid.map(q => `${q.source}: ${q.price.toFixed(6)}`).join(', ');
+  log.debug(`Valid quotes for ${pairId}: ${priceLog}`);
 
   let best: SpreadOpportunity | null = null;
 
@@ -26,8 +30,8 @@ export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpp
     for (let j = 0; j < valid.length; j++) {
       if (i === j) continue;
 
-      const buyQuote = valid[i];
-      const sellQuote = valid[j];
+      const buyQuote = valid[i]; // lower price is better for buy
+      const sellQuote = valid[j]; // higher price is better for sell
 
       if (buyQuote.source === sellQuote.source) continue;
 
@@ -35,6 +39,7 @@ export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpp
       const spreadBps = spread * 10000;
 
       if (spreadBps > 0 && (!best || spreadBps > best.spreadBps)) {
+        log.debug(`Found spread ${spreadBps.toFixed(2)} bps: ${buyQuote.source} (${buyQuote.price.toFixed(6)}) → ${sellQuote.source} (${sellQuote.price.toFixed(6)})`);
         best = {
           pairId,
           buySource: buyQuote.source,
@@ -45,6 +50,12 @@ export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpp
         };
       }
     }
+  }
+
+  if (best) {
+    log.debug(`Best spread for ${pairId}: ${best.spreadBps.toFixed(2)} bps (${best.buySource} → ${best.sellSource})`);
+  } else {
+    log.debug(`No positive spread found for ${pairId}`);
   }
 
   return best;
