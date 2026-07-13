@@ -20,13 +20,18 @@ export interface EvaluatedOpportunity {
   slippageOk: boolean;
   liquidityOk: boolean;
   executable: boolean;
+  buyRequiresRequote: boolean;
+  sellRequiresRequote: boolean;
 }
 
 export async function evaluateOpportunity(
   pair: PairConfig,
   spreadOpp: SpreadOpportunity,
   nativeUsdPrice: number,
-  smallSizeQuoteForSlippage?: { buy?: any; sell?: any }
+  options?: {
+    buyRequiresRequote?: boolean;
+    sellRequiresRequote?: boolean;
+  }
 ): Promise<EvaluatedOpportunity> {
   const positionSizeUsd = Math.min(pair.maxPositionUsd, env.MAX_POSITION_SIZE_USD);
   const grossProfitUsd = positionSizeUsd * (spreadOpp.spreadBps / 10000);
@@ -38,20 +43,27 @@ export async function evaluateOpportunity(
 
   let slippageOk = true;
   let slippageReason = 'no slippage check';
-  if (smallSizeQuoteForSlippage?.buy && smallSizeQuoteForSlippage?.sell) {
-    const buyAssessment = assessSlippage(
-      smallSizeQuoteForSlippage.buy,
-      spreadOpp.buyQuote,
-      env.MAX_SLIPPAGE_BPS
-    );
-    const sellAssessment = assessSlippage(
-      smallSizeQuoteForSlippage.sell,
-      spreadOpp.sellQuote,
-      env.MAX_SLIPPAGE_BPS
-    );
-    slippageOk = buyAssessment.sufficient && sellAssessment.sufficient;
-    if (!slippageOk) {
-      slippageReason = `buy=${buyAssessment.estSlippageBps.toFixed(1)} bps, sell=${sellAssessment.estSlippageBps.toFixed(1)} bps (max=${env.MAX_SLIPPAGE_BPS} bps)`;
+  if (options?.buyRequiresRequote || options?.sellRequiresRequote) {
+    // If re-quote is needed, we skip slippage check here — it will be checked after re-quote
+    slippageOk = true;
+    slippageReason = 'skipped (will re-quote)';
+  } else {
+    // Only check slippage if both legs are already executable and no re-quote needed
+    if (spreadOpp.buyQuote && spreadOpp.sellQuote) {
+      const buyAssessment = assessSlippage(
+        spreadOpp.buyQuote,
+        spreadOpp.buyQuote,
+        env.MAX_SLIPPAGE_BPS
+      );
+      const sellAssessment = assessSlippage(
+        spreadOpp.sellQuote,
+        spreadOpp.sellQuote,
+        env.MAX_SLIPPAGE_BPS
+      );
+      slippageOk = buyAssessment.sufficient && sellAssessment.sufficient;
+      if (!slippageOk) {
+        slippageReason = `buy=${buyAssessment.estSlippageBps.toFixed(1)} bps, sell=${sellAssessment.estSlippageBps.toFixed(1)} bps (max=${env.MAX_SLIPPAGE_BPS} bps)`;
+      }
     }
   }
 
@@ -59,9 +71,14 @@ export async function evaluateOpportunity(
     meetsLiquidityFloor(spreadOpp.buyQuote, positionSizeUsd) &&
     meetsLiquidityFloor(spreadOpp.sellQuote, positionSizeUsd);
 
+  // An opportunity is executable if:
+  // 1. It passes thresholds
+  // 2. Slippage is OK (or will be re-quoted)
+  // 3. Liquidity is OK
+  // 4. Both legs are executable OR will be re-quoted
   const executable = thresholdCheck.passes && slippageOk && liquidityOk;
 
-  // Detailed rejection logging — every pair gets logged
+  // Detailed rejection logging
   if (!executable) {
     const reasons: string[] = [];
 
@@ -89,6 +106,8 @@ export async function evaluateOpportunity(
       protocolFeeUsd: cost.protocolFeeUsd.toFixed(4),
       buySource: spreadOpp.buySource,
       sellSource: spreadOpp.sellSource,
+      buyRequiresRequote: options?.buyRequiresRequote || false,
+      sellRequiresRequote: options?.sellRequiresRequote || false,
       reasons: reasons.join('; '),
     });
   } else {
@@ -96,6 +115,10 @@ export async function evaluateOpportunity(
       spreadBps: spreadOpp.spreadBps,
       netProfitUsd: netProfitUsd.toFixed(4),
       positionSizeUsd,
+      buySource: spreadOpp.buySource,
+      sellSource: spreadOpp.sellSource,
+      buyRequiresRequote: options?.buyRequiresRequote || false,
+      sellRequiresRequote: options?.sellRequiresRequote || false,
     });
   }
 
@@ -111,6 +134,8 @@ export async function evaluateOpportunity(
     slippageOk,
     liquidityOk,
     executable,
+    buyRequiresRequote: options?.buyRequiresRequote || false,
+    sellRequiresRequote: options?.sellRequiresRequote || false,
   };
 }
 
