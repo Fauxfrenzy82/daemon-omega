@@ -31,7 +31,7 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // 1. Flash loan (Aave V3)
+  // 1. Flash loan
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
     id: 'aave-v3-flashloan',
     isLoan: true,
@@ -44,9 +44,9 @@ export async function buildArbitrageLogics(
   });
   logics.push(flashLoanLogic);
 
-  // 2. Buy-side swap: Use the scanner's actual source
+  // 2. Buy-side swap: Use the scanner's buy source
   const buySource = opp.spreadOpp.buySource;
-  const buyLogic = await buildSwapLogicWithRequote(
+  const buyLogic = await buildSwapLogicForSource(
     buySource,
     opp.pair.quote,
     opp.pair.base,
@@ -58,10 +58,10 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyLogic);
 
-  // 3. Sell-side swap: Use the scanner's actual source
+  // 3. Sell-side swap: Use the scanner's sell source
   const sellSource = opp.spreadOpp.sellSource;
   const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
-  const sellLogic = await buildSwapLogicWithRequote(
+  const sellLogic = await buildSwapLogicForSource(
     sellSource,
     opp.pair.base,
     opp.pair.quote,
@@ -88,10 +88,10 @@ export async function buildArbitrageLogics(
 }
 
 /**
- * Builds swap logic with a fresh re-quote at execution time.
- * This ensures the quote is still valid and profitable.
+ * Builds swap logic for a specific source.
+ * NO FALLBACK — if the source doesn't have an implementation, it fails.
  */
-async function buildSwapLogicWithRequote(
+async function buildSwapLogicForSource(
   source: string,
   tokenIn: TokenInfo,
   tokenOut: TokenInfo,
@@ -112,7 +112,7 @@ async function buildSwapLogicWithRequote(
     return null;
   }
 
-  log.info(`🔄 Fresh re-quote for ${source} (${tokenIn.symbol}→${tokenOut.symbol})`, {
+  log.info(`🔄 Building swap logic for ${source} (${tokenIn.symbol}→${tokenOut.symbol})`, {
     amountIn,
     positionSizeUsd: opp.positionSizeUsd,
   });
@@ -124,17 +124,14 @@ async function buildSwapLogicWithRequote(
   };
 
   try {
-    // Step 1: Get a fresh quotation
-    let quotation;
     switch (source) {
       case 'paraswap-v5':
       case 'paraswapv5': {
-        // Normalize source name
         const normalizedSource = source === 'paraswapv5' ? 'paraswap-v5' : source;
-        quotation = await withRetry(
+        const quotation = await withRetry(
           () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
           {
-            label: `fresh-quote.${normalizedSource}.${tokenIn.symbol}->${tokenOut.symbol}`,
+            label: `execution.${normalizedSource}.${tokenIn.symbol}->${tokenOut.symbol}`,
             shouldRetry: (err: any) => {
               if (err?.response?.status === 400) return false;
               return isTransientError(err);
@@ -142,93 +139,11 @@ async function buildSwapLogicWithRequote(
             retries: 2,
           }
         );
-        break;
-      }
-      case 'openoceanv2': {
-        // OpenOcean is NOT supported for execution on Polygon
-        // Fallback to ParaSwap V5
-        log.warn(`OpenOcean V2 not supported for execution on Polygon, falling back to ParaSwap V5`);
-        const fallbackParams = {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-          slippage: 0.01,
-        };
-        quotation = await withRetry(
-          () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, fallbackParams),
-          {
-            label: `fallback.paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
-            shouldRetry: (err: any) => {
-              if (err?.response?.status === 400) return false;
-              return isTransientError(err);
-            },
-            retries: 2,
-          }
-        );
-        break;
+        return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
       }
       default:
-        // Unknown source, fallback to ParaSwap
-        log.warn(`Unknown source ${source}, falling back to ParaSwap V5`);
-        const fallbackParams2 = {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-          slippage: 0.01,
-        };
-        quotation = await withRetry(
-          () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, fallbackParams2),
-          {
-            label: `fallback.paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
-            shouldRetry: (err: any) => {
-              if (err?.response?.status === 400) return false;
-              return isTransientError(err);
-            },
-            retries: 2,
-          }
-        );
-    }
-
-    if (!quotation) {
-      log.warn(`Fresh quotation returned null for ${source}`, {
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-      });
-      return null;
-    }
-
-    // Step 2: Re-check profitability against the scanner's estimate
-    const freshAmountOut = Number(quotation.amountOut) / 10 ** tokenOut.decimals;
-    const originalAmountOut = Number(opp.spreadOpp.sellQuote.amountOut) / 10 ** tokenOut.decimals;
-
-    if (freshAmountOut < originalAmountOut * 0.9) {
-      // Fresh quote is worse by >10% — skip to avoid losing trade
-      log.warn(`Fresh quote significantly worse than scanner estimate (${source})`, {
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        originalAmountOut,
-        freshAmountOut,
-        dropPercent: ((originalAmountOut - freshAmountOut) / originalAmountOut * 100).toFixed(2) + '%',
-      });
-      return null;
-    }
-
-    // Step 3: Build logic from quotation
-    switch (source) {
-      case 'paraswap-v5':
-      case 'paraswapv5': {
-        return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-      }
-      case 'openoceanv2': {
-        // If we fell back to ParaSwap, use its logic builder
-        // If OpenOcean is truly supported, use its builder
-        // For now, fallback to ParaSwap
-        log.warn(`Using ParaSwap logic for OpenOcean quote (fallback)`);
-        return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-      }
-      default: {
-        // Try ParaSwap as fallback
-        log.warn(`Unknown source ${source}, using ParaSwap logic builder`);
-        return api.protocols.paraswapv5.newSwapTokenLogic(quotation);
-      }
+        log.error(`No execution builder available for source: ${source}`);
+        return null;
     }
   } catch (err) {
     const error = err as any;
