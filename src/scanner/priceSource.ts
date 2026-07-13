@@ -7,17 +7,19 @@ export interface QuoteRequest {
 }
 
 export interface QuoteResult {
-  source: string; // 'uniswapv3' | 'paraswapv5' | 'openoceanv2' | 'balancerv2'
+  source: string;
   tokenIn: TokenInfo;
   tokenOut: TokenInfo;
   amountIn: string;
   amountOut: string; // in tokenOut's smallest unit, as string
   price: number; // tokenOut per tokenIn (human units)
   estLiquidityUsd?: number;
-  raw?: unknown; // source-specific payload for execution building
+  raw?: unknown;
+  supportsExecution: boolean; // NEW: indicates if this source can execute trades
 }
 
 export interface PriceSource {
   name: string;
+  supportsExecution: boolean; // NEW: indicates if this source can execute trades
   getQuote(req: QuoteRequest): Promise<QuoteResult | null>;
 }
