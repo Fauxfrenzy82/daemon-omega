@@ -28,14 +28,21 @@ export async function evaluateOpportunity(
   nativeUsdPrice: number,
   smallSizeQuoteForSlippage?: { buy?: any; sell?: any }
 ): Promise<EvaluatedOpportunity> {
+  // DYNAMIC POSITION SIZING: Use the full allowed position size.
+  // The position size is capped by the pair's maxPositionUsd and the global max.
   const positionSizeUsd = Math.min(pair.maxPositionUsd, env.MAX_POSITION_SIZE_USD);
+
+  // Gross profit = position size × spread in basis points
   const grossProfitUsd = positionSizeUsd * (spreadOpp.spreadBps / 10000);
 
+  // Estimate gas and other costs
   const cost = await estimateFullCost(positionSizeUsd, nativeUsdPrice);
   const netProfitUsd = grossProfitUsd - cost.totalCostUsd;
 
+  // Check if net profit meets minimum threshold (can be very low)
   const thresholdCheck = checkThresholds(pair, spreadOpp.spreadBps, netProfitUsd);
 
+  // Slippage check
   let slippageOk = true;
   if (smallSizeQuoteForSlippage?.buy && smallSizeQuoteForSlippage?.sell) {
     const buyAssessment = assessSlippage(
@@ -51,24 +58,27 @@ export async function evaluateOpportunity(
     slippageOk = buyAssessment.sufficient && sellAssessment.sufficient;
   }
 
+  // Liquidity check
   const liquidityOk =
     meetsLiquidityFloor(spreadOpp.buyQuote, positionSizeUsd) &&
     meetsLiquidityFloor(spreadOpp.sellQuote, positionSizeUsd);
 
+  // Executable if all checks pass
   const executable = thresholdCheck.passes && slippageOk && liquidityOk;
 
-  // Detailed logging to see why a potential trade is not executable
+  // Log detailed rejection reasons
   if (!executable) {
     log.info('🔍 Opportunity rejected — details:', {
       pairId: pair.id,
       spreadBps: spreadOpp.spreadBps,
+      positionSizeUsd,
       grossProfitUsd: grossProfitUsd.toFixed(4),
       netProfitUsd: netProfitUsd.toFixed(4),
       gasCostUsd: cost.gasCostUsd.toFixed(4),
       protocolFeeUsd: cost.protocolFeeUsd.toFixed(4),
       thresholdPasses: thresholdCheck.passes,
-      slippageOk: slippageOk,
-      liquidityOk: liquidityOk,
+      slippageOk,
+      liquidityOk,
       minSpreadRequired: thresholdCheck.minSpreadBps,
       minProfitRequired: thresholdCheck.minProfitUsd,
     });
