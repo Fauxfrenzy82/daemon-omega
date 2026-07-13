@@ -13,8 +13,8 @@ export interface SpreadOpportunity {
 }
 
 /**
- * Finds the best spread across ALL quotes (executable or not).
- * Execution capability is checked separately after this.
+ * Finds the best spread across ALL quotes.
+ * Price must be in human-readable format (tokenOut per 1 tokenIn).
  */
 export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpportunity | null {
   const valid = quotes.filter((q) => q && q.price > 0);
@@ -24,7 +24,8 @@ export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpp
     return null;
   }
 
-  const priceLog = valid.map(q => `${q.source}: ${q.price.toFixed(6)}`).join(', ');
+  // Log all valid prices for debugging
+  const priceLog = valid.map(q => `${q.source}: ${q.price.toFixed(10)} (${q.amountIn} → ${q.amountOut})`).join(', ');
   log.debug(`Valid quotes for ${pairId}: ${priceLog}`);
 
   let best: SpreadOpportunity | null = null;
@@ -38,6 +39,7 @@ export function findBestSpread(pairId: string, quotes: QuoteResult[]): SpreadOpp
 
       if (buyQuote.source === sellQuote.source) continue;
 
+      // spread = (sell price - buy price) / buy price
       const spread = (sellQuote.price - buyQuote.price) / buyQuote.price;
       const spreadBps = spread * 10000;
 
