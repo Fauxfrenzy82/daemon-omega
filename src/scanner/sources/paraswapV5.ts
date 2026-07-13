@@ -18,10 +18,16 @@ interface ParaswapPriceResponse {
 }
 
 export const paraswapV5Source: PriceSource = {
-  // Use 'paraswap-v5' to match Protocolink's official identifier
   name: 'paraswap-v5',
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
+    log.debug('ParaSwap V5 quote request', {
+      tokenIn: req.tokenIn.symbol,
+      tokenOut: req.tokenOut.symbol,
+      amountIn: req.amountIn,
+      chainId: activeChain.chainId,
+    });
+
     try {
       const params = {
         srcToken: req.tokenIn.address,
@@ -44,12 +50,24 @@ export const paraswapV5Source: PriceSource = {
 
       const route = response.data.priceRoute;
       if (!route || !route.destAmount) {
+        log.warn('ParaSwap V5 returned empty route', {
+          tokenIn: req.tokenIn.symbol,
+          tokenOut: req.tokenOut.symbol,
+        });
         return null;
       }
 
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
       const amountOutHuman = Number(route.destAmount) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
+
+      log.debug('ParaSwap V5 quote received', {
+        tokenIn: req.tokenIn.symbol,
+        tokenOut: req.tokenOut.symbol,
+        price,
+        amountInHuman,
+        amountOutHuman,
+      });
 
       return {
         source: 'paraswap-v5',
@@ -61,10 +79,16 @@ export const paraswapV5Source: PriceSource = {
         raw: route,
       };
     } catch (err) {
-      log.warn('Quote failed', {
+      const error = err as any;
+      log.error('ParaSwap V5 quote failed — DETAILED:', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
-        error: err instanceof Error ? err.message : String(err),
+        amountIn: req.amountIn,
+        tokenInAddress: req.tokenIn.address,
+        tokenOutAddress: req.tokenOut.address,
+        statusCode: error?.response?.status,
+        responseData: error?.response?.data,
+        errorMessage: error?.message || String(err),
       });
       return null;
     }
