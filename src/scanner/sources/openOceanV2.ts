@@ -18,6 +18,7 @@ interface OpenOceanQuoteResponse {
 
 export const openOceanV2Source: PriceSource = {
   name: 'openoceanv2',
+  supportsExecution: false, // ❌ OpenOcean V2 does NOT support execution on Polygon
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
@@ -67,6 +68,7 @@ export const openOceanV2Source: PriceSource = {
         amountIn: req.amountIn,
         amountOut: data.outAmount,
         price,
+        supportsExecution: false, // ❌ Mark as quote-only
         raw: data,
       };
     } catch (err) {
