@@ -3,15 +3,12 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('executionCapability');
 
-// All 3 protocols support execution on Polygon
+// Only 3 protocols support execution on Polygon
 const EXECUTION_PROVIDERS: Record<string, boolean> = {
-  // Aggregators
   'paraswap-v5': true,
   'paraswapv5': true,
   'zeroex-v4': true,
   'zeroexv4': true,
-
-  // Direct DEXs
   'uniswap-v3': true,
   'uniswapv3': true,
 };
