@@ -4,7 +4,8 @@ import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
 import { PriceSource, QuoteResult } from './priceSource';
-import { findBestSpread } from './spreadCalculator';
+import { findBestSpread, SpreadOpportunity } from './spreadCalculator';
+import { isExecutableOpportunity } from './executionCapability';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
 import { processOpportunityBatch } from '../execution/queue';
 import { hasExecutionCapacity } from '../execution/concurrency';
@@ -15,7 +16,7 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// ParaSwap V5 + OpenOcean V2 for price discovery
+// ParaSwap V5 (executable) + OpenOcean V2 (quote-only) for price discovery
 const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
 
 let cachedNativeUsdPrice = 0.5;
@@ -59,7 +60,16 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps`);
+  // NEW: Check if this spread is actually executable
+  const executionCheck = isExecutableOpportunity(spreadOpp);
+  if (!executionCheck.executable) {
+    log.debug(`Spread for ${pair.id} is not executable: ${executionCheck.reason}`);
+    // Log the spread anyway for debugging
+    log.debug(`Non-executable spread: ${spreadOpp.buySource} → ${spreadOpp.sellSource} (${spreadOpp.spreadBps.toFixed(2)} bps)`);
+    return null;
+  }
+
+  log.debug(`Found executable spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps`);
   const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
   return evaluated;
 }
