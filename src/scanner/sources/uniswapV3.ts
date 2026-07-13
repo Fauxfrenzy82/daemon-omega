@@ -6,14 +6,14 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('uniswapV3-source');
 
-// Use plain string — no checksum validation.
-const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21';
-const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
+// Uniswap V3 Quoter V2 on Polygon
+const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5f6CB21bf9697530b21';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
 ];
 
+const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
 const FACTORY_ABI = [
   'function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)',
 ];
@@ -26,7 +26,6 @@ const POOL_ABI = [
 const FEE_TIERS = [100, 500, 3000, 10000];
 
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
-
 const quoter = new ethers.Contract(QUOTER_V2_ADDRESS, QUOTER_ABI, provider);
 const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
 
@@ -82,6 +81,7 @@ export const uniswapV3Source: PriceSource = {
       );
 
       const amountOut: ethers.BigNumber = result.amountOut;
+
       const amountInHuman = Number(ethers.utils.formatUnits(req.amountIn, req.tokenIn.decimals));
       const amountOutHuman = Number(ethers.utils.formatUnits(amountOut, req.tokenOut.decimals));
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
