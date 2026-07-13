@@ -2,8 +2,8 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
-import { openOceanV2Source } from './sources/openOceanV2';
-// Uniswap V3 excluded due to address/revert issues
+import { oneInchV5Source } from './sources/oneInchV5';
+// OpenOcean V2 removed (not supported on Polygon for execution)
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -16,9 +16,9 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// Use ParaSwap V5 and OpenOcean V2 for price discovery.
-// OpenOcean is only used for scanning; execution always falls back to ParaSwap V5.
-const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
+// ParaSwap V5 + 1inch V5 for price discovery.
+// 1inch offers superior liquidity aggregation on Polygon.
+const SOURCES: PriceSource[] = [paraswapV5Source, oneInchV5Source];
 
 let cachedNativeUsdPrice = 0.5;
 
