@@ -17,7 +17,7 @@ const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
 
 export const quickswapSource: PriceSource = {
   name: 'quickswap',
-  supportsExecution: true, // We'll implement execution later
+  supportsExecution: true, // ✅ Mark as executable (we'll implement execution later)
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
@@ -26,7 +26,8 @@ export const quickswapSource: PriceSource = {
         () => router.getAmountsOut(req.amountIn, path),
         { label: 'quickswap.getAmountsOut', shouldRetry: isTransientError }
       );
-      const amountOut = amounts[amounts.length - 1];
+      // amounts is an array of BigNumber, but we need to handle it safely
+      const amountOut = amounts[amounts.length - 1] as ethers.BigNumber;
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
       const amountOutHuman = Number(amountOut) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
@@ -38,7 +39,7 @@ export const quickswapSource: PriceSource = {
         amountIn: req.amountIn,
         amountOut: amountOut.toString(),
         price,
-        supportsExecution: true,
+        supportsExecution: true, // ✅ Include flag in result
         raw: { amounts },
       };
     } catch (err) {
