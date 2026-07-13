@@ -3,7 +3,8 @@ import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
-import { quickswapSource } from './sources/quickswap'; // ✅ Import QuickSwap
+import { quickswapSource } from './sources/quickswap';
+import { sushiswapSource } from './sources/sushiswap';
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
@@ -21,7 +22,13 @@ const log = createLogger('scanLoop');
 // - ParaSwap V5: Aggregator (executable)
 // - OpenOcean V2: Aggregator (quote-only on Polygon)
 // - QuickSwap: Direct DEX (executable)
-const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source, quickswapSource];
+// - SushiSwap: Direct DEX (executable)
+const SOURCES: PriceSource[] = [
+  paraswapV5Source,
+  openOceanV2Source,
+  quickswapSource,
+  sushiswapSource,
+];
 
 let cachedNativeUsdPrice = 0.5;
 
@@ -67,13 +74,15 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
 
   log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps (${spreadOpp.buySource} → ${spreadOpp.sellSource})`);
 
-  // Step 2: Validate if this spread is executable
-  // If a leg is quote-only, we'll mark it for re-quote later
+  // Step 2: CRITICAL — Validate if this spread is executable
+  // If either leg uses a quote-only source (like OpenOcean), this will reject it
   const validationResult = validateExecutionCapability(spreadOpp);
   if (!validationResult.executable) {
-    log.debug(`Spread for ${pair.id} not executable: ${validationResult.reason}`);
-    return null;
+    log.debug(`Spread for ${pair.id} REJECTED by execution gate: ${validationResult.reason}`);
+    return null; // ❌ MUST return null here — this is the gate
   }
+
+  log.debug(`Spread for ${pair.id} passed execution gate`);
 
   // Step 3: Evaluate profitability
   const evaluated = await evaluateOpportunity(
