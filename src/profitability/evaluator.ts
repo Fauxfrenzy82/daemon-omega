@@ -24,6 +24,13 @@ export interface EvaluatedOpportunity {
   sellRequiresRequote: boolean;
 }
 
+/**
+ * Sanity check: reject spreads that are obviously impossible (too large).
+ * A 100% spread = 10,000 bps is impossible in liquid markets.
+ * Reject anything above 1,000 bps (10%) as likely a decimal error.
+ */
+const MAX_SANE_SPREAD_BPS = 1000;
+
 export async function evaluateOpportunity(
   pair: PairConfig,
   spreadOpp: SpreadOpportunity,
@@ -36,6 +43,38 @@ export async function evaluateOpportunity(
   const positionSizeUsd = Math.min(pair.maxPositionUsd, env.MAX_POSITION_SIZE_USD);
   const grossProfitUsd = positionSizeUsd * (spreadOpp.spreadBps / 10000);
 
+  // 🔴 Sanity check: reject impossible spreads
+  if (spreadOpp.spreadBps > MAX_SANE_SPREAD_BPS) {
+    log.error(`🚨 IMPOSSIBLE SPREAD DETECTED: ${spreadOpp.spreadBps} bps for ${pair.id}`, {
+      spreadBps: spreadOpp.spreadBps,
+      buyPrice: spreadOpp.buyQuote.price,
+      sellPrice: spreadOpp.sellQuote.price,
+      buySource: spreadOpp.buySource,
+      sellSource: spreadOpp.sellSource,
+      buyAmountIn: spreadOpp.buyQuote.amountIn,
+      buyAmountOut: spreadOpp.buyQuote.amountOut,
+      sellAmountIn: spreadOpp.sellQuote.amountIn,
+      sellAmountOut: spreadOpp.sellQuote.amountOut,
+    });
+    // Return a non-executable opportunity
+    const thresholdCheck = checkThresholds(pair, spreadOpp.spreadBps, -999);
+    return {
+      pair,
+      spreadOpp,
+      positionSizeUsd,
+      grossProfitUsd: 0,
+      gasCostUsd: 999,
+      protocolFeeUsd: 0,
+      netProfitUsd: -999,
+      thresholdCheck,
+      slippageOk: false,
+      liquidityOk: false,
+      executable: false,
+      buyRequiresRequote: options?.buyRequiresRequote || false,
+      sellRequiresRequote: options?.sellRequiresRequote || false,
+    };
+  }
+
   const cost = await estimateFullCost(positionSizeUsd, nativeUsdPrice);
   const netProfitUsd = grossProfitUsd - cost.totalCostUsd;
 
@@ -44,11 +83,9 @@ export async function evaluateOpportunity(
   let slippageOk = true;
   let slippageReason = 'no slippage check';
   if (options?.buyRequiresRequote || options?.sellRequiresRequote) {
-    // If re-quote is needed, we skip slippage check here — it will be checked after re-quote
     slippageOk = true;
     slippageReason = 'skipped (will re-quote)';
   } else {
-    // Only check slippage if both legs are already executable and no re-quote needed
     if (spreadOpp.buyQuote && spreadOpp.sellQuote) {
       const buyAssessment = assessSlippage(
         spreadOpp.buyQuote,
@@ -71,14 +108,8 @@ export async function evaluateOpportunity(
     meetsLiquidityFloor(spreadOpp.buyQuote, positionSizeUsd) &&
     meetsLiquidityFloor(spreadOpp.sellQuote, positionSizeUsd);
 
-  // An opportunity is executable if:
-  // 1. It passes thresholds
-  // 2. Slippage is OK (or will be re-quoted)
-  // 3. Liquidity is OK
-  // 4. Both legs are executable OR will be re-quoted
   const executable = thresholdCheck.passes && slippageOk && liquidityOk;
 
-  // Detailed rejection logging
   if (!executable) {
     const reasons: string[] = [];
 
