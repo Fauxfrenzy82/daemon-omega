@@ -2,9 +2,10 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
-import { openOceanV2Source } from './sources/openOceanV2';
 import { quickswapSource } from './sources/quickswap';
 import { sushiswapSource } from './sources/sushiswap';
+import { uniswapV3Source } from './sources/uniswapV3';
+// OpenOcean removed — quote-only source was causing false positives
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
@@ -18,27 +19,25 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// Price discovery sources:
-// - ParaSwap V5: Aggregator (executable)
-// - OpenOcean V2: Aggregator (quote-only on Polygon)
-// - QuickSwap: Direct DEX (executable)
-// - SushiSwap: Direct DEX (executable)
+// DEX-only sources (all support execution)
 const SOURCES: PriceSource[] = [
   paraswapV5Source,
-  openOceanV2Source,
   quickswapSource,
   sushiswapSource,
+  uniswapV3Source,
 ];
 
 let cachedNativeUsdPrice = 0.5;
 
 function toRawAmount(amountHuman: number, token: TokenInfo): string {
+  // Ensure amount is properly scaled to token decimals
+  if (amountHuman <= 0) return '0';
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
 }
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
-  log.debug(`Getting quotes for ${pair.id}`);
+  log.debug(`Getting quotes for ${pair.id} (${positionRaw} raw units)`);
 
   const requests = SOURCES.map((source) =>
     source.getQuote({
@@ -75,11 +74,11 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps (${spreadOpp.buySource} → ${spreadOpp.sellSource})`);
 
   // Step 2: CRITICAL — Validate if this spread is executable
-  // If either leg uses a quote-only source (like OpenOcean), this will reject it
+  // This gate rejects any spread using a quote-only source
   const validationResult = validateExecutionCapability(spreadOpp);
   if (!validationResult.executable) {
     log.debug(`Spread for ${pair.id} REJECTED by execution gate: ${validationResult.reason}`);
-    return null; // ❌ MUST return null here — this is the gate
+    return null;
   }
 
   log.debug(`Spread for ${pair.id} passed execution gate`);
