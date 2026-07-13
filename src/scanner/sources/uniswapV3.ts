@@ -6,9 +6,13 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('uniswapV3-source');
 
-// Use plain addresses — no checksum validation.
-const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21';
-const FACTORY_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984';
+// ✅ Use toLowerCase() to bypass checksum validation
+const QUOTER_V2_ADDRESS = ethers.utils.getAddress(
+  '0x61fFE014bA17989E743c5F6cB21bF9697530B21'.toLowerCase()
+);
+const FACTORY_ADDRESS = ethers.utils.getAddress(
+  '0x1F98431c8aD98523631AE4a59f267346ea31F984'.toLowerCase()
+);
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
@@ -30,11 +34,9 @@ const quoter = new ethers.Contract(QUOTER_V2_ADDRESS, QUOTER_ABI, provider);
 const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
 
 async function findBestPool(tokenA: string, tokenB: string): Promise<{ pool: string; fee: number } | null> {
-  const results: { fee: number; pool: string }[] = [];
   for (const fee of FEE_TIERS) {
     try {
       const poolAddr: string = await factory.getPool(tokenA, tokenB, fee);
-      results.push({ fee, pool: poolAddr });
       if (poolAddr && poolAddr !== ethers.constants.AddressZero) {
         return { pool: poolAddr, fee };
       }
@@ -42,7 +44,6 @@ async function findBestPool(tokenA: string, tokenB: string): Promise<{ pool: str
       log.debug('Pool check failed', { tokenA, tokenB, fee, error: String(err) });
     }
   }
-  log.debug('Pool search results', { tokenA, tokenB, results });
   return null;
 }
 
@@ -57,30 +58,20 @@ async function estimatePoolLiquidityUsd(poolAddress: string): Promise<number | u
 }
 
 export const uniswapV3Source: PriceSource = {
-  name: 'uniswapv3',
-  supportsExecution: true, // ✅ Can execute trades
+  name: 'uniswap-v3',
+  supportsExecution: true,
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
-      log.debug('Uniswap V3 quote request', {
-        tokenIn: req.tokenIn.symbol,
-        tokenOut: req.tokenOut.symbol,
-        amountIn: req.amountIn,
-        tokenInAddress: req.tokenIn.address,
-        tokenOutAddress: req.tokenOut.address,
-      });
-
       const poolInfo = await withRetry(
         () => findBestPool(req.tokenIn.address, req.tokenOut.address),
         { label: 'uniswapV3.findBestPool', shouldRetry: isTransientError }
       );
 
       if (!poolInfo) {
-        log.warn('No pool found for pair', { tokenIn: req.tokenIn.symbol, tokenOut: req.tokenOut.symbol });
+        log.debug('No pool found', { tokenIn: req.tokenIn.symbol, tokenOut: req.tokenOut.symbol });
         return null;
       }
-
-      log.debug('Pool found', { pool: poolInfo.pool, fee: poolInfo.fee });
 
       const result = await withRetry(
         () =>
@@ -102,31 +93,22 @@ export const uniswapV3Source: PriceSource = {
       const estLiquidityUsd = await estimatePoolLiquidityUsd(poolInfo.pool);
 
       return {
-        source: 'uniswapv3',
+        source: 'uniswap-v3',
         tokenIn: req.tokenIn,
         tokenOut: req.tokenOut,
         amountIn: req.amountIn,
         amountOut: amountOut.toString(),
         price,
-        supportsExecution: true, // ✅ Include flag in result
+        supportsExecution: true,
         estLiquidityUsd,
         raw: { pool: poolInfo.pool, fee: poolInfo.fee },
       };
     } catch (err) {
       const error = err as any;
-      log.error('Uniswap V3 quote failed — DETAILED:', {
+      log.warn('Uniswap V3 quote failed', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
-        amountIn: req.amountIn,
-        tokenInAddress: req.tokenIn.address,
-        tokenOutAddress: req.tokenOut.address,
-        errorMessage: error?.message || String(err),
-        errorCode: error?.code,
-        errorArgs: error?.errorArgs,
-        errorName: error?.errorName,
-        reason: error?.reason,
-        data: error?.data ? (typeof error.data === 'string' ? error.data : JSON.stringify(error.data)) : undefined,
-        rawError: error,
+        error: error?.message || String(err),
       });
       return null;
     }
