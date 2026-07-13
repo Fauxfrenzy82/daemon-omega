@@ -3,24 +3,17 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('executionCapability');
 
+// All 3 protocols support execution on Polygon
 const EXECUTION_PROVIDERS: Record<string, boolean> = {
-  // Reliable sources only
-  'quickswap': true,
-  'quickswap-v3': true,
-  'balancerv2': true,
-  'balancer-v2': true,
-  'curve': true,
-  'kyberswap': true,
-  'kyber': true,
+  // Aggregators
+  'paraswap-v5': true,
+  'paraswapv5': true,
+  'zeroex-v4': true,
+  'zeroexv4': true,
 
-  // Disabled (broken or failing)
-  'paraswap-v5': false,
-  'paraswapv5': false,
-  'sushiswap': false,
-  'sushi-swap': false,
-  'uniswapv3': false,
-  'uniswap-v3': false,
-  'openoceanv2': false,
+  // Direct DEXs
+  'uniswap-v3': true,
+  'uniswapv3': true,
 };
 
 export interface ExecutionValidationResult {
