@@ -7,7 +7,6 @@ import { canStartNewTrade, checkGasPriceLimit } from '../risk/limits';
 import { ethers } from 'ethers';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
-import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
 
 const log = createLogger('execution-queue');
 
@@ -42,7 +41,6 @@ export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[])
   const dispatchable = ranked.slice(0, Math.max(0, 10));
 
   const executions = dispatchable.map((opp) => dispatchOpportunity(opp));
-
   await Promise.allSettled(executions);
 }
 
@@ -79,9 +77,18 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
   });
 
   try {
+    // The quote token for every configured pair is a USD-pegged stable
+    // (USDC / USDC.e / USDT / DAI), so positionSizeUsd maps directly to
+    // that token's raw units — no price division needed here. The
+    // previous version divided positionSizeUsd by buyQuote.price, but
+    // that price is denominated as base-token-per-quote-token (e.g.
+    // WETH per USDC, a tiny fraction), which inflated the flashloan
+    // amount by orders of magnitude — this was the actual cause of
+    // ParaSwap's "no route found or price impact too high" errors,
+    // not a real routing problem.
     const flashLoanAmountRaw = ethers.utils
       .parseUnits(
-        (opp.positionSizeUsd / opp.spreadOpp.buyQuote.price || 1).toFixed(opp.pair.quote.decimals),
+        opp.positionSizeUsd.toFixed(opp.pair.quote.decimals),
         opp.pair.quote.decimals
       )
       .toString();
@@ -97,23 +104,18 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         txHash: result.txHash,
         gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
       });
-
       log.info('Trade executed successfully', { pairId: opp.pair.id, txHash: result.txHash });
-      await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
     } else {
       await updateTradeStatus(tradeId, 'failed', {
         errorMessage: result.errorMessage,
         txHash: result.txHash,
       });
-
       log.warn('Trade execution failed', { pairId: opp.pair.id, error: result.errorMessage });
-      await alertTradeFailed(opp.pair.id, result.errorMessage ?? 'unknown error');
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await updateTradeStatus(tradeId, 'failed', { errorMessage: message });
     log.error('Trade dispatch threw an error', { pairId: opp.pair.id, error: message });
-    await alertTradeFailed(opp.pair.id, message);
   } finally {
     state.activeTrades -= 1;
   }
