@@ -3,7 +3,7 @@ import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
-import { quickswapSource } from './sources/quickswap';
+import { quickswapSource } from './sources/quickswap'; // ✅ Import QuickSwap
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
