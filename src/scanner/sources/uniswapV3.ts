@@ -6,8 +6,10 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('uniswapV3-source');
 
-// Uniswap V3 Quoter V2 on Polygon
-const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5f6CB21bf9697530b21';
+// Uniswap V3 Quoter V2 on Polygon — verified against PolygonScan,
+// Etherscan, Arbiscan, and Uniswap's official docs repo (same address
+// across all chains it's deployed on).
+const QUOTER_V2_ADDRESS = '0x61fFE014bA17989E743c5F6cB21bF9697530B21e';
 
 const QUOTER_ABI = [
   'function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) external returns (uint256 amountOut,uint160 sqrtPriceX96After,uint32 initializedTicksCrossed,uint256 gasEstimate)',
