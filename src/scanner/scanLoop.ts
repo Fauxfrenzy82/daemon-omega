@@ -2,6 +2,8 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
+import { openOceanV2Source } from './sources/openOceanV2';
+// Uniswap V3 excluded due to address/revert issues
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
@@ -14,7 +16,9 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-const SOURCES: PriceSource[] = [paraswapV5Source];
+// Use ParaSwap V5 and OpenOcean V2 for price discovery.
+// OpenOcean is only used for scanning; execution always falls back to ParaSwap V5.
+const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
 
 let cachedNativeUsdPrice = 0.5;
 
@@ -90,11 +94,6 @@ async function runScanCycle(): Promise<void> {
   const executable = evaluated.filter((e) => e.executable);
 
   log.info(`🔄 Scan cycle complete: ${evaluated.length} evaluated, ${executable.length} executable`);
-
-  if (evaluated.length === 0) {
-    log.debug('No evaluated opportunities this cycle');
-    return;
-  }
 
   if (executable.length === 0) {
     log.debug('No executable opportunities this cycle');
