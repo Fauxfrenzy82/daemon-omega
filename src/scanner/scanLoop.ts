@@ -3,6 +3,7 @@ import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { openOceanV2Source } from './sources/openOceanV2';
+import { quickswapSource } from './sources/quickswap';
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
@@ -16,8 +17,11 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// ParaSwap V5 (executable) + OpenOcean V2 (quote-only) for price discovery
-const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source];
+// Price discovery sources:
+// - ParaSwap V5: Aggregator (executable)
+// - OpenOcean V2: Aggregator (quote-only on Polygon)
+// - QuickSwap: Direct DEX (executable)
+const SOURCES: PriceSource[] = [paraswapV5Source, openOceanV2Source, quickswapSource];
 
 let cachedNativeUsdPrice = 0.5;
 
