@@ -7,9 +7,7 @@ import { withRetry, isTransientError } from '../../utils/retry';
 const log = createLogger('sushiswap-source');
 
 // SushiSwap Router on Polygon
-const ROUTER_ADDRESS = ethers.utils.getAddress(
-  '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506'.toLowerCase()
-);
+const ROUTER_ADDRESS = '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506';
 const ROUTER_ABI = [
   'function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)',
 ];
@@ -23,16 +21,48 @@ export const sushiswapSource: PriceSource = {
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
+      // Validate amount
+      const amountInBN = ethers.BigNumber.from(req.amountIn);
+      if (amountInBN.isZero()) {
+        log.warn('Amount is zero, skipping quote', {
+          tokenIn: req.tokenIn.symbol,
+          tokenOut: req.tokenOut.symbol,
+        });
+        return null;
+      }
+
       const path = [req.tokenIn.address, req.tokenOut.address];
+      log.debug('SushiSwap quote request', {
+        tokenIn: req.tokenIn.symbol,
+        tokenOut: req.tokenOut.symbol,
+        amountIn: req.amountIn,
+        path,
+      });
+
       const amounts = await withRetry(
         () => router.getAmountsOut(req.amountIn, path),
         { label: 'sushiswap.getAmountsOut', shouldRetry: isTransientError }
       ) as ethers.BigNumber[];
 
+      if (!amounts || amounts.length < 2) {
+        log.warn('SushiSwap returned invalid amounts', { amounts });
+        return null;
+      }
+
       const amountOut = amounts[amounts.length - 1];
-      const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
-      const amountOutHuman = Number(amountOut) / 10 ** req.tokenOut.decimals;
+
+      const amountInHuman = parseFloat(ethers.utils.formatUnits(req.amountIn, req.tokenIn.decimals));
+      const amountOutHuman = parseFloat(ethers.utils.formatUnits(amountOut, req.tokenOut.decimals));
+
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
+
+      log.debug('SushiSwap quote received', {
+        tokenIn: req.tokenIn.symbol,
+        tokenOut: req.tokenOut.symbol,
+        amountInHuman,
+        amountOutHuman,
+        price,
+      });
 
       return {
         source: 'sushiswap',
@@ -45,7 +75,16 @@ export const sushiswapSource: PriceSource = {
         raw: { amounts },
       };
     } catch (err) {
-      log.warn('SushiSwap quote failed', { error: String(err) });
+      const error = err as any;
+      log.error('SushiSwap quote failed — DETAILED:', {
+        tokenIn: req.tokenIn.symbol,
+        tokenOut: req.tokenOut.symbol,
+        amountIn: req.amountIn,
+        errorMessage: error?.message || String(err),
+        errorCode: error?.code,
+        errorReason: error?.reason,
+        data: error?.data ? (typeof error.data === 'string' ? error.data : JSON.stringify(error.data)) : undefined,
+      });
       return null;
     }
   },
