@@ -17,11 +17,11 @@ const EXECUTION_PROVIDERS: Record<string, boolean> = {
   'openoceanv2': false,    // ❌ Cannot execute trades on Polygon
 
   // Direct DEXs
-  'quickswap': true,       // ✅ Added
-  'uniswapv3': true,
-  'uniswap-v3': true,
+  'quickswap': true,
   'sushiswap': true,
   'sushi-swap': true,
+  'uniswapv3': true,
+  'uniswap-v3': true,
   'curve': true,
   'balancerv2': true,
   'balancer-v2': true,
