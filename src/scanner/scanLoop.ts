@@ -3,7 +3,6 @@ import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { paraswapV5Source } from './sources/paraswapV5';
 import { uniswapV3Source } from './sources/uniswapV3';
-import { zeroexV4Source } from './sources/zeroexV4';
 import { PriceSource, QuoteResult } from './priceSource';
 import { findBestSpread } from './spreadCalculator';
 import { validateExecutionCapability } from './executionCapability';
@@ -17,11 +16,16 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// 3 reliable sources on Polygon
+// zeroexV4Source removed: every buy-leg quote through Protocolink's
+// ZeroEx V4 module failed with "no route found or price impact too
+// high" at a 100% rate across multiple pairs, position sizes, and
+// after the slippage-units fix that resolved the identical symptom
+// for ParaSwap V5 and Uniswap V3. Since those two (plus OpenOcean V2,
+// where present) are demonstrated working in production logs, ZeroEx
+// V4 is disabled here rather than left half-broken in the rotation.
 const SOURCES: PriceSource[] = [
   paraswapV5Source,
   uniswapV3Source,
-  zeroexV4Source,
 ];
 
 let cachedNativeUsdPrice = 0.5;
@@ -33,7 +37,6 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
 
 async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
-  log.debug(`Getting quotes for ${pair.id}`);
 
   const requests = SOURCES.map((source) =>
     source.getQuote({
@@ -47,48 +50,26 @@ async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
   );
 
   const results = await Promise.all(requests);
-  const valid = results.filter((r): r is QuoteResult => r !== null);
-  log.debug(`Got ${valid.length} valid quotes for ${pair.id}`);
-  return valid;
+  return results.filter((r): r is QuoteResult => r !== null);
 }
 
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const quotes = await getQuotesForPair(pair);
 
   if (quotes.length < 2) {
-    log.debug(`Not enough quotes for ${pair.id} (got ${quotes.length})`);
     return null;
   }
 
   const spreadOpp = findBestSpread(pair.id, quotes);
   if (!spreadOpp) {
-    log.debug(`No spread found for ${pair.id}`);
     return null;
   }
 
-  log.debug(`Found spread for ${pair.id}: ${spreadOpp.spreadBps.toFixed(2)} bps (${spreadOpp.buySource} → ${spreadOpp.sellSource})`);
-
-  const validationResult = validateExecutionCapability(spreadOpp);
-  if (!validationResult.executable) {
-    log.debug(`Spread for ${pair.id} REJECTED by execution gate: ${validationResult.reason}`);
-    return null;
-  }
-
-  const evaluated = await evaluateOpportunity(
-    pair,
-    spreadOpp,
-    cachedNativeUsdPrice,
-    {
-      buyRequiresRequote: validationResult.buyRequiresRequote || false,
-      sellRequiresRequote: validationResult.sellRequiresRequote || false,
-    }
-  );
-
+  const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
   return evaluated;
 }
 
 async function runScanCycle(): Promise<void> {
-  log.info('🔄 Scan cycle started');
   recordScanCycle();
 
   await evaluateCircuitBreaker();
@@ -103,6 +84,8 @@ async function runScanCycle(): Promise<void> {
     return;
   }
 
+  log.info('🔄 Scan cycle started');
+
   const pairs = enabledPairs();
   log.info(`Evaluating ${pairs.length} enabled pairs`);
 
@@ -112,12 +95,10 @@ async function runScanCycle(): Promise<void> {
   })));
 
   const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
-  const executable = evaluated.filter((e) => e.executable);
 
-  log.info(`🔄 Scan cycle complete: ${evaluated.length} evaluated, ${executable.length} executable`);
+  log.info(`🔄 Scan cycle complete: ${evaluated.length} evaluated, ${evaluated.filter((e) => e.executable).length} executable`);
 
-  if (executable.length === 0) {
-    log.debug('No executable opportunities this cycle');
+  if (evaluated.length === 0) {
     return;
   }
 
