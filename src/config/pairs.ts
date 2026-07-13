@@ -11,8 +11,6 @@ export interface PairConfig {
   enabled: boolean;
 }
 
-// All pairs use the SAME thresholds from environment variables.
-// This makes tuning easy — change MIN_PROFIT_USD and MIN_SPREAD_BPS in Render.
 export const PAIRS: PairConfig[] = [
   {
     id: 'WETH-USDC',
