@@ -1,5 +1,4 @@
 import * as api from '@protocolink/api';
-import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
 import { EvaluatedOpportunity } from '../profitability/evaluator';
 import { getChainId } from './protocolinkClient';
@@ -38,19 +37,23 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
+  // Flash loan from Aave V3
   const flashLoanLogic = await api.protocols.aavev3.newFlashLoanLogic({
     id: 'aave-v3-flashloan',
     isLoan: true,
-    loans: [{
-      token: toProtocolinkToken(chainId, flashLoanToken),
-      amount: flashLoanAmountRaw,
-    }],
+    loans: [
+      {
+        token: toProtocolinkToken(chainId, flashLoanToken),
+        amount: flashLoanAmountRaw,
+      },
+    ],
   });
   logics.push(flashLoanLogic);
 
+  // Buy-side swap
   const buySource = opp.spreadOpp.buySource;
   const buyRequiresRequote = options.buyRequiresRequote || false;
-  const buyLogic = await buildSwapLogicWithRequote(
+  const buyLogic = await buildSwapLogic(
     buySource,
     buyRequiresRequote,
     opp.pair.quote,
@@ -58,13 +61,16 @@ export async function buildArbitrageLogics(
     flashLoanAmountRaw,
     opp
   );
-  if (!buyLogic) throw new Error(`Failed to build buy swap logic for source ${buySource}`);
+  if (!buyLogic) {
+    throw new Error(`Failed to build buy swap logic for source ${buySource}`);
+  }
   logics.push(buyLogic);
 
+  // Sell-side swap
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
   const buyOutputAmount = opp.spreadOpp.buyQuote.amountOut;
-  const sellLogic = await buildSwapLogicWithRequote(
+  const sellLogic = await buildSwapLogic(
     sellSource,
     sellRequiresRequote,
     opp.pair.base,
@@ -72,19 +78,26 @@ export async function buildArbitrageLogics(
     buyOutputAmount,
     opp
   );
-  if (!sellLogic) throw new Error(`Failed to build sell swap logic for source ${sellSource}`);
+  if (!sellLogic) {
+    throw new Error(`Failed to build sell swap logic for source ${sellSource}`);
+  }
   logics.push(sellLogic);
 
   log.info('Built arbitrage logic sequence', {
     pairId: opp.pair.id,
     buySource: buyRequiresRequote ? `${buySource}→requoted` : buySource,
     sellSource: sellRequiresRequote ? `${sellSource}→requoted` : sellSource,
+    steps: logics.length,
   });
 
-  return { logics, flashLoanAmount: flashLoanAmountRaw, flashLoanToken };
+  return {
+    logics,
+    flashLoanAmount: flashLoanAmountRaw,
+    flashLoanToken,
+  };
 }
 
-async function buildSwapLogicWithRequote(
+async function buildSwapLogic(
   source: string,
   requiresRequote: boolean,
   tokenIn: TokenInfo,
@@ -97,80 +110,102 @@ async function buildSwapLogicWithRequote(
   const tokenOutObj = toProtocolinkToken(chainId, tokenOut);
 
   if (!amountIn || amountIn === '0') {
-    log.warn('Swap amount is zero', { source, tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol });
+    log.warn('Swap amount is zero or invalid', {
+      source,
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      amountIn,
+    });
     return null;
   }
 
-  // For non-executable sources, try KyberSwap as fallback, then QuickSwap
+  // Determine the actual execution source
+  // If re-quote is needed, fallback to ParaSwap
+  const executionSource = requiresRequote ? 'paraswap-v5' : source;
+
   if (requiresRequote) {
-    log.info(`🔄 Re-quoting ${source} → kyberswap (${tokenIn.symbol}→${tokenOut.symbol})`);
-    // Try KyberSwap first
-    try {
-      const kyberQuote = await api.protocols.kyberswap.getSwapTokenQuotation(chainId, {
-        input: { token: tokenInObj, amount: amountIn },
-        tokenOut: tokenOutObj,
-      });
-      return api.protocols.kyberswap.newSwapTokenLogic(kyberQuote);
-    } catch (err) {
-      log.warn('KyberSwap fallback failed, trying QuickSwap', { error: String(err) });
-    }
-    // Then QuickSwap
-    try {
-      const quickQuote = await api.protocols.quickswap.getSwapTokenQuotation(chainId, {
-        input: { token: tokenInObj, amount: amountIn },
-        tokenOut: tokenOutObj,
-      });
-      return api.protocols.quickswap.newSwapTokenLogic(quickQuote);
-    } catch (err) {
-      log.warn('QuickSwap fallback failed', { error: String(err) });
-      return null;
-    }
+    log.info(`🔄 Re-quoting ${source} → ${executionSource} (${tokenIn.symbol}→${tokenOut.symbol})`, {
+      amountIn,
+      positionSizeUsd: opp.positionSizeUsd,
+    });
   }
 
-  // Direct execution for supported sources
+  const params = {
+    input: { token: tokenInObj, amount: amountIn },
+    tokenOut: tokenOutObj,
+    slippage: 0.01,
+  };
+
   try {
-    switch (source) {
-      case 'quickswap':
-      case 'quickswap-v3': {
-        const quote = await api.protocols.quickswap.getSwapTokenQuotation(chainId, {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-        });
-        return api.protocols.quickswap.newSwapTokenLogic(quote);
+    switch (executionSource) {
+      case 'paraswap-v5':
+      case 'paraswapv5': {
+        const quote = await withRetry(
+          () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
+          {
+            label: `paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => {
+              if (err?.response?.status === 400) return false;
+              return isTransientError(err);
+            },
+            retries: 2,
+          }
+        );
+        return api.protocols.paraswapv5.newSwapTokenLogic(quote);
       }
-      case 'balancerv2':
-      case 'balancer-v2': {
-        const quote = await api.protocols.balancerv2.getSwapTokenQuotation(chainId, {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-        });
-        return api.protocols.balancerv2.newSwapTokenLogic(quote);
+
+      case 'uniswap-v3':
+      case 'uniswapv3': {
+        const quote = await withRetry(
+          () => api.protocols.uniswapv3.getSwapTokenQuotation(chainId, params),
+          {
+            label: `uniswap-v3.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => {
+              if (err?.response?.status === 400) return false;
+              return isTransientError(err);
+            },
+            retries: 2,
+          }
+        );
+        return api.protocols.uniswapv3.newSwapTokenLogic(quote);
       }
-      case 'curve': {
-        const quote = await api.protocols.curve.getSwapTokenQuotation(chainId, {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-        });
-        return api.protocols.curve.newSwapTokenLogic(quote);
+
+      case 'zeroex-v4':
+      case 'zeroexv4': {
+        const quote = await withRetry(
+          () => api.protocols.zeroexv4.getSwapTokenQuotation(chainId, params),
+          {
+            label: `zeroex-v4.${tokenIn.symbol}->${tokenOut.symbol}`,
+            shouldRetry: (err: any) => {
+              if (err?.response?.status === 400) return false;
+              return isTransientError(err);
+            },
+            retries: 2,
+          }
+        );
+        return api.protocols.zeroexv4.newSwapTokenLogic(quote);
       }
-      case 'kyberswap':
-      case 'kyber': {
-        const quote = await api.protocols.kyberswap.getSwapTokenQuotation(chainId, {
-          input: { token: tokenInObj, amount: amountIn },
-          tokenOut: tokenOutObj,
-        });
-        return api.protocols.kyberswap.newSwapTokenLogic(quote);
-      }
+
       default:
-        log.error(`No execution builder for source: ${source}`);
+        log.error(`No execution builder available for source: ${source}`);
         return null;
     }
   } catch (err) {
     const error = err as any;
-    log.error(`Swap logic build failed (${source})`, {
+    const statusCode = error?.response?.status;
+    const responseData = error?.response?.data;
+
+    log.error(`Swap logic build failed (${executionSource}) — DETAILED:`, {
+      originalSource: source,
+      requiresRequote,
       tokenIn: tokenIn.symbol,
       tokenOut: tokenOut.symbol,
-      error: error?.message || String(err),
+      tokenInAddress: tokenIn.address,
+      tokenOutAddress: tokenOut.address,
+      amountIn,
+      statusCode,
+      responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
+      errorMessage: error?.message || String(err),
     });
     return null;
   }
