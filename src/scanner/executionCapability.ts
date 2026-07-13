@@ -5,14 +5,26 @@ const log = createLogger('executionCapability');
 
 /**
  * Execution provider map.
- * If a source is not executable, we will re-quote it using an executable source.
+ * Add new execution providers here when they become available.
+ * If a source is not listed here, it means execution is NOT supported.
  */
 const EXECUTION_PROVIDERS: Record<string, boolean> = {
-  'paraswap-v5': true,     // ✅ Can execute trades
-  'paraswapv5': true,      // Alias
-  'openoceanv2': false,    // ❌ Cannot execute trades on Polygon (will re-quote)
-  '1inch-v5': false,       // ❌ Not yet implemented
-  'oneinchv5': false,      // ❌ Not yet implemented
+  // Aggregators
+  'paraswap-v5': true,
+  'paraswapv5': true,
+  '1inch-v5': true,
+  'oneinchv5': true,
+  'openoceanv2': false,    // ❌ Cannot execute trades on Polygon
+
+  // Direct DEXs
+  'quickswap': true,
+  'uniswapv3': true,
+  'uniswap-v3': true,
+  'sushiswap': true,
+  'sushi-swap': true,
+  'curve': true,
+  'balancerv2': true,
+  'balancer-v2': true,
 };
 
 /**
@@ -30,7 +42,7 @@ export interface ExecutionValidationResult {
 
 /**
  * Validates a spread opportunity and determines if re-quoting is needed.
- * 
+ *
  * Rules:
  * - If buySource is not executable → mark buyRequiresRequote = true
  * - If sellSource is not executable → mark sellRequiresRequote = true
@@ -87,4 +99,28 @@ export function getExecutableSources(): string[] {
  */
 export function getQuoteOnlySources(): string[] {
   return Object.keys(EXECUTION_PROVIDERS).filter((key) => !EXECUTION_PROVIDERS[key]);
+}
+
+/**
+ * Checks if a specific source supports execution.
+ */
+export function sourceSupportsExecution(source: string): boolean {
+  return EXECUTION_PROVIDERS[source] === true;
+}
+
+/**
+ * Gets the preferred execution source for a given source.
+ * If the source is executable, returns it; otherwise returns the primary fallback.
+ */
+export function getPreferredExecutionSource(source: string): string {
+  if (EXECUTION_PROVIDERS[source]) {
+    return source;
+  }
+
+  // Fallback order for non-executable sources
+  const fallbacks: Record<string, string> = {
+    'openoceanv2': 'paraswap-v5',
+  };
+
+  return fallbacks[source] || 'paraswap-v5';
 }
