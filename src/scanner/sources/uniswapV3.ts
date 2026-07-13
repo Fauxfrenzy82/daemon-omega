@@ -59,6 +59,7 @@ async function estimatePoolLiquidityUsd(poolAddress: string): Promise<number | u
 
 export const uniswapV3Source: PriceSource = {
   name: 'uniswapv3',
+  supportsExecution: true,
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     try {
@@ -100,6 +101,7 @@ export const uniswapV3Source: PriceSource = {
         amountOut: amountOut.toString(),
         price,
         estLiquidityUsd,
+        supportsExecution: true,
         raw: { pool: poolInfo.pool, fee: poolInfo.fee },
       };
     } catch (err) {
