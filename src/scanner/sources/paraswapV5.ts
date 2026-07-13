@@ -19,6 +19,7 @@ interface ParaswapPriceResponse {
 
 export const paraswapV5Source: PriceSource = {
   name: 'paraswap-v5',
+  supportsExecution: true, // ✅ Can execute trades
 
   async getQuote(req: QuoteRequest): Promise<QuoteResult | null> {
     log.debug('ParaSwap V5 quote request', {
@@ -61,14 +62,6 @@ export const paraswapV5Source: PriceSource = {
       const amountOutHuman = Number(route.destAmount) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
 
-      log.debug('ParaSwap V5 quote received', {
-        tokenIn: req.tokenIn.symbol,
-        tokenOut: req.tokenOut.symbol,
-        price,
-        amountInHuman,
-        amountOutHuman,
-      });
-
       return {
         source: 'paraswap-v5',
         tokenIn: req.tokenIn,
@@ -76,6 +69,7 @@ export const paraswapV5Source: PriceSource = {
         amountIn: req.amountIn,
         amountOut: route.destAmount,
         price,
+        supportsExecution: true, // ✅ Include flag in result
         raw: route,
       };
     } catch (err) {
