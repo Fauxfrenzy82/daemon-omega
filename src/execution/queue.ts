@@ -13,6 +13,10 @@ import { checkFlashLoanLiquidity } from './liquidityChecker';
 
 const log = createLogger('execution-queue');
 
+// --- TEMPORARY: BYPASS LIQUIDITY CHECK TO DIAGNOSE REAL ERRORS ---
+const BYPASS_LIQUIDITY_CHECK = true; // <-- set to true to skip pre-check
+// ----------------------------------------------------------------
+
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
 interface QueueState {
@@ -21,56 +25,26 @@ interface QueueState {
 
 const state: QueueState = { activeTrades: 0 };
 
-// Priority list of flash‑loan tokens to try – stablecoins first (known to fail now, but left for completeness)
-// Then volatile assets that typically have liquidity on Aave/Balancer.
+// Priority list of flash‑loan tokens – stablecoins first, then volatile
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
-  // Stablecoins (likely unsupported, but keep for completeness)
   TOKENS.DAI,
   TOKENS.USDCe,
   TOKENS.USDT,
   TOKENS.USDC,
-  // Volatile assets (should be supported)
   TOKENS.WMATIC,
   TOKENS.WETH,
   TOKENS.WBTC,
 ];
 
-/**
- * Get the USD price of a token using the opportunity's spread data.
- * Falls back to a hardcoded price if not available.
- */
 function getTokenPriceUsd(token: TokenInfo, opp: EvaluatedOpportunity): number {
-  // For stablecoins, price is ~1
   if (token.symbol === 'USDC' || token.symbol === 'USDC.e' || token.symbol === 'USDT' || token.symbol === 'DAI') {
     return 1.0;
   }
-
-  // Try to extract price from the spread data.
-  // The opportunity has buyQuote.price and sellQuote.price.
-  // For pairs like WMATIC-USDC, the price is the amount of USDC per WMATIC.
-  // We can derive the price of the base token from the quote.
-  // We'll use the buyQuote.price which is the price of the quote token in terms of base?
-  // Actually, spreadOpp.buyQuote.price is the price of the quote token (e.g., USDC) in terms of base?
-  // It's safer to fetch from a known source.
-  // We'll use a simple mapping for common tokens (fallback to CoinGecko later if needed).
   const priceMap: Record<string, number> = {
-    'WMATIC': 0.5,   // approximate, will be overridden by scan data
+    'WMATIC': 0.5,
     'WETH': 3000,
     'WBTC': 60000,
   };
-
-  // If the token is the base of the opportunity, we can get its price from the quote.
-  if (opp.pair.base.symbol === token.symbol) {
-    // buyQuote.price is likely the price of the quote token in base units?
-    // For example, if base is WMATIC and quote is USDC, buyQuote.price = 0.5 (USDC per WMATIC?)
-    // That would be the price of USDC in WMATIC, so we need to invert?
-    // Actually, the spread calculation uses price as amount of quote per base.
-    // So we can use that directly.
-    // But to be safe, we'll use the fallback.
-    // We'll use the fallback for now.
-  }
-
-  // Fallback to the map
   return priceMap[token.symbol] || 0.01;
 }
 
@@ -81,24 +55,17 @@ export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[])
   }
 
   const ranked = rankExecutable(evaluated);
-
-  if (ranked.length === 0) {
-    return;
-  }
+  if (ranked.length === 0) return;
 
   const gasPrice = await provider.getGasPrice();
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-
   if (!checkGasPriceLimit(gasPriceGwei)) {
     log.warn('Gas price too high, skipping execution batch', { gasPriceGwei });
     return;
   }
 
-  const dispatchable = ranked.slice(0, Math.max(0, 10));
-
-  const executions = dispatchable.map((opp) => dispatchOpportunity(opp));
-
-  await Promise.allSettled(executions);
+  const dispatchable = ranked.slice(0, 10);
+  await Promise.allSettled(dispatchable.map(opp => dispatchOpportunity(opp)));
 }
 
 async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
@@ -133,39 +100,37 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
     expectedProfitUsd: opp.netProfitUsd,
   });
 
-  // Try each flash‑loan token candidate until one succeeds
   let lastError: any = null;
   let success = false;
 
   for (const candidate of FLASH_LOAN_CANDIDATES) {
     try {
-      // Get token price in USD
       const priceUsd = getTokenPriceUsd(candidate, opp);
-
-      // Compute borrow amount: (positionSizeUsd / priceUsd) * 10^decimals
       const amountInUnits = opp.positionSizeUsd / priceUsd;
       const flashLoanAmountRaw = ethers.utils
         .parseUnits(amountInUnits.toFixed(candidate.decimals), candidate.decimals)
         .toString();
 
-      log.info(`Trying flash‑loan token: ${candidate.symbol} for pair ${opp.pair.id}`, {
+      log.info(`Trying flash‑loan token: ${candidate.symbol}`, {
+        pair: opp.pair.id,
         positionSizeUsd: opp.positionSizeUsd,
         priceUsd,
         amountInUnits,
         rawAmount: flashLoanAmountRaw,
       });
 
-      // --- Pre‑check liquidity ---
-      const liquidityCheck = await checkFlashLoanLiquidity(candidate, flashLoanAmountRaw);
-
-      if (!liquidityCheck.isAvailable) {
-        log.info(`Skipping ${candidate.symbol}: ${liquidityCheck.reason}`);
-        continue; // Try next token
+      // --- Skip liquidity check if bypass is enabled ---
+      if (!BYPASS_LIQUIDITY_CHECK) {
+        const liquidityCheck = await checkFlashLoanLiquidity(candidate, flashLoanAmountRaw);
+        if (!liquidityCheck.isAvailable) {
+          log.info(`Skipping ${candidate.symbol}: ${liquidityCheck.reason}`);
+          continue;
+        }
+        log.info(`Token ${candidate.symbol} available on: ${liquidityCheck.availableProviders.join(', ')}`);
+      } else {
+        log.info(`Bypassing liquidity check for ${candidate.symbol}`);
       }
 
-      log.info(`Token ${candidate.symbol} is available for flash loans on: ${liquidityCheck.availableProviders.join(', ')}`);
-
-      // Build the arbitrage logics with this candidate
       const built = await buildArbitrageLogics(
         opp,
         candidate,
@@ -177,7 +142,6 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
       );
 
       await updateTradeStatus(tradeId, 'submitted');
-
       const result = await executeViaRouter(built);
 
       if (result.success) {
@@ -185,11 +149,7 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
           txHash: result.txHash,
           gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
         });
-
-        log.info(`Trade executed successfully with flash‑loan token ${candidate.symbol}`, {
-          pairId: opp.pair.id,
-          txHash: result.txHash,
-        });
+        log.info(`✅ Trade executed with ${candidate.symbol}`, { pairId: opp.pair.id, txHash: result.txHash });
         await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
         success = true;
         break;
@@ -200,39 +160,30 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
       const errorMessage = err?.message || String(err);
       const responseData = err?.response?.data;
 
+      // Check if it's a flash‑loan capacity issue (we want to continue to next token)
       const isInsufficientCapacity =
         errorMessage.includes('insufficient borrowing capacity') ||
         (responseData && typeof responseData === 'string' && responseData.includes('insufficient borrowing capacity')) ||
         (responseData?.message && responseData.message.includes('insufficient borrowing capacity'));
 
       if (isInsufficientCapacity) {
-        log.warn(`Token ${candidate.symbol} is not flash‑loanable, trying next candidate...`, {
-          pairId: opp.pair.id,
-          error: errorMessage,
-        });
+        log.warn(`Token ${candidate.symbol} not flash‑loanable, trying next...`, { error: errorMessage });
         lastError = err;
         continue;
       } else {
-        log.error(`Fatal error with token ${candidate.symbol}, stopping`, {
-          pairId: opp.pair.id,
-          error: errorMessage,
-        });
+        log.error(`Fatal error with ${candidate.symbol}, stopping`, { error: errorMessage });
         lastError = err;
         break;
       }
     }
   }
 
-  // If we exhausted all candidates without success
   if (!success) {
     const finalMessage = lastError
       ? (lastError?.response?.data?.message || lastError?.message || String(lastError))
       : 'All flash‑loan tokens failed';
     await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
-    log.warn('Trade execution failed after trying all flash‑loan candidates', {
-      pairId: opp.pair.id,
-      error: finalMessage,
-    });
+    log.warn('Trade failed after trying all candidates', { pairId: opp.pair.id, error: finalMessage });
     await alertTradeFailed(opp.pair.id, finalMessage);
   }
 
