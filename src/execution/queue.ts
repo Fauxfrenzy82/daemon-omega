@@ -8,6 +8,7 @@ import { ethers } from 'ethers';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
+import { TOKENS, TokenInfo } from '../config/tokens';
 
 const log = createLogger('execution-queue');
 
@@ -18,6 +19,14 @@ interface QueueState {
 }
 
 const state: QueueState = { activeTrades: 0 };
+
+// Priority list of flash‑loan tokens to try (stablecoins only, priced ~$1)
+const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
+  TOKENS.DAI,      // Usually supported on Aave v3
+  TOKENS.USDCe,    // Bridged USDC – often supported
+  TOKENS.USDT,     // Tether – likely supported
+  TOKENS.USDC,     // Native USDC (failed before, but try last as fallback)
+];
 
 export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[]): Promise<void> {
   if (isBreakerTripped()) {
@@ -78,54 +87,96 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
     expectedProfitUsd: opp.netProfitUsd,
   });
 
-  try {
-    // CRITICAL FIX: The flash loan amount should be the position size in the quote token,
-    // not divided by the buy price. The quote token is USDC (or the token we're trading with).
-    // Since positionSizeUsd is in USD and the quote token is USDC, we just parse it directly.
-    const flashLoanAmountRaw = ethers.utils
-      .parseUnits(opp.positionSizeUsd.toString(), opp.pair.quote.decimals)
-      .toString();
+  // Try each flash‑loan token candidate until one succeeds
+  let lastError: any = null;
+  let success = false;
 
-    // Build the arbitrage logics with requote options
-    const built = await buildArbitrageLogics(
-      opp,
-      opp.pair.quote,
-      flashLoanAmountRaw,
-      {
-        buyRequiresRequote: opp.buyRequiresRequote || false,
-        sellRequiresRequote: opp.sellRequiresRequote || false,
+  for (const candidate of FLASH_LOAN_CANDIDATES) {
+    try {
+      log.info(`Trying flash‑loan token: ${candidate.symbol} for pair ${opp.pair.id}`);
+
+      // For stablecoins, price ≈ 1 USD. Amount = positionSizeUsd * 10^decimals
+      const flashLoanAmountRaw = ethers.utils
+        .parseUnits(opp.positionSizeUsd.toString(), candidate.decimals)
+        .toString();
+
+      // Build the arbitrage logics with this candidate
+      const built = await buildArbitrageLogics(
+        opp,
+        candidate,                     // flash‑loan token
+        flashLoanAmountRaw,
+        {
+          buyRequiresRequote: opp.buyRequiresRequote || false,
+          sellRequiresRequote: opp.sellRequiresRequote || false,
+        }
+      );
+
+      // Now estimate and execute via router.
+      // We'll rely on executeViaRouter to throw if estimate fails.
+      await updateTradeStatus(tradeId, 'submitted');
+
+      const result = await executeViaRouter(built);
+
+      if (result.success) {
+        await updateTradeStatus(tradeId, 'confirmed', {
+          txHash: result.txHash,
+          gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
+        });
+
+        log.info(`Trade executed successfully with flash‑loan token ${candidate.symbol}`, {
+          pairId: opp.pair.id,
+          txHash: result.txHash,
+        });
+        await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
+        success = true;
+        break; // Exit loop on success
+      } else {
+        // If execution fails for non‑flash‑loan reasons, break the loop
+        throw new Error(`Execution failed with ${candidate.symbol}: ${result.errorMessage}`);
       }
-    );
+    } catch (err: any) {
+      const errorMessage = err?.message || String(err);
+      const responseData = err?.response?.data;
 
-    await updateTradeStatus(tradeId, 'submitted');
+      // Check if the error is due to insufficient borrowing capacity (flash‑loan not supported)
+      const isInsufficientCapacity =
+        errorMessage.includes('insufficient borrowing capacity') ||
+        (responseData && typeof responseData === 'string' && responseData.includes('insufficient borrowing capacity')) ||
+        (responseData?.message && responseData.message.includes('insufficient borrowing capacity'));
 
-    const result = await executeViaRouter(built);
-
-    if (result.success) {
-      await updateTradeStatus(tradeId, 'confirmed', {
-        txHash: result.txHash,
-        gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
-      });
-
-      log.info('Trade executed successfully', { pairId: opp.pair.id, txHash: result.txHash });
-      await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
-    } else {
-      await updateTradeStatus(tradeId, 'failed', {
-        errorMessage: result.errorMessage,
-        txHash: result.txHash,
-      });
-
-      log.warn('Trade execution failed', { pairId: opp.pair.id, error: result.errorMessage });
-      await alertTradeFailed(opp.pair.id, result.errorMessage ?? 'unknown error');
+      if (isInsufficientCapacity) {
+        log.warn(`Token ${candidate.symbol} is not flash‑loanable, trying next candidate...`, {
+          pairId: opp.pair.id,
+          error: errorMessage,
+        });
+        lastError = err;
+        continue; // Try next token
+      } else {
+        // Some other error – log and break (don't try further tokens)
+        log.error(`Fatal error with token ${candidate.symbol}, stopping`, {
+          pairId: opp.pair.id,
+          error: errorMessage,
+        });
+        lastError = err;
+        break;
+      }
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    await updateTradeStatus(tradeId, 'failed', { errorMessage: message });
-    log.error('Trade dispatch threw an error', { pairId: opp.pair.id, error: message });
-    await alertTradeFailed(opp.pair.id, message);
-  } finally {
-    state.activeTrades -= 1;
   }
+
+  // If we exhausted all candidates without success
+  if (!success) {
+    const finalMessage = lastError
+      ? (lastError?.response?.data?.message || lastError?.message || String(lastError))
+      : 'All flash‑loan tokens failed';
+    await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
+    log.warn('Trade execution failed after trying all flash‑loan candidates', {
+      pairId: opp.pair.id,
+      error: finalMessage,
+    });
+    await alertTradeFailed(opp.pair.id, finalMessage);
+  }
+
+  state.activeTrades -= 1;
 }
 
 export function getActiveTradeCount(): number {
