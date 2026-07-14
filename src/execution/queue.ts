@@ -98,7 +98,7 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         .parseUnits(opp.positionSizeUsd.toString(), candidate.decimals)
         .toString();
 
-      // --- NEW: Pre‑check liquidity ---
+      // --- Pre‑check liquidity ---
       const liquidityCheck = await checkFlashLoanLiquidity(candidate, flashLoanAmountRaw);
 
       if (!liquidityCheck.isAvailable) {
