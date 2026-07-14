@@ -59,8 +59,10 @@ export async function buildArbitrageLogics(
     loans: JSON.stringify(loans, null, 2),
   });
 
-  // Use Balancer V2 flash loan logic (replaces Aave)
-  const [flashLoanLoanLogic, flashLoanRepayLogic] = api.protocols['balancer-v2'].newFlashLoanLogicPair(loans);
+  // Use Balancer V2 flash loan logic
+  // Protocolink uses 'balancerv2' as the protocol identifier (not 'balancer-v2')
+  const [flashLoanLoanLogic, flashLoanRepayLogic] =
+    api.protocols.balancerv2.newFlashLoanLogicPair(loans);
 
   log.info('FLASH LOAN LOGICS CREATED (Balancer)', {
     loanLogic: JSON.stringify(flashLoanLoanLogic, null, 2),
