@@ -43,21 +43,30 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // Flash loan: Protocolink requires BOTH a loan logic entry AND a
-  // matching repay logic entry — newFlashLoanLogicPair returns the
-  // pair together. The repay entry must be the LAST item in the
-  // logics array (after every swap/other logic), so the router can
-  // validate that borrowed funds are settled at the end of the
-  // transaction. Every "flash loan logic should have repay logic"
-  // 400 was because this repay step never existed here — only the
-  // loan half was ever built.
   const loans = [
     {
       token: toProtocolinkToken(chainId, flashLoanToken),
       amount: flashLoanAmountRaw,
     },
   ];
+
+  // LOG 1: Flash loan input
+  log.info('FLASH LOAN INPUT', {
+    chainId,
+    flashLoanAmountRaw,
+    flashLoanToken,
+    protocolinkToken: toProtocolinkToken(chainId, flashLoanToken),
+    loans: JSON.stringify(loans, null, 2),
+  });
+
   const [flashLoanLoanLogic, flashLoanRepayLogic] = api.protocols.aavev3.newFlashLoanLogicPair(loans);
+
+  // LOG 2: Flash loan logics created
+  log.info('FLASH LOAN LOGICS CREATED', {
+    loanLogic: JSON.stringify(flashLoanLoanLogic, null, 2),
+    repayLogic: JSON.stringify(flashLoanRepayLogic, null, 2),
+  });
+
   logics.push(flashLoanLoanLogic);
 
   // Buy-side swap
@@ -76,8 +85,7 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyResult.logic);
 
-  // Sell-side swap — uses the buy leg's ACTUAL execution-time output
-  // amount, not the stale scan-time estimate.
+  // Sell-side swap
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
   const sellResult = await buildSwapLogic(
@@ -93,8 +101,6 @@ export async function buildArbitrageLogics(
   }
   logics.push(sellResult.logic);
 
-  // Repay logic goes LAST, after every other step, per Protocolink's
-  // documented flashloan pattern.
   logics.push(flashLoanRepayLogic);
 
   log.info('Built arbitrage logic sequence', {
@@ -104,6 +110,14 @@ export async function buildArbitrageLogics(
     buyActualOutput: buyResult.actualOutputAmount,
     scanTimeEstimate: opp.spreadOpp.buyQuote.amountOut,
     steps: logics.length,
+  });
+
+  // LOG 3: Final logics array before return
+  log.info('FINAL LOGICS ARRAY', {
+    count: logics.length,
+    flashLoanAmount: flashLoanAmountRaw,
+    flashLoanToken: flashLoanToken.symbol,
+    logics: JSON.stringify(logics, null, 2),
   });
 
   return {
@@ -165,7 +179,25 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
+
+        // LOG 4: Quote received
+        log.info('SWAP QUOTE RECEIVED', {
+          source: executionSource,
+          tokenIn: tokenIn.symbol,
+          tokenOut: tokenOut.symbol,
+          amountIn,
+          quote: JSON.stringify(quote, null, 2),
+        });
+
         const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
+
+        // LOG 5: Swap logic created
+        log.info('SWAP LOGIC CREATED', {
+          source: executionSource,
+          actualOutputAmount: quote.output.amount,
+          logic: JSON.stringify(logic, null, 2),
+        });
+
         return { logic, actualOutputAmount: quote.output.amount };
       }
 
@@ -182,7 +214,23 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
+
+        log.info('SWAP QUOTE RECEIVED', {
+          source: executionSource,
+          tokenIn: tokenIn.symbol,
+          tokenOut: tokenOut.symbol,
+          amountIn,
+          quote: JSON.stringify(quote, null, 2),
+        });
+
         const logic = api.protocols.uniswapv3.newSwapTokenLogic(quote);
+
+        log.info('SWAP LOGIC CREATED', {
+          source: executionSource,
+          actualOutputAmount: quote.output.amount,
+          logic: JSON.stringify(logic, null, 2),
+        });
+
         return { logic, actualOutputAmount: quote.output.amount };
       }
 
@@ -202,7 +250,23 @@ async function buildSwapLogic(
               retries: 2,
             }
           );
+
+          log.info('SWAP QUOTE RECEIVED', {
+            source: 'paraswap-v5 (fallback)',
+            tokenIn: tokenIn.symbol,
+            tokenOut: tokenOut.symbol,
+            amountIn,
+            quote: JSON.stringify(fallbackQuote, null, 2),
+          });
+
           const logic = api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
+
+          log.info('SWAP LOGIC CREATED', {
+            source: 'paraswap-v5 (fallback)',
+            actualOutputAmount: fallbackQuote.output.amount,
+            logic: JSON.stringify(logic, null, 2),
+          });
+
           return { logic, actualOutputAmount: fallbackQuote.output.amount };
         }
 
@@ -220,7 +284,23 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
+
+        log.info('SWAP QUOTE RECEIVED', {
+          source: executionSource,
+          tokenIn: tokenIn.symbol,
+          tokenOut: tokenOut.symbol,
+          amountIn,
+          quote: JSON.stringify(quote, null, 2),
+        });
+
         const logic = api.protocols.zeroexv4.newSwapTokenLogic(quote);
+
+        log.info('SWAP LOGIC CREATED', {
+          source: executionSource,
+          actualOutputAmount: quote.output.amount,
+          logic: JSON.stringify(logic, null, 2),
+        });
+
         return { logic, actualOutputAmount: quote.output.amount };
       }
 
@@ -233,6 +313,7 @@ async function buildSwapLogic(
     const statusCode = error?.response?.status;
     const responseData = error?.response?.data;
 
+    // LOG 6: Expanded catch
     log.error(`Swap logic build failed (${executionSource}) — DETAILED:`, {
       originalSource: source,
       requiresRequote,
@@ -244,6 +325,11 @@ async function buildSwapLogic(
       statusCode,
       responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
       errorMessage: error?.message || String(err),
+      stack: error?.stack,
+      headers: error?.response?.headers,
+      config: error?.config,
+      request: error?.request,
+      fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
     });
     return null;
   }
