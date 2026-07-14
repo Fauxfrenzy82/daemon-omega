@@ -20,12 +20,27 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
   const chainId = getChainId();
 
   try {
+    // Build estimate payload
+    const estimatePayload = {
+      chainId,
+      account: executionWallet.address,
+      logics: built.logics,
+    };
+
+    // LOG 1: Estimate router payload
+    log.info('ESTIMATE ROUTER PAYLOAD', {
+      payload: JSON.stringify(estimatePayload, null, 2),
+    });
+
+    // LOG 2: Dump each logic separately
+    built.logics.forEach((logic, index) => {
+      log.info(`ROUTER LOGIC ${index}`, {
+        logic: JSON.stringify(logic, null, 2),
+      });
+    });
+
     const estimateResult = await withRetry(
-      () =>
-        api.estimateRouterData(
-          { chainId, account: executionWallet.address, logics: built.logics },
-          {}
-        ),
+      () => api.estimateRouterData(estimatePayload, {}),
       {
         label: 'router.estimateRouterData',
         shouldRetry: (err: any) => {
@@ -36,6 +51,11 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       }
     );
 
+    // LOG 3: Estimate result
+    log.info('ESTIMATE RESULT', {
+      estimate: JSON.stringify(estimateResult, null, 2),
+    });
+
     const routerData = await api.buildRouterTransactionRequest({
       chainId,
       account: executionWallet.address,
@@ -43,7 +63,21 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       ...estimateResult,
     });
 
+    // LOG 4: Router tx data
+    log.info('ROUTER TX DATA', {
+      routerData: JSON.stringify(routerData, null, 2),
+    });
+
     const gasPrices = await getSafeGasPrices();
+
+    // LOG 5: Sending transaction
+    log.info('SENDING ROUTER TRANSACTION', {
+      to: routerData.to,
+      value: routerData.value,
+      dataLength: routerData.data?.length,
+      maxFeePerGas: gasPrices.maxFeePerGas,
+      maxPriorityFeePerGas: gasPrices.maxPriorityFeePerGas,
+    });
 
     const tx = await executionWallet.sendTransaction({
       to: routerData.to,
@@ -54,11 +88,13 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
     });
 
     log.info('Router transaction submitted', { txHash: tx.hash });
-
     const receipt = await tx.wait();
 
     if (receipt.status === 1) {
-      log.info('Router transaction confirmed', { txHash: tx.hash, gasUsed: receipt.gasUsed.toString() });
+      log.info('Router transaction confirmed', {
+        txHash: tx.hash,
+        gasUsed: receipt.gasUsed.toString(),
+      });
       return { success: true, txHash: tx.hash, gasUsed: receipt.gasUsed.toString() };
     } else {
       log.error('Router transaction reverted', { txHash: tx.hash });
@@ -69,13 +105,7 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
     const statusCode = error?.response?.status;
     const responseData = error?.response?.data;
 
-    // Previously only err.message was logged here — a generic string
-    // like "Request failed with status code 400" that says nothing
-    // about *why*. Protocolink puts the actual reason in
-    // err.response.data, the same place we already capture it in
-    // logicBuilder.ts's catch block. Without this, a router-level
-    // rejection (distinct from a per-logic quote rejection) was a
-    // black box — this is the fix needed to actually diagnose it.
+    // LOG 6: Expanded catch
     log.error('Router execution failed — DETAILED', {
       statusCode,
       responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
@@ -83,6 +113,13 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       logicsCount: built.logics.length,
       flashLoanToken: built.flashLoanToken.symbol,
       flashLoanAmount: built.flashLoanAmount,
+      headers: error?.response?.headers,
+      config: error?.config,
+      request: error?.request,
+      stack: error?.stack,
+      axiosCode: error?.code,
+      axiosStatusText: error?.response?.statusText,
+      fullAxiosError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
     });
 
     const detailedMessage = responseData
