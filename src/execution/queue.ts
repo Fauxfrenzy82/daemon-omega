@@ -9,6 +9,7 @@ import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
 import { TOKENS, TokenInfo } from '../config/tokens';
+import { checkFlashLoanLiquidity } from './liquidityChecker'; // NEW
 
 const log = createLogger('execution-queue');
 
@@ -22,10 +23,10 @@ const state: QueueState = { activeTrades: 0 };
 
 // Priority list of flash‑loan tokens to try (stablecoins only, priced ~$1)
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
-  TOKENS.DAI,      // Usually supported on Aave v3
-  TOKENS.USDCe,    // Bridged USDC – often supported
-  TOKENS.USDT,     // Tether – likely supported
-  TOKENS.USDC,     // Native USDC (failed before, but try last as fallback)
+  TOKENS.DAI,
+  TOKENS.USDCe,
+  TOKENS.USDT,
+  TOKENS.USDC,
 ];
 
 export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[]): Promise<void> {
@@ -93,17 +94,25 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
 
   for (const candidate of FLASH_LOAN_CANDIDATES) {
     try {
-      log.info(`Trying flash‑loan token: ${candidate.symbol} for pair ${opp.pair.id}`);
-
-      // For stablecoins, price ≈ 1 USD. Amount = positionSizeUsd * 10^decimals
+      // --- NEW: Pre‑check liquidity ---
       const flashLoanAmountRaw = ethers.utils
         .parseUnits(opp.positionSizeUsd.toString(), candidate.decimals)
         .toString();
 
+      // Check liquidity before building anything
+      const liquidityCheck = await checkFlashLoanLiquidity(candidate, flashLoanAmountRaw);
+      
+      if (!liquidityCheck.isAvailable) {
+        log.info(`Skipping ${candidate.symbol}: ${liquidityCheck.reason}`);
+        continue; // Try next token
+      }
+
+      log.info(`Token ${candidate.symbol} is available for flash loans on: ${liquidityCheck.availableProviders.join(', ')}`);
+
       // Build the arbitrage logics with this candidate
       const built = await buildArbitrageLogics(
         opp,
-        candidate,                     // flash‑loan token
+        candidate,
         flashLoanAmountRaw,
         {
           buyRequiresRequote: opp.buyRequiresRequote || false,
@@ -112,7 +121,6 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
       );
 
       // Now estimate and execute via router.
-      // We'll rely on executeViaRouter to throw if estimate fails.
       await updateTradeStatus(tradeId, 'submitted');
 
       const result = await executeViaRouter(built);
@@ -129,16 +137,14 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         });
         await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
         success = true;
-        break; // Exit loop on success
+        break;
       } else {
-        // If execution fails for non‑flash‑loan reasons, break the loop
         throw new Error(`Execution failed with ${candidate.symbol}: ${result.errorMessage}`);
       }
     } catch (err: any) {
       const errorMessage = err?.message || String(err);
       const responseData = err?.response?.data;
 
-      // Check if the error is due to insufficient borrowing capacity (flash‑loan not supported)
       const isInsufficientCapacity =
         errorMessage.includes('insufficient borrowing capacity') ||
         (responseData && typeof responseData === 'string' && responseData.includes('insufficient borrowing capacity')) ||
@@ -150,9 +156,8 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
           error: errorMessage,
         });
         lastError = err;
-        continue; // Try next token
+        continue;
       } else {
-        // Some other error – log and break (don't try further tokens)
         log.error(`Fatal error with token ${candidate.symbol}, stopping`, {
           pairId: opp.pair.id,
           error: errorMessage,
