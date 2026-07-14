@@ -34,11 +34,10 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
   };
 }
 
-// Flash loan providers in priority order (Uniswap V3 first, then Balancer, then Aave)
+// Flash loan providers in priority order (Uniswap V3 not supported via SDK)
 const FLASH_LOAN_PROVIDERS = [
-  { name: 'Uniswap V3', getLogic: (loans: any[]) => api.protocols.uniswapv3?.newFlashLoanLogicPair(loans) },
-  { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair(loans) },
-  { name: 'Aave V3', getLogic: (loans: any[]) => api.protocols.aavev3?.newFlashLoanLogicPair(loans) },
+  { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair?.(loans) },
+  { name: 'Aave V3', getLogic: (loans: any[]) => api.protocols.aavev3?.newFlashLoanLogicPair?.(loans) },
 ];
 
 export async function buildArbitrageLogics(
@@ -76,8 +75,11 @@ export async function buildArbitrageLogics(
         log.debug(`Provider ${provider.name} not available, skipping`);
         continue;
       }
-      [flashLoanLoanLogic, flashLoanRepayLogic] = provider.getLogic(loans);
-      // If we get here without error, it worked
+      const result = provider.getLogic(loans);
+      if (!result || !Array.isArray(result) || result.length !== 2) {
+        throw new Error(`Invalid result from ${provider.name}`);
+      }
+      [flashLoanLoanLogic, flashLoanRepayLogic] = result;
       providerUsed = provider.name;
       log.info(`Using ${provider.name} flash loan provider`);
       break;
