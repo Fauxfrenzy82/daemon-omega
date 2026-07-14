@@ -39,13 +39,11 @@ export async function checkFlashLoanLiquidity(
 
   // 1. Aave V3
   await testProvider('Aave V3', async () => {
-    // First, check if token is in the supported list
     const tokenList = await api.protocols.aavev3.getFlashLoanTokenList(chainId);
     const found = tokenList.some((t: any) => t.address.toLowerCase() === token.address.toLowerCase());
     if (!found) {
       throw new Error('Token not in Aave V3 flash loan list');
     }
-    // Then get a quotation (this actually checks liquidity)
     return api.protocols.aavev3.getFlashLoanQuotation(chainId, {
       loans: [{ token: token, amount: amount }],
     });
