@@ -61,9 +61,7 @@ export async function checkFlashLoanLiquidity(
     });
   });
 
-  // 3. Uniswap V3 – we skip for now, but we can add later.
-  // Uniswap V3 does not have a token list; you'd need to check specific pools.
-  // We'll rely on Aave and Balancer.
+  // Uniswap V3 does not expose flash loan logic via Protocolink, so we skip it.
 
   const isAvailable = availableProviders.length > 0;
   return {
