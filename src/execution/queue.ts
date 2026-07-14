@@ -9,7 +9,7 @@ import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
 import { TOKENS, TokenInfo } from '../config/tokens';
-import { checkFlashLoanLiquidity } from './liquidityChecker'; // NEW
+import { checkFlashLoanLiquidity } from './liquidityChecker';
 
 const log = createLogger('execution-queue');
 
@@ -94,14 +94,13 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
 
   for (const candidate of FLASH_LOAN_CANDIDATES) {
     try {
-      // --- NEW: Pre‑check liquidity ---
       const flashLoanAmountRaw = ethers.utils
         .parseUnits(opp.positionSizeUsd.toString(), candidate.decimals)
         .toString();
 
-      // Check liquidity before building anything
+      // --- NEW: Pre‑check liquidity ---
       const liquidityCheck = await checkFlashLoanLiquidity(candidate, flashLoanAmountRaw);
-      
+
       if (!liquidityCheck.isAvailable) {
         log.info(`Skipping ${candidate.symbol}: ${liquidityCheck.reason}`);
         continue; // Try next token
@@ -120,7 +119,6 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         }
       );
 
-      // Now estimate and execute via router.
       await updateTradeStatus(tradeId, 'submitted');
 
       const result = await executeViaRouter(built);
