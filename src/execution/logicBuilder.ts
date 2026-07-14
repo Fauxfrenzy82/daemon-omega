@@ -34,6 +34,13 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
   };
 }
 
+// Flash loan providers in priority order (Uniswap V3 first, then Balancer, then Aave)
+const FLASH_LOAN_PROVIDERS = [
+  { name: 'Uniswap V3', getLogic: (loans: any[]) => api.protocols.uniswapv3?.newFlashLoanLogicPair(loans) },
+  { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair(loans) },
+  { name: 'Aave V3', getLogic: (loans: any[]) => api.protocols.aavev3?.newFlashLoanLogicPair(loans) },
+];
+
 export async function buildArbitrageLogics(
   opp: EvaluatedOpportunity,
   flashLoanToken: TokenInfo,
@@ -43,7 +50,6 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  // Flash loan using Balancer V2 (0% fee)
   const loans = [
     {
       token: toProtocolinkToken(chainId, flashLoanToken),
@@ -51,7 +57,7 @@ export async function buildArbitrageLogics(
     },
   ];
 
-  log.info('FLASH LOAN INPUT (Balancer)', {
+  log.info('FLASH LOAN INPUT', {
     chainId,
     flashLoanAmountRaw,
     flashLoanToken,
@@ -59,12 +65,33 @@ export async function buildArbitrageLogics(
     loans: JSON.stringify(loans, null, 2),
   });
 
-  // Use Balancer V2 flash loan logic
-  // Protocolink uses 'balancerv2' as the protocol identifier (not 'balancer-v2')
-  const [flashLoanLoanLogic, flashLoanRepayLogic] =
-    api.protocols.balancerv2.newFlashLoanLogicPair(loans);
+  // Try providers in order
+  let flashLoanLoanLogic: any;
+  let flashLoanRepayLogic: any;
+  let providerUsed = '';
 
-  log.info('FLASH LOAN LOGICS CREATED (Balancer)', {
+  for (const provider of FLASH_LOAN_PROVIDERS) {
+    try {
+      if (!provider.getLogic) {
+        log.debug(`Provider ${provider.name} not available, skipping`);
+        continue;
+      }
+      [flashLoanLoanLogic, flashLoanRepayLogic] = provider.getLogic(loans);
+      // If we get here without error, it worked
+      providerUsed = provider.name;
+      log.info(`Using ${provider.name} flash loan provider`);
+      break;
+    } catch (err) {
+      log.warn(`Failed to use ${provider.name} for flash loan, trying next`, { error: String(err) });
+    }
+  }
+
+  if (!flashLoanLoanLogic || !flashLoanRepayLogic) {
+    throw new Error('No flash loan provider available for the token');
+  }
+
+  log.info('FLASH LOAN LOGICS CREATED', {
+    provider: providerUsed,
     loanLogic: JSON.stringify(flashLoanLoanLogic, null, 2),
     repayLogic: JSON.stringify(flashLoanRepayLogic, null, 2),
   });
@@ -113,7 +140,7 @@ export async function buildArbitrageLogics(
     buyActualOutput: buyResult.actualOutputAmount,
     scanTimeEstimate: opp.spreadOpp.buyQuote.amountOut,
     steps: logics.length,
-    flashLoanProvider: 'Balancer V2',
+    flashLoanProvider: providerUsed,
   });
 
   log.info('FINAL LOGICS ARRAY', {
