@@ -34,7 +34,7 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
   };
 }
 
-// Flash loan providers in priority order (Uniswap V3 not supported via SDK)
+// Flash loan providers in priority order (Balancer V2 first, then Aave V3)
 const FLASH_LOAN_PROVIDERS = [
   { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair?.(loans) },
   { name: 'Aave V3', getLogic: (loans: any[]) => api.protocols.aavev3?.newFlashLoanLogicPair?.(loans) },
@@ -100,14 +100,14 @@ export async function buildArbitrageLogics(
 
   logics.push(flashLoanLoanLogic);
 
-  // Buy-side swap
+  // --- FIX: Buy swap uses flashLoanToken (not opp.pair.quote) ---
   const buySource = opp.spreadOpp.buySource;
   const buyRequiresRequote = options.buyRequiresRequote || false;
   const buyResult = await buildSwapLogic(
     buySource,
     buyRequiresRequote,
-    opp.pair.quote,
-    opp.pair.base,
+    flashLoanToken,          // ✅ borrow token
+    opp.pair.base,           // target token
     flashLoanAmountRaw,
     opp
   );
@@ -116,14 +116,14 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyResult.logic);
 
-  // Sell-side swap
+  // --- FIX: Sell swap outputs flashLoanToken (not opp.pair.quote) ---
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
   const sellResult = await buildSwapLogic(
     sellSource,
     sellRequiresRequote,
-    opp.pair.base,
-    opp.pair.quote,
+    opp.pair.base,           // token we now hold
+    flashLoanToken,          // ✅ repay token
     buyResult.actualOutputAmount,
     opp
   );
@@ -140,9 +140,10 @@ export async function buildArbitrageLogics(
     buySource: buyRequiresRequote ? `${buySource}→requoted` : buySource,
     sellSource: sellRequiresRequote ? `${sellSource}→requoted` : sellSource,
     buyActualOutput: buyResult.actualOutputAmount,
-    scanTimeEstimate: opp.spreadOpp.buyQuote.amountOut,
+    sellActualOutput: sellResult.actualOutputAmount,
     steps: logics.length,
     flashLoanProvider: providerUsed,
+    flashLoanToken: flashLoanToken.symbol,
   });
 
   log.info('FINAL LOGICS ARRAY', {
@@ -159,6 +160,7 @@ export async function buildArbitrageLogics(
   };
 }
 
+// --- The rest of the file (buildSwapLogic) is unchanged ---
 async function buildSwapLogic(
   source: string,
   requiresRequote: boolean,
