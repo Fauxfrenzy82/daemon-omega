@@ -43,6 +43,7 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
+  // Flash loan using Balancer V2 (0% fee)
   const loans = [
     {
       token: toProtocolinkToken(chainId, flashLoanToken),
@@ -50,8 +51,7 @@ export async function buildArbitrageLogics(
     },
   ];
 
-  // LOG 1: Flash loan input
-  log.info('FLASH LOAN INPUT', {
+  log.info('FLASH LOAN INPUT (Balancer)', {
     chainId,
     flashLoanAmountRaw,
     flashLoanToken,
@@ -59,10 +59,10 @@ export async function buildArbitrageLogics(
     loans: JSON.stringify(loans, null, 2),
   });
 
-  const [flashLoanLoanLogic, flashLoanRepayLogic] = api.protocols.aavev3.newFlashLoanLogicPair(loans);
+  // Use Balancer V2 flash loan logic (replaces Aave)
+  const [flashLoanLoanLogic, flashLoanRepayLogic] = api.protocols['balancer-v2'].newFlashLoanLogicPair(loans);
 
-  // LOG 2: Flash loan logics created
-  log.info('FLASH LOAN LOGICS CREATED', {
+  log.info('FLASH LOAN LOGICS CREATED (Balancer)', {
     loanLogic: JSON.stringify(flashLoanLoanLogic, null, 2),
     repayLogic: JSON.stringify(flashLoanRepayLogic, null, 2),
   });
@@ -101,6 +101,7 @@ export async function buildArbitrageLogics(
   }
   logics.push(sellResult.logic);
 
+  // Repay logic must be LAST
   logics.push(flashLoanRepayLogic);
 
   log.info('Built arbitrage logic sequence', {
@@ -110,9 +111,9 @@ export async function buildArbitrageLogics(
     buyActualOutput: buyResult.actualOutputAmount,
     scanTimeEstimate: opp.spreadOpp.buyQuote.amountOut,
     steps: logics.length,
+    flashLoanProvider: 'Balancer V2',
   });
 
-  // LOG 3: Final logics array before return
   log.info('FINAL LOGICS ARRAY', {
     count: logics.length,
     flashLoanAmount: flashLoanAmountRaw,
@@ -180,7 +181,6 @@ async function buildSwapLogic(
           }
         );
 
-        // LOG 4: Quote received
         log.info('SWAP QUOTE RECEIVED', {
           source: executionSource,
           tokenIn: tokenIn.symbol,
@@ -191,7 +191,6 @@ async function buildSwapLogic(
 
         const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
 
-        // LOG 5: Swap logic created
         log.info('SWAP LOGIC CREATED', {
           source: executionSource,
           actualOutputAmount: quote.output.amount,
@@ -313,7 +312,6 @@ async function buildSwapLogic(
     const statusCode = error?.response?.status;
     const responseData = error?.response?.data;
 
-    // LOG 6: Expanded catch
     log.error(`Swap logic build failed (${executionSource}) — DETAILED:`, {
       originalSource: source,
       requiresRequote,
