@@ -20,7 +20,6 @@ interface QueueState {
 
 const state: QueueState = { activeTrades: 0 };
 
-// Flash‑loan token candidates
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.DAI,
   TOKENS.USDCe,
@@ -52,7 +51,9 @@ export async function processOpportunityBatch(
   }
 
   const ranked = rankExecutable(evaluated);
-  if (ranked.length === 0) return;
+  if (ranked.length === 0) {
+    return;
+  }
 
   const gasPrice = await provider.getGasPrice();
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
@@ -81,4 +82,108 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
     pairId: opp.pair.id,
     baseSymbol: opp.pair.base.symbol,
     quoteSymbol: opp.pair.quote.symbol,
-    sourceBuy: opp
+    sourceBuy: opp.spreadOpp.buySource,
+    sourceSell: opp.spreadOpp.sellSource,
+    priceBuy: opp.spreadOpp.buyQuote.price,
+    priceSell: opp.spreadOpp.sellQuote.price,
+    spreadBps: opp.spreadOpp.spreadBps,
+    estLiquidityUsd: opp.spreadOpp.buyQuote.estLiquidityUsd,
+    estGasCostUsd: opp.gasCostUsd,
+    estProtocolFeeUsd: opp.protocolFeeUsd,
+    estNetProfitUsd: opp.netProfitUsd,
+    meetsThreshold: opp.executable,
+  });
+
+  const tradeId = await logTrade({
+    opportunityId,
+    pairId: opp.pair.id,
+    status: 'pending',
+    positionSizeUsd: opp.positionSizeUsd,
+    expectedProfitUsd: opp.netProfitUsd,
+  });
+
+  let lastError: any = null;
+  let success = false;
+
+  for (const candidate of FLASH_LOAN_CANDIDATES) {
+    const priceUsd = getTokenPriceUsd(candidate);
+    const amountInUnits = opp.positionSizeUsd / priceUsd;
+    const flashLoanAmountRaw = ethers.utils
+      .parseUnits(amountInUnits.toFixed(candidate.decimals), candidate.decimals)
+      .toString();
+
+    const humanAmount = Number(flashLoanAmountRaw) / 10 ** candidate.decimals;
+
+    for (const provider of FLASH_LOAN_PROVIDERS) {
+      try {
+        log.info(`🔁 Trying ${provider.name} flash loan with ${candidate.symbol}`, {
+          pair: opp.pair.id,
+          amount: humanAmount.toFixed(candidate.decimals > 6 ? 4 : 2),
+        });
+
+        const built = await buildArbitrageBundle(
+          opp,
+          candidate,
+          flashLoanAmountRaw,
+          provider,
+          {
+            buyRequiresRequote: opp.buyRequiresRequote || false,
+            sellRequiresRequote: opp.sellRequiresRequote || false,
+          }
+        );
+
+        await updateTradeStatus(tradeId, 'submitted');
+
+        const result = await executeBundle(built);
+
+        if (result.success) {
+          await updateTradeStatus(tradeId, 'confirmed', {
+            txHash: result.txHash,
+            gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
+          });
+
+          log.info(`✅ Trade executed with ${provider.name} / ${candidate.symbol}`, {
+            pairId: opp.pair.id,
+            txHash: result.txHash,
+          });
+          await alertTradeExecuted(
+            opp.pair.id,
+            opp.netProfitUsd,
+            result.txHash ?? 'unknown'
+          );
+          success = true;
+          break;
+        } else {
+          throw new Error(`Execution failed: ${result.errorMessage}`);
+        }
+      } catch (err: any) {
+        const errorMessage = err?.message || String(err);
+        log.warn(`❌ ${provider.name} / ${candidate.symbol} failed`, {
+          pairId: opp.pair.id,
+          error: errorMessage,
+        });
+        lastError = err;
+      }
+    }
+
+    if (success) {
+      break;
+    }
+  }
+
+  if (!success) {
+    const finalMessage = lastError?.message || 'All flash‑loan tokens and providers failed';
+    await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
+    log.warn('❌ Trade failed after trying all candidates', {
+      pairId: opp.pair.id,
+      error: finalMessage,
+    });
+    await alertTradeFailed(opp.pair.id, finalMessage);
+  }
+
+  state.activeTrades -= 1;
+}
+
+export function getActiveTradeCount(): number {
+  return state.activeTrades;
+}
