@@ -41,7 +41,8 @@ export async function buildArbitrageBundle(
 ): Promise<BuiltBundle> {
   const enso = getEnsoClient();
   const chainId = activeChain.chainId;
-  const fromAddress = executionWallet.address; // ✅ valid address
+  // Cast to the expected type `0x${string}` to satisfy TypeScript
+  const fromAddress = executionWallet.address as `0x${string}`;
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
 
