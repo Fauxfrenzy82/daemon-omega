@@ -6,6 +6,7 @@ import { BuiltLogics } from './logicBuilder';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
 import { getSafeGasPrices } from '../utils/gas';
+import { deepInspect } from '../utils/diagnostics';
 
 const log = createLogger('router');
 
@@ -18,6 +19,26 @@ export interface RouterExecutionResult {
 
 export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecutionResult> {
   const chainId = getChainId();
+  const startTime = Date.now();
+
+  log.info('🚀 Router execution started', {
+    chainId,
+    flashLoanToken: built.flashLoanToken.symbol,
+    flashLoanAmount: built.flashLoanAmount,
+    logicsCount: built.logics.length,
+  });
+
+  // Log the full logics array deeply
+  log.info('📦 Router input logics', {
+    logics: deepInspect(built.logics, 'RouterLogics'),
+  });
+  built.logics.forEach((logic, i) => {
+    log.info(`📦 Router logic ${i}`, {
+      rid: logic?.rid,
+      fields: logic?.fields ? Object.keys(logic.fields) : 'no fields',
+      full: deepInspect(logic, `Logic${i}`),
+    });
+  });
 
   try {
     // Build estimate payload
@@ -27,15 +48,14 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       logics: built.logics,
     };
 
-    // LOG 1: Estimate router payload
-    log.info('ESTIMATE ROUTER PAYLOAD', {
-      payload: JSON.stringify(estimatePayload, null, 2),
+    log.info('📤 ESTIMATE ROUTER PAYLOAD', {
+      payload: deepInspect(estimatePayload, 'EstimatePayload'),
+      payloadSize: JSON.stringify(estimatePayload).length,
     });
 
-    // LOG 2: Dump each logic separately
     built.logics.forEach((logic, index) => {
-      log.info(`ROUTER LOGIC ${index}`, {
-        logic: JSON.stringify(logic, null, 2),
+      log.info(`📤 ROUTER LOGIC ${index}`, {
+        logic: deepInspect(logic, `Logic${index}`),
       });
     });
 
@@ -44,34 +64,41 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       {
         label: 'router.estimateRouterData',
         shouldRetry: (err: any) => {
-          if (err?.response?.status === 400) return false; // don't retry a bad request, capture it
+          if (err?.response?.status === 400) return false;
           return isTransientError(err);
         },
         retries: 2,
       }
     );
 
-    // LOG 3: Estimate result
-    log.info('ESTIMATE RESULT', {
-      estimate: JSON.stringify(estimateResult, null, 2),
+    const estimateDuration = Date.now() - startTime;
+    log.info('📥 ESTIMATE RESULT', {
+      estimate: deepInspect(estimateResult, 'EstimateResult'),
+      duration: estimateDuration,
     });
 
-    const routerData = await api.buildRouterTransactionRequest({
+    const routerDataPayload = {
       chainId,
       account: executionWallet.address,
       logics: built.logics,
       ...estimateResult,
+    };
+    log.info('📤 BUILD ROUTER TX REQUEST', {
+      payload: deepInspect(routerDataPayload, 'RouterTxPayload'),
     });
 
-    // LOG 4: Router tx data
-    log.info('ROUTER TX DATA', {
-      routerData: JSON.stringify(routerData, null, 2),
+    const routerData = await api.buildRouterTransactionRequest(routerDataPayload);
+
+    log.info('📥 ROUTER TX DATA', {
+      routerData: deepInspect(routerData, 'RouterData'),
+      to: routerData.to,
+      value: routerData.value,
+      dataLength: routerData.data?.length,
     });
 
     const gasPrices = await getSafeGasPrices();
 
-    // LOG 5: Sending transaction
-    log.info('SENDING ROUTER TRANSACTION', {
+    log.info('📤 SENDING ROUTER TRANSACTION', {
       to: routerData.to,
       value: routerData.value,
       dataLength: routerData.data?.length,
@@ -87,26 +114,31 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       maxFeePerGas: gasPrices.maxFeePerGas,
     });
 
-    log.info('Router transaction submitted', { txHash: tx.hash });
+    log.info('✅ Router transaction submitted', { txHash: tx.hash });
     const receipt = await tx.wait();
+    const duration = Date.now() - startTime;
 
     if (receipt.status === 1) {
-      log.info('Router transaction confirmed', {
+      log.info('✅ Router transaction confirmed', {
         txHash: tx.hash,
         gasUsed: receipt.gasUsed.toString(),
+        duration,
       });
       return { success: true, txHash: tx.hash, gasUsed: receipt.gasUsed.toString() };
     } else {
-      log.error('Router transaction reverted', { txHash: tx.hash });
+      log.error('❌ Router transaction reverted', {
+        txHash: tx.hash,
+        receipt: deepInspect(receipt, 'Receipt'),
+      });
       return { success: false, txHash: tx.hash, errorMessage: 'transaction reverted' };
     }
   } catch (err) {
     const error = err as any;
     const statusCode = error?.response?.status;
     const responseData = error?.response?.data;
+    const duration = Date.now() - startTime;
 
-    // LOG 6: Expanded catch
-    log.error('Router execution failed — DETAILED', {
+    log.error('❌ Router execution failed — DETAILED', {
       statusCode,
       responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
       errorMessage: error?.message || String(err),
@@ -119,7 +151,8 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       stack: error?.stack,
       axiosCode: error?.code,
       axiosStatusText: error?.response?.statusText,
-      fullAxiosError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
+      fullAxiosError: deepInspect(error, 'AxiosError'),
+      duration,
     });
 
     const detailedMessage = responseData
