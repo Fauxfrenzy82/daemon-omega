@@ -39,9 +39,9 @@ export const env = {
   EXECUTION_PRIVATE_KEY: required('EXECUTION_PRIVATE_KEY'),
   TREASURY_ADDRESS: required('TREASURY_ADDRESS'),
 
-  // --- Enso (replaces Protocolink) ---
+  // --- Enso (replaces Protocolink for execution) ---
   ENSO_API_KEY: required('ENSO_API_KEY'), // Get from https://developers.enso.build
-  ENSO_BASE_URL: optional('ENSO_BASE_URL', 'https://api.enso.finance'),
+  ENSO_BASE_URL: optional('ENSO_BASE_URL', 'https://api.enso.build'),
 
   // ParaSwap / OpenOcean (keep for price scanning)
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
@@ -64,7 +64,7 @@ export const env = {
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
   CIRCUIT_BREAKER_COOLDOWN_MS: optionalNumber('CIRCUIT_BREAKER_COOLDOWN_MS', 15 * 60 * 1000),
 
-  // Sweep
+  // Sweep (keep Protocolink for sweeps)
   SWEEP_ENABLED: optionalBool('SWEEP_ENABLED', false),
   SWEEP_MIN_BALANCE_USD: optionalNumber('SWEEP_MIN_BALANCE_USD', 20),
   SWEEP_KEEP_GAS_RESERVE_USD: optionalNumber('SWEEP_KEEP_GAS_RESERVE_USD', 1),
