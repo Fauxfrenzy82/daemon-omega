@@ -34,8 +34,66 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
   };
 }
 
+// Cache each provider's flash-loan token list per process lifetime.
+const flashLoanTokenListCache: Record<string, any[] | null> = {
+  'Aave V3': null,
+  'Balancer V2': null,
+};
+
+/**
+ * Returns the EXACT token object a flash-loan provider's own
+ * getFlashLoanTokenList returned, not a reconstructed one from our
+ * tokens.ts registry. Protocolink's flash-loan token objects may
+ * carry protocol-specific fields (reserve metadata, internal IDs)
+ * beyond the basic {chainId, address, decimals, symbol, name} shape
+ * our own TokenInfo has. Sending back our own reconstruction — even
+ * with an identical address and decimals — was silently failing
+ * Protocolink's internal matching and surfacing as "insufficient
+ * borrowing capacity" even when tens of millions of dollars in real
+ * on-chain liquidity was available for the requested token and size.
+ * Returns null if the token genuinely isn't in that provider's list,
+ * so the caller can skip straight to the next provider rather than
+ * send a request we already know will fail.
+ */
+async function getMatchedFlashLoanToken(
+  providerName: 'Aave V3' | 'Balancer V2',
+  chainId: number,
+  token: TokenInfo
+): Promise<any | null> {
+  if (!flashLoanTokenListCache[providerName]) {
+    try {
+      flashLoanTokenListCache[providerName] =
+        providerName === 'Aave V3'
+          ? await api.protocols.aavev3.getFlashLoanTokenList(chainId)
+          : await api.protocols.balancerv2.getFlashLoanTokenList(chainId);
+      log.info(`Fetched ${providerName} flash loan token list`, {
+        count: flashLoanTokenListCache[providerName]?.length || 0,
+      });
+    } catch (err) {
+      log.warn(`Failed to fetch ${providerName} flash loan token list`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  const matched = flashLoanTokenListCache[providerName]?.find(
+    (t: any) => t.address.toLowerCase() === token.address.toLowerCase()
+  );
+
+  if (!matched) {
+    log.debug(`Token ${token.symbol} not found in ${providerName} flash loan list`);
+    return null;
+  }
+
+  return matched;
+}
+
 // Priority: Aave V3 first (better liquidity for WMATIC/WETH), then Balancer V2
-const FLASH_LOAN_PROVIDERS = [
+const FLASH_LOAN_PROVIDERS: Array<{
+  name: 'Aave V3' | 'Balancer V2';
+  getLogic: (loans: any[]) => any;
+}> = [
   { name: 'Aave V3', getLogic: (loans: any[]) => api.protocols.aavev3?.newFlashLoanLogicPair?.(loans) },
   { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair?.(loans) },
 ];
@@ -49,22 +107,6 @@ export async function buildArbitrageLogics(
   const chainId = getChainId();
   const logics: any[] = [];
 
-  const loans = [
-    {
-      token: toProtocolinkToken(chainId, flashLoanToken),
-      amount: flashLoanAmountRaw,
-    },
-  ];
-
-  log.info('FLASH LOAN INPUT', {
-    chainId,
-    flashLoanAmountRaw,
-    flashLoanToken,
-    protocolinkToken: toProtocolinkToken(chainId, flashLoanToken),
-    loans: JSON.stringify(loans, null, 2),
-  });
-
-  // Try providers in order
   let flashLoanLoanLogic: any;
   let flashLoanRepayLogic: any;
   let providerUsed = '';
@@ -75,6 +117,28 @@ export async function buildArbitrageLogics(
         log.debug(`Provider ${provider.name} not available, skipping`);
         continue;
       }
+
+      const matchedToken = await getMatchedFlashLoanToken(provider.name, chainId, flashLoanToken);
+      if (!matchedToken) {
+        log.debug(`Skipping ${provider.name} — token not in its flash loan list`, {
+          token: flashLoanToken.symbol,
+        });
+        continue;
+      }
+
+      const loans = [
+        {
+          token: matchedToken,
+          amount: flashLoanAmountRaw,
+        },
+      ];
+
+      log.info(`FLASH LOAN INPUT (${provider.name})`, {
+        chainId,
+        flashLoanAmountRaw,
+        matchedToken: JSON.stringify(matchedToken, null, 2),
+      });
+
       const result = provider.getLogic(loans);
       if (!result || !Array.isArray(result) || result.length !== 2) {
         throw new Error(`Invalid result from ${provider.name}`);
@@ -146,13 +210,6 @@ export async function buildArbitrageLogics(
     flashLoanToken: flashLoanToken.symbol,
   });
 
-  log.info('FINAL LOGICS ARRAY', {
-    count: logics.length,
-    flashLoanAmount: flashLoanAmountRaw,
-    flashLoanToken: flashLoanToken.symbol,
-    logics: JSON.stringify(logics, null, 2),
-  });
-
   return {
     logics,
     flashLoanAmount: flashLoanAmountRaw,
@@ -160,7 +217,6 @@ export async function buildArbitrageLogics(
   };
 }
 
-// --- buildSwapLogic remains unchanged ---
 async function buildSwapLogic(
   source: string,
   requiresRequote: boolean,
@@ -213,23 +269,7 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-
-        log.info('SWAP QUOTE RECEIVED', {
-          source: executionSource,
-          tokenIn: tokenIn.symbol,
-          tokenOut: tokenOut.symbol,
-          amountIn,
-          quote: JSON.stringify(quote, null, 2),
-        });
-
         const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
-
-        log.info('SWAP LOGIC CREATED', {
-          source: executionSource,
-          actualOutputAmount: quote.output.amount,
-          logic: JSON.stringify(logic, null, 2),
-        });
-
         return { logic, actualOutputAmount: quote.output.amount };
       }
 
@@ -246,23 +286,7 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-
-        log.info('SWAP QUOTE RECEIVED', {
-          source: executionSource,
-          tokenIn: tokenIn.symbol,
-          tokenOut: tokenOut.symbol,
-          amountIn,
-          quote: JSON.stringify(quote, null, 2),
-        });
-
         const logic = api.protocols.uniswapv3.newSwapTokenLogic(quote);
-
-        log.info('SWAP LOGIC CREATED', {
-          source: executionSource,
-          actualOutputAmount: quote.output.amount,
-          logic: JSON.stringify(logic, null, 2),
-        });
-
         return { logic, actualOutputAmount: quote.output.amount };
       }
 
@@ -282,23 +306,7 @@ async function buildSwapLogic(
               retries: 2,
             }
           );
-
-          log.info('SWAP QUOTE RECEIVED', {
-            source: 'paraswap-v5 (fallback)',
-            tokenIn: tokenIn.symbol,
-            tokenOut: tokenOut.symbol,
-            amountIn,
-            quote: JSON.stringify(fallbackQuote, null, 2),
-          });
-
           const logic = api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
-
-          log.info('SWAP LOGIC CREATED', {
-            source: 'paraswap-v5 (fallback)',
-            actualOutputAmount: fallbackQuote.output.amount,
-            logic: JSON.stringify(logic, null, 2),
-          });
-
           return { logic, actualOutputAmount: fallbackQuote.output.amount };
         }
 
@@ -316,23 +324,7 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-
-        log.info('SWAP QUOTE RECEIVED', {
-          source: executionSource,
-          tokenIn: tokenIn.symbol,
-          tokenOut: tokenOut.symbol,
-          amountIn,
-          quote: JSON.stringify(quote, null, 2),
-        });
-
         const logic = api.protocols.zeroexv4.newSwapTokenLogic(quote);
-
-        log.info('SWAP LOGIC CREATED', {
-          source: executionSource,
-          actualOutputAmount: quote.output.amount,
-          logic: JSON.stringify(logic, null, 2),
-        });
-
         return { logic, actualOutputAmount: quote.output.amount };
       }
 
@@ -356,11 +348,6 @@ async function buildSwapLogic(
       statusCode,
       responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
       errorMessage: error?.message || String(err),
-      stack: error?.stack,
-      headers: error?.response?.headers,
-      config: error?.config,
-      request: error?.request,
-      fullError: JSON.stringify(error, Object.getOwnPropertyNames(error)),
     });
     return null;
   }
