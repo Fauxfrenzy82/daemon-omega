@@ -5,6 +5,7 @@ import { getChainId } from './protocolinkClient';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
 import { env } from '../config/env';
+import { deepInspect, logObjectStructure } from '../utils/diagnostics';
 
 const log = createLogger('logicBuilder');
 
@@ -43,17 +44,7 @@ const flashLoanTokenListCache: Record<string, any[] | null> = {
 /**
  * Returns the EXACT token object a flash-loan provider's own
  * getFlashLoanTokenList returned, not a reconstructed one from our
- * tokens.ts registry. Protocolink's flash-loan token objects may
- * carry protocol-specific fields (reserve metadata, internal IDs)
- * beyond the basic {chainId, address, decimals, symbol, name} shape
- * our own TokenInfo has. Sending back our own reconstruction — even
- * with an identical address and decimals — was silently failing
- * Protocolink's internal matching and surfacing as "insufficient
- * borrowing capacity" even when tens of millions of dollars in real
- * on-chain liquidity was available for the requested token and size.
- * Returns null if the token genuinely isn't in that provider's list,
- * so the caller can skip straight to the next provider rather than
- * send a request we already know will fail.
+ * tokens.ts registry.
  */
 async function getMatchedFlashLoanToken(
   providerName: 'Aave V3' | 'Balancer V2',
@@ -66,12 +57,15 @@ async function getMatchedFlashLoanToken(
         providerName === 'Aave V3'
           ? await api.protocols.aavev3.getFlashLoanTokenList(chainId)
           : await api.protocols.balancerv2.getFlashLoanTokenList(chainId);
-      log.info(`Fetched ${providerName} flash loan token list`, {
+      log.info(`📋 Fetched ${providerName} flash loan token list`, {
         count: flashLoanTokenListCache[providerName]?.length || 0,
+        fullList: deepInspect(flashLoanTokenListCache[providerName], `${providerName}TokenList`),
       });
     } catch (err) {
       log.warn(`Failed to fetch ${providerName} flash loan token list`, {
         error: err instanceof Error ? err.message : String(err),
+        stack: err?.stack,
+        fullError: deepInspect(err, 'ListError'),
       });
       return null;
     }
@@ -85,6 +79,11 @@ async function getMatchedFlashLoanToken(
     log.debug(`Token ${token.symbol} not found in ${providerName} flash loan list`);
     return null;
   }
+
+  log.info(`✅ Matched token in ${providerName} list`, {
+    matched: deepInspect(matched, 'MatchedToken'),
+  });
+  logObjectStructure(matched, `MatchedToken-${providerName}`);
 
   return matched;
 }
@@ -106,6 +105,17 @@ export async function buildArbitrageLogics(
 ): Promise<BuiltLogics> {
   const chainId = getChainId();
   const logics: any[] = [];
+
+  const humanAmount = Number(flashLoanAmountRaw) / (10 ** flashLoanToken.decimals);
+  log.info('💡 Building Arbitrage Logics', {
+    pair: opp.pair.id,
+    flashLoanToken: flashLoanToken.symbol,
+    flashLoanAmountRaw,
+    humanAmount: humanAmount.toFixed(flashLoanToken.decimals > 6 ? 4 : 2),
+    chainId,
+    buySource: opp.spreadOpp.buySource,
+    sellSource: opp.spreadOpp.sellSource,
+  });
 
   let flashLoanLoanLogic: any;
   let flashLoanRepayLogic: any;
@@ -133,10 +143,8 @@ export async function buildArbitrageLogics(
         },
       ];
 
-      log.info(`FLASH LOAN INPUT (${provider.name})`, {
-        chainId,
-        flashLoanAmountRaw,
-        matchedToken: JSON.stringify(matchedToken, null, 2),
+      log.info(`📤 Flash loan request to ${provider.name}`, {
+        loans: deepInspect(loans, 'Loans'),
       });
 
       const result = provider.getLogic(loans);
@@ -145,10 +153,19 @@ export async function buildArbitrageLogics(
       }
       [flashLoanLoanLogic, flashLoanRepayLogic] = result;
       providerUsed = provider.name;
-      log.info(`Using ${provider.name} flash loan provider`);
+      log.info(`✅ Using ${provider.name} flash loan provider`);
+      log.info(`📦 Generated loan logic`, {
+        loanLogic: deepInspect(flashLoanLoanLogic, 'LoanLogic'),
+        repayLogic: deepInspect(flashLoanRepayLogic, 'RepayLogic'),
+      });
+      logObjectStructure(flashLoanLoanLogic, 'LoanLogic');
+      logObjectStructure(flashLoanRepayLogic, 'RepayLogic');
       break;
     } catch (err) {
-      log.warn(`Failed to use ${provider.name} for flash loan, trying next`, { error: String(err) });
+      log.warn(`Failed to use ${provider.name} for flash loan, trying next`, {
+        error: String(err),
+        fullError: deepInspect(err, 'Error'),
+      });
     }
   }
 
@@ -210,6 +227,20 @@ export async function buildArbitrageLogics(
     flashLoanToken: flashLoanToken.symbol,
   });
 
+  // Log the final logics array with full depth
+  log.info('📦 FINAL LOGICS ARRAY', {
+    count: logics.length,
+    logics: deepInspect(logics, 'FinalLogics'),
+  });
+  logics.forEach((logic, index) => {
+    log.info(`📦 Logic ${index}`, {
+      rid: logic?.rid,
+      fields: logic?.fields ? Object.keys(logic.fields) : 'no fields',
+      full: deepInspect(logic, `Logic${index}`),
+    });
+    logObjectStructure(logic, `Logic${index}`);
+  });
+
   return {
     logics,
     flashLoanAmount: flashLoanAmountRaw,
@@ -217,6 +248,7 @@ export async function buildArbitrageLogics(
   };
 }
 
+// buildSwapLogic with added logging
 async function buildSwapLogic(
   source: string,
   requiresRequote: boolean,
@@ -228,6 +260,18 @@ async function buildSwapLogic(
   const chainId = getChainId();
   const tokenInObj = toProtocolinkToken(chainId, tokenIn);
   const tokenOutObj = toProtocolinkToken(chainId, tokenOut);
+
+  const humanAmountIn = Number(amountIn) / (10 ** tokenIn.decimals);
+
+  log.info('🔄 Building swap', {
+    source,
+    requiresRequote,
+    tokenIn: tokenIn.symbol,
+    tokenOut: tokenOut.symbol,
+    amountIn,
+    humanAmountIn: humanAmountIn.toFixed(tokenIn.decimals > 6 ? 4 : 2),
+    chainId,
+  });
 
   if (!amountIn || amountIn === '0') {
     log.warn('Swap amount is zero or invalid', {
@@ -241,24 +285,24 @@ async function buildSwapLogic(
 
   const executionSource = requiresRequote ? 'paraswap-v5' : source;
 
-  if (requiresRequote) {
-    log.info(`🔄 Re-quoting ${source} → ${executionSource} (${tokenIn.symbol}→${tokenOut.symbol})`, {
-      amountIn,
-      positionSizeUsd: opp.positionSizeUsd,
-    });
-  }
-
   const params = {
     input: { token: tokenInObj, amount: amountIn },
     tokenOut: tokenOutObj,
     slippage: 100,
   };
 
+  log.info(`📤 ${executionSource} swap request`, {
+    params: deepInspect(params, 'SwapParams'),
+  });
+
   try {
+    let quote: any;
+    let logic: any;
+
     switch (executionSource) {
       case 'paraswap-v5':
       case 'paraswapv5': {
-        const quote = await withRetry(
+        quote = await withRetry(
           () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
           {
             label: `paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
@@ -269,13 +313,14 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-        const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
-        return { logic, actualOutputAmount: quote.output.amount };
+        log.info('📥 ParaSwap V5 quote received', { quote: deepInspect(quote, 'Quote') });
+        logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
+        break;
       }
 
       case 'uniswap-v3':
       case 'uniswapv3': {
-        const quote = await withRetry(
+        quote = await withRetry(
           () => api.protocols.uniswapv3.getSwapTokenQuotation(chainId, params),
           {
             label: `uniswap-v3.${tokenIn.symbol}->${tokenOut.symbol}`,
@@ -286,8 +331,9 @@ async function buildSwapLogic(
             retries: 2,
           }
         );
-        const logic = api.protocols.uniswapv3.newSwapTokenLogic(quote);
-        return { logic, actualOutputAmount: quote.output.amount };
+        log.info('📥 Uniswap V3 quote received', { quote: deepInspect(quote, 'Quote') });
+        logic = api.protocols.uniswapv3.newSwapTokenLogic(quote);
+        break;
       }
 
       case 'zeroex-v4':
@@ -295,7 +341,7 @@ async function buildSwapLogic(
         const apiKey = env.ZEROEX_API_KEY || '';
         if (!apiKey) {
           log.warn('ZEROEX_API_KEY not set — falling back to ParaSwap for zeroex-v4');
-          const fallbackQuote = await withRetry(
+          quote = await withRetry(
             () => api.protocols.paraswapv5.getSwapTokenQuotation(chainId, params),
             {
               label: `fallback.paraswap-v5.${tokenIn.symbol}->${tokenOut.symbol}`,
@@ -306,38 +352,48 @@ async function buildSwapLogic(
               retries: 2,
             }
           );
-          const logic = api.protocols.paraswapv5.newSwapTokenLogic(fallbackQuote);
-          return { logic, actualOutputAmount: fallbackQuote.output.amount };
+          log.info('📥 Fallback ParaSwap V5 quote received', { quote: deepInspect(quote, 'Quote') });
+          logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
+        } else {
+          quote = await withRetry(
+            () => api.protocols.zeroexv4.getSwapTokenQuotation(chainId, {
+              ...params,
+              apiKey,
+            }),
+            {
+              label: `zeroex-v4.${tokenIn.symbol}->${tokenOut.symbol}`,
+              shouldRetry: (err: any) => {
+                if (err?.response?.status === 400) return false;
+                return isTransientError(err);
+              },
+              retries: 2,
+            }
+          );
+          log.info('📥 0x V4 quote received', { quote: deepInspect(quote, 'Quote') });
+          logic = api.protocols.zeroexv4.newSwapTokenLogic(quote);
         }
-
-        const quote = await withRetry(
-          () => api.protocols.zeroexv4.getSwapTokenQuotation(chainId, {
-            ...params,
-            apiKey,
-          }),
-          {
-            label: `zeroex-v4.${tokenIn.symbol}->${tokenOut.symbol}`,
-            shouldRetry: (err: any) => {
-              if (err?.response?.status === 400) return false;
-              return isTransientError(err);
-            },
-            retries: 2,
-          }
-        );
-        const logic = api.protocols.zeroexv4.newSwapTokenLogic(quote);
-        return { logic, actualOutputAmount: quote.output.amount };
+        break;
       }
 
       default:
         log.error(`No execution builder available for source: ${source}`);
         return null;
     }
+
+    log.info('📦 Swap logic created', {
+      source: executionSource,
+      actualOutputAmount: quote.output.amount,
+      logic: deepInspect(logic, 'SwapLogic'),
+    });
+    logObjectStructure(logic, 'SwapLogic');
+
+    return { logic, actualOutputAmount: quote.output.amount };
   } catch (err) {
     const error = err as any;
     const statusCode = error?.response?.status;
     const responseData = error?.response?.data;
 
-    log.error(`Swap logic build failed (${executionSource}) — DETAILED:`, {
+    log.error(`❌ Swap logic build failed (${executionSource})`, {
       originalSource: source,
       requiresRequote,
       tokenIn: tokenIn.symbol,
@@ -348,6 +404,8 @@ async function buildSwapLogic(
       statusCode,
       responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
       errorMessage: error?.message || String(err),
+      stack: error?.stack,
+      fullError: deepInspect(error, 'Error'),
     });
     return null;
   }
