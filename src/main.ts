@@ -7,6 +7,9 @@ import { executionWallet } from './treasury/wallets';
 import { alertSystemStarted, isDiscordConfigured } from './notifications/notifier';
 import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
+import { logEnvironment, logSDKStructure } from './utils/diagnostics';
+import { ethers } from 'ethers';
+import { activeChain } from './config/chains';
 
 const log = createLogger('main');
 
@@ -89,6 +92,11 @@ async function bootstrap(): Promise<void> {
 
   await initSchema();
   initProtocolink();
+
+  // --- Diagnostic logging ---
+  const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
+  await logEnvironment(provider);
+  logSDKStructure();
 
   startHealthServer();
 
