@@ -59,9 +59,17 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
     );
 
     const estimateDuration = Date.now() - startTime;
+
+    // Log the entire estimate result (safe to stringify)
     log.info('📥 ESTIMATE RESULT', {
-      gasUsed: estimateResult?.gas,
-      gasPrice: estimateResult?.gasPrice,
+      estimate: JSON.stringify(estimateResult, (key, value) => {
+        // Avoid circular references just in case
+        if (typeof value === 'object' && value !== null) {
+          // If we see a circular reference, skip it
+          return value;
+        }
+        return value;
+      }, 2),
       duration: estimateDuration,
     });
 
