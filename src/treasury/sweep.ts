@@ -11,12 +11,8 @@ const log = createLogger('sweep');
 
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
-/**
- * Get balance of a token for the execution wallet.
- */
 async function getTokenBalance(token: TokenInfo): Promise<bigint> {
   if (token.address === '0x0000000000000000000000000000000000000000') {
-    // Native POL (if you have a native token entry)
     const balance = await provider.getBalance(executionWallet.address);
     return balance.toBigInt();
   }
@@ -29,9 +25,6 @@ async function getTokenBalance(token: TokenInfo): Promise<bigint> {
   return balance.toBigInt();
 }
 
-/**
- * Convert all non-target tokens to target token (USDC) and send to treasury.
- */
 export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void> {
   if (!env.SWEEP_ENABLED) {
     log.debug('Sweep disabled, skipping');
@@ -39,14 +32,11 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
   }
 
   const chainId = activeChain.chainId;
-  const walletAddress = executionWallet.address;
   const treasuryAddress = env.TREASURY_ADDRESS;
   const targetSymbol = env.SWEEP_TARGET_SYMBOL;
   const targetToken = getToken(targetSymbol);
-  const minBalanceUsd = env.SWEEP_MIN_BALANCE_USD;
   const keepGasUsd = env.SWEEP_KEEP_GAS_RESERVE_USD;
 
-  // Get all token balances (except native POL, we handle separately)
   const allTokens = Object.values(TOKENS);
   const balances: { token: TokenInfo; balance: bigint; usdValue: number }[] = [];
 
@@ -62,8 +52,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
     } else if (['USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
       usdValue = Number(balance) / 10 ** token.decimals;
     } else {
-      // For other tokens, we could query price via API but skip for now
-      log.debug(`Skipping price for ${token.symbol}, will not sweep`);
       continue;
     }
 
@@ -72,7 +60,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
     }
   }
 
-  // Filter out tokens below dust threshold
   const dustThreshold = env.SWEEP_DUST_THRESHOLD_USD;
   const sweepable = balances.filter((b) => b.usdValue > dustThreshold);
 
@@ -90,9 +77,8 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
     return;
   }
 
-  // Convert each token to target token (USDC)
   for (const item of sweepable) {
-    if (item.token.symbol === targetSymbol) continue; // already target
+    if (item.token.symbol === targetSymbol) continue;
 
     try {
       log.info(`Sweeping ${item.token.symbol} to ${targetSymbol}`, {
@@ -100,7 +86,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
         usdValue: item.usdValue,
       });
 
-      // Build swap logic via Protocolink (keep for sweep)
       const quote = await withRetry(
         () =>
           api.protocols.paraswapv5.getSwapTokenQuotation(chainId, {
@@ -119,8 +104,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
       );
 
       const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
-
-      // Estimate router data
       const estimatePayload = {
         chainId,
         account: executionWallet.address,
@@ -128,7 +111,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
       };
 
       const estimateResult = await api.estimateRouterData(estimatePayload, {});
-      // Guard against undefined estimateResult
       const safeEstimate = estimateResult || {};
 
       const routerData = await api.buildRouterTransactionRequest({
@@ -138,7 +120,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
         ...safeEstimate,
       });
 
-      // Send transaction
       const tx = await executionWallet.sendTransaction({
         to: routerData.to,
         data: routerData.data,
@@ -154,7 +135,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
     }
   }
 
-  // After sweeps, transfer target token to treasury
   const targetBalance = await getTokenBalance(targetToken);
   if (targetBalance > 0n) {
     log.info(`Transferring ${targetSymbol} to treasury`, {
