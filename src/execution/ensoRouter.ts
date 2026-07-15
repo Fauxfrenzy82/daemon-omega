@@ -14,9 +14,6 @@ export interface RouterExecutionResult {
   errorMessage?: string;
 }
 
-/**
- * Execute an Enso bundle.
- */
 export async function executeBundle(
   built: BuiltBundle
 ): Promise<RouterExecutionResult> {
