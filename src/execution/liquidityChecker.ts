@@ -13,10 +13,6 @@ export interface FlashLoanAvailability {
   reason?: string;
 }
 
-/**
- * Checks if a given token and amount can be flash-loaned on Polygon.
- * Returns the list of providers (Aave V3, Balancer V2) that can fulfill it.
- */
 export async function checkFlashLoanLiquidity(
   token: TokenInfo,
   amount: string
@@ -56,20 +52,19 @@ export async function checkFlashLoanLiquidity(
           sample: tokenList?.slice(0, 3).map((t: any) => ({ symbol: t.symbol, address: t.address })),
         });
 
-        // Capture the ACTUAL token object the API returned, not just a
-        // boolean match — this object may carry protocol-specific
-        // fields (reserve metadata, internal IDs) beyond the basic
-        // {chainId, address, decimals, symbol, name} shape our own
-        // TokenInfo has. Sending our reconstructed object back to
-        // getFlashLoanQuotation, instead of the exact object the list
-        // gave us, was silently failing validation even with tens of
-        // millions of dollars in real, verified on-chain liquidity
-        // available — the mismatch, not liquidity, was the cause of
-        // every "insufficient borrowing capacity" error.
+        // Use the ACTUAL token object the provider returned — not a
+        // reconstructed one — since Protocolink's flash-loan token
+        // objects may carry protocol-specific fields our own TokenInfo
+        // doesn't have. This is THE fix for "insufficient borrowing
+        // capacity" appearing on tokens with tens of millions of
+        // dollars in real, verified on-chain liquidity.
         matchedToken = tokenList.find(
           (t: any) => t.address.toLowerCase() === token.address.toLowerCase()
         );
-        log.info(`🔎 Token ${token.symbol} found in ${providerName} list?`, { found: !!matchedToken });
+        log.info(`🔎 Token ${token.symbol} matched object in ${providerName} list?`, {
+          found: !!matchedToken,
+          matchedTokenShape: matchedToken ? Object.keys(matchedToken) : null,
+        });
       } catch (listError: any) {
         log.warn(`⚠️ Failed to fetch ${providerName} token list`, {
           error: listError?.message || String(listError),
@@ -96,7 +91,6 @@ export async function checkFlashLoanLiquidity(
       log.info(`✅ ${providerName} flash loan quotation succeeded`, {
         token: token.symbol,
         amount: amount,
-        quote: JSON.stringify(quote, null, 2),
       });
 
       availableProviders.push(providerName);
@@ -116,8 +110,6 @@ export async function checkFlashLoanLiquidity(
     }
   }
 
-  // Both providers now use the EXACT token object returned by the
-  // provider's own getFlashLoanTokenList, not a reconstructed one.
   await testProvider('Aave V3', async (matchedToken) => {
     return api.protocols.aavev3.getFlashLoanQuotation(chainId, {
       loans: [{ token: matchedToken, amount: amount }],
