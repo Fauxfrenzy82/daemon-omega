@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@protocolink/api": "1.4.8",
+    "@ensofinance/sdk": "^2.4.1",
     "@types/node": "^20.14.2",
     "@types/pg": "^8.11.6",
     "axios": "^1.7.2",
