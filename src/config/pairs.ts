@@ -23,7 +23,7 @@ export const PAIRS: PairConfig[] = [
   },
   {
     id: 'WBTC-USDC',
-    base: getToken('WBTC'),
+    base: getToken('WBTC'),   // ✅ Correct – deployed version must have this
     quote: getToken('USDC'),
     minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
     minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
