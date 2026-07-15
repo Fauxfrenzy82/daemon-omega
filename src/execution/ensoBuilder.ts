@@ -4,7 +4,6 @@ import { getEnsoClient } from './ensoClient';
 import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
-import type { BundleAction } from '@ensofinance/sdk';
 
 const log = createLogger('ensoBuilder');
 
@@ -32,6 +31,9 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 
 /**
  * Build a flash‑loan arbitrage bundle using Enso's Bundle API.
+ * 
+ * According to Enso docs, flashloans are only available via Bundle API:
+ * @see https://docs.enso.build/pages/build/reference/flashloans
  */
 export async function buildArbitrageBundle(
   opp: EvaluatedOpportunity,
@@ -51,10 +53,27 @@ export async function buildArbitrageBundle(
     flashLoanToken: flashLoanToken.symbol,
     provider: provider.name,
     amount: humanAmount.toFixed(flashLoanToken.decimals > 6 ? 4 : 2),
+    chainId,
   });
 
-  // Build the actions with correct literal types for protocol and action.
-  const actions: BundleAction[] = [
+  /**
+   * Flashloan action structure from Enso docs:
+   * 
+   * {
+   *   protocol: "aave-v3" | "morpho-markets-v1" | "balancer-v3" | "uniswap-v3",
+   *   action: "flashloan",
+   *   args: {
+   *     flashloanToken: "0x...",
+   *     flashloanAmount: "1000000000000000000",
+   *     tokenOut: ["0x..."],  // tokens expected after callback
+   *     callback: [ ... ]     // actions to execute after receiving flash loan
+   *   }
+   * }
+   * 
+   * @see https://docs.enso.build/pages/build/reference/flashloans#parameters
+   */
+  const actions = [
+    // 1. Flash loan
     {
       protocol: provider.protocol,
       action: 'flashloan',
@@ -63,9 +82,10 @@ export async function buildArbitrageBundle(
         flashloanAmount: flashLoanAmountRaw,
         tokenOut: [flashLoanToken.address as `0x${string}`],
         callback: [
+          // 2. Buy swap: flashLoanToken → base
           {
-            protocol: 'enso' as const,
-            action: 'route' as const,
+            protocol: 'enso',
+            action: 'route',
             args: {
               tokenIn: flashLoanToken.address as `0x${string}`,
               tokenOut: opp.pair.base.address as `0x${string}`,
@@ -73,9 +93,10 @@ export async function buildArbitrageBundle(
               slippage: '100',
             },
           },
+          // 3. Sell swap: base → flashLoanToken
           {
-            protocol: 'enso' as const,
-            action: 'route' as const,
+            protocol: 'enso',
+            action: 'route',
             args: {
               tokenIn: opp.pair.base.address as `0x${string}`,
               tokenOut: flashLoanToken.address as `0x${string}`,
@@ -98,7 +119,7 @@ export async function buildArbitrageBundle(
       chainId,
       routingStrategy: 'router',
     },
-    actions // Now properly typed as BundleAction[]
+    actions
   );
 
   log.info('✅ Enso bundle created', {
