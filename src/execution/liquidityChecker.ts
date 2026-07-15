@@ -2,7 +2,7 @@ import * as api from '@protocolink/api';
 import { TokenInfo } from '../config/tokens';
 import { getChainId } from './protocolinkClient';
 import { createLogger } from '../utils/logger';
-import { deepInspect, logObjectStructure } from '../utils/diagnostics';
+import { deepInspect, logTokenEssentials } from '../utils/diagnostics';
 
 const log = createLogger('liquidityChecker');
 
@@ -31,8 +31,7 @@ export async function checkFlashLoanLiquidity(
     rawAmount: amount,
     humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
   });
-  log.info('🔍 Input token full details', { token: deepInspect(token, 'InputToken') });
-  logObjectStructure(token, 'InputToken');
+  logTokenEssentials(token, 'InputToken');
 
   async function testProvider(providerName: string, getQuoteFn: (matchedToken: any) => Promise<any>) {
     const startTime = Date.now();
@@ -44,7 +43,6 @@ export async function checkFlashLoanLiquidity(
     try {
       let tokenList: any[] = [];
       let matchedToken: any = null;
-      let listError: any = null;
 
       try {
         if (providerName === 'Aave V3') {
@@ -55,15 +53,10 @@ export async function checkFlashLoanLiquidity(
         log.info(`📋 ${providerName} token list received`, {
           count: tokenList?.length || 0,
           sample: tokenList?.slice(0, 3).map((t: any) => ({ symbol: t.symbol, address: t.address })),
-          // Log full list? We'll log it but it may be large.
-          fullList: deepInspect(tokenList, `${providerName}TokenList`),
         });
-        // Log the first token fully to see its shape
+        // Log first token essentials only
         if (tokenList && tokenList.length > 0) {
-          log.info(`📋 ${providerName} first token full shape`, {
-            firstToken: deepInspect(tokenList[0], 'FirstToken'),
-          });
-          logObjectStructure(tokenList[0], `${providerName}FirstToken`);
+          logTokenEssentials(tokenList[0], `${providerName}FirstToken`);
         }
 
         matchedToken = tokenList.find(
@@ -71,18 +64,14 @@ export async function checkFlashLoanLiquidity(
         );
         log.info(`🔎 Token ${token.symbol} matched object in ${providerName} list?`, {
           found: !!matchedToken,
-          matchedTokenShape: matchedToken ? Object.keys(matchedToken) : null,
-          matchedTokenFull: matchedToken ? deepInspect(matchedToken, 'MatchedToken') : null,
         });
         if (matchedToken) {
-          logObjectStructure(matchedToken, `MatchedToken-${providerName}`);
+          logTokenEssentials(matchedToken, `MatchedToken-${providerName}`);
         }
       } catch (listError: any) {
         log.warn(`⚠️ Failed to fetch ${providerName} token list`, {
           error: listError?.message || String(listError),
           responseData: listError?.response?.data,
-          stack: listError?.stack,
-          fullError: deepInspect(listError, 'ListError'),
         });
       }
 
@@ -93,24 +82,12 @@ export async function checkFlashLoanLiquidity(
         return;
       }
 
-      // Compare our token with the matched token
-      log.info(`🔍 Token comparison: our token vs provider's matched token`, {
-        ourToken: deepInspect(token, 'OurToken'),
-        matchedToken: deepInspect(matchedToken, 'MatchedToken'),
-        addressMatch: token.address.toLowerCase() === matchedToken.address.toLowerCase(),
-        decimalsMatch: token.decimals === matchedToken.decimals,
-        symbolMatch: token.symbol === matchedToken.symbol,
-      });
-
-      const request = { loans: [{ token: matchedToken, amount: amount }] };
       log.info(`📤 Requesting flash loan quotation from ${providerName}`, {
         token: token.symbol,
         tokenAddress: matchedToken.address,
         amount: amount,
         humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
         chainId,
-        request: deepInspect(request, 'FlashLoanRequest'),
-        requestSize: JSON.stringify(request).length,
       });
 
       const quote = await getQuoteFn(matchedToken);
@@ -121,7 +98,6 @@ export async function checkFlashLoanLiquidity(
         amount: amount,
         humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
         duration,
-        quote: deepInspect(quote, 'Quote'),
       });
 
       availableProviders.push(providerName);
@@ -139,15 +115,6 @@ export async function checkFlashLoanLiquidity(
         statusCode,
         errorMessage,
         responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
-        stack: error?.stack,
-        code: error?.code,
-        config: error?.config,
-        request: error?.request,
-        headers: error?.response?.headers,
-        fullError: deepInspect(error, 'AxiosError'),
-        // Log all properties of the error
-        allProps: Reflect.ownKeys(error),
-        descriptors: Object.getOwnPropertyDescriptors(error),
       });
     }
   }
@@ -179,7 +146,6 @@ export async function checkFlashLoanLiquidity(
     isAvailable,
     availableProviders,
     reason: result.reason,
-    result: deepInspect(result, 'Result'),
   });
 
   return result;
