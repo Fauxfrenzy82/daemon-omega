@@ -10,6 +10,7 @@ import { createLogger } from '../utils/logger';
 import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
 import { TOKENS, TokenInfo } from '../config/tokens';
 import { checkFlashLoanLiquidity, FlashLoanAvailability } from './liquidityChecker';
+import { deepInspect } from '../utils/diagnostics';
 
 const log = createLogger('execution-queue');
 
@@ -32,18 +33,7 @@ const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
 ];
 
 /**
- * Per-scan-cycle cache of liquidity check results, keyed by
- * "tokenSymbol:rawAmount". Multiple pairs dispatched in the same
- * batch were each independently re-checking the exact same
- * token/amount combination — e.g. 5 pairs all separately asking
- * "is 500 USDC.e flash-loanable?" within milliseconds of each other,
- * producing the overlapping/duplicate log entries. Since liquidity
- * conditions don't meaningfully change within a single batch, this
- * cache means each unique check happens once and every other pair
- * needing the same answer reuses it — cutting redundant API calls
- * roughly in proportion to how many pairs share candidate tokens.
- * Cleared at the start of each processOpportunityBatch call so stale
- * results never persist across scan cycles.
+ * Per-scan-cycle cache of liquidity check results.
  */
 let liquidityCache = new Map<string, Promise<FlashLoanAvailability>>();
 
@@ -51,8 +41,10 @@ function getCachedLiquidityCheck(token: TokenInfo, amount: string): Promise<Flas
   const key = `${token.symbol}:${amount}`;
   const cached = liquidityCache.get(key);
   if (cached) {
+    log.debug(`Using cached liquidity check for ${key}`);
     return cached;
   }
+  log.debug(`No cache for ${key}, performing fresh check`);
   const promise = checkFlashLoanLiquidity(token, amount);
   liquidityCache.set(key, promise);
   return promise;
@@ -91,19 +83,11 @@ export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[])
     return;
   }
 
-  // Fresh cache for this batch only — liquidity checks from a
-  // previous scan cycle should never leak into this one.
+  // Fresh cache for this batch only
   liquidityCache = new Map();
 
   const dispatchable = ranked.slice(0, Math.max(0, 10));
 
-  // Stagger dispatch slightly instead of firing every pair in the
-  // same instant. This doesn't change correctness (the liquidity
-  // cache above already deduplicates identical concurrent requests
-  // regardless), but it spreads genuinely distinct API calls
-  // (different tokens, different amounts) out over a short window
-  // rather than bursting all at once, which is gentler on rate-limited
-  // dependencies elsewhere in the system (e.g. OpenOcean).
   const STAGGER_MS = 250;
   const executions = dispatchable.map((opp, index) =>
     new Promise<void>((resolve) => {
@@ -150,6 +134,7 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
 
   let lastError: any = null;
   let success = false;
+  const triedTokens: string[] = [];
 
   for (const candidate of FLASH_LOAN_CANDIDATES) {
     try {
@@ -159,21 +144,25 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         .parseUnits(amountInUnits.toFixed(candidate.decimals), candidate.decimals)
         .toString();
 
-      log.info(`Trying flash‑loan token: ${candidate.symbol} for pair ${opp.pair.id}`, {
+      const humanAmount = Number(flashLoanAmountRaw) / (10 ** candidate.decimals);
+      log.info(`🔁 Trying flash‑loan token: ${candidate.symbol} for pair ${opp.pair.id}`, {
         positionSizeUsd: opp.positionSizeUsd,
         priceUsd,
         amountInUnits,
         rawAmount: flashLoanAmountRaw,
+        humanAmount: humanAmount.toFixed(candidate.decimals > 6 ? 4 : 2),
+        tokenAddress: candidate.address,
       });
 
       const liquidityCheck = await getCachedLiquidityCheck(candidate, flashLoanAmountRaw);
+      triedTokens.push(candidate.symbol);
 
       if (!liquidityCheck.isAvailable) {
-        log.info(`Skipping ${candidate.symbol}: ${liquidityCheck.reason}`);
+        log.info(`⏭️ Skipping ${candidate.symbol}: ${liquidityCheck.reason}`);
         continue;
       }
 
-      log.info(`Token ${candidate.symbol} is available for flash loans on: ${liquidityCheck.availableProviders.join(', ')}`);
+      log.info(`✅ Token ${candidate.symbol} is available for flash loans on: ${liquidityCheck.availableProviders.join(', ')}`);
 
       const built = await buildArbitrageLogics(
         opp,
@@ -195,7 +184,7 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
           gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
         });
 
-        log.info(`Trade executed successfully with flash‑loan token ${candidate.symbol}`, {
+        log.info(`✅ Trade executed successfully with flash‑loan token ${candidate.symbol}`, {
           pairId: opp.pair.id,
           txHash: result.txHash,
         });
@@ -215,16 +204,18 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         (responseData?.message && responseData.message.includes('insufficient borrowing capacity'));
 
       if (isInsufficientCapacity) {
-        log.warn(`Token ${candidate.symbol} is not flash‑loanable, trying next candidate...`, {
+        log.warn(`⏭️ Token ${candidate.symbol} is not flash‑loanable, trying next candidate...`, {
           pairId: opp.pair.id,
           error: errorMessage,
+          fullError: deepInspect(err, 'Error'),
         });
         lastError = err;
         continue;
       } else {
-        log.error(`Fatal error with token ${candidate.symbol}, stopping`, {
+        log.error(`❌ Fatal error with token ${candidate.symbol}, stopping`, {
           pairId: opp.pair.id,
           error: errorMessage,
+          fullError: deepInspect(err, 'Error'),
         });
         lastError = err;
         break;
@@ -237,9 +228,11 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
       ? (lastError?.response?.data?.message || lastError?.message || String(lastError))
       : 'All flash‑loan tokens failed';
     await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
-    log.warn('Trade execution failed after trying all flash‑loan candidates', {
+    log.warn('❌ Trade execution failed after trying all flash‑loan candidates', {
       pairId: opp.pair.id,
       error: finalMessage,
+      triedTokens,
+      lastError: deepInspect(lastError, 'LastError'),
     });
     await alertTradeFailed(opp.pair.id, finalMessage);
   }
