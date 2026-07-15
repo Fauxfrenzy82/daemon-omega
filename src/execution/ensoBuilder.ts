@@ -18,10 +18,6 @@ export interface FlashLoanProvider {
   protocol: 'aave-v3' | 'morpho-markets-v1' | 'balancer-v3' | 'uniswap-v3';
 }
 
-/**
- * Available flash‑loan providers via Enso Bundle API.
- * @see https://docs.enso.build/pages/build/reference/flashloans
- */
 export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Aave V3', protocol: 'aave-v3' },
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
@@ -29,12 +25,6 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Uniswap V3', protocol: 'uniswap-v3' },
 ];
 
-/**
- * Build a flash‑loan arbitrage bundle using Enso's Bundle API.
- * 
- * According to Enso docs, flashloans are only available via Bundle API:
- * @see https://docs.enso.build/pages/build/reference/flashloans
- */
 export async function buildArbitrageBundle(
   opp: EvaluatedOpportunity,
   flashLoanToken: TokenInfo,
@@ -56,24 +46,7 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
-  /**
-   * Flashloan action structure from Enso docs:
-   * 
-   * {
-   *   protocol: "aave-v3" | "morpho-markets-v1" | "balancer-v3" | "uniswap-v3",
-   *   action: "flashloan",
-   *   args: {
-   *     flashloanToken: "0x...",
-   *     flashloanAmount: "1000000000000000000",
-   *     tokenOut: ["0x..."],  // tokens expected after callback
-   *     callback: [ ... ]     // actions to execute after receiving flash loan
-   *   }
-   * }
-   * 
-   * @see https://docs.enso.build/pages/build/reference/flashloans#parameters
-   */
   const actions = [
-    // 1. Flash loan
     {
       protocol: provider.protocol,
       action: 'flashloan',
@@ -82,7 +55,6 @@ export async function buildArbitrageBundle(
         flashloanAmount: flashLoanAmountRaw,
         tokenOut: [flashLoanToken.address as `0x${string}`],
         callback: [
-          // 2. Buy swap: flashLoanToken → base
           {
             protocol: 'enso',
             action: 'route',
@@ -93,7 +65,6 @@ export async function buildArbitrageBundle(
               slippage: '100',
             },
           },
-          // 3. Sell swap: base → flashLoanToken
           {
             protocol: 'enso',
             action: 'route',
