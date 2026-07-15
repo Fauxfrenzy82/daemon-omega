@@ -1,6 +1,7 @@
 import { TokenInfo } from '../config/tokens';
 import { EvaluatedOpportunity } from '../profitability/evaluator';
 import { getEnsoClient } from './ensoClient';
+import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 
@@ -30,12 +31,6 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 
 /**
  * Build a flash‑loan arbitrage bundle using Enso's Bundle API.
- * 
- * The bundle executes:
- * 1. Flash loan (borrow flashLoanToken)
- * 2. Buy swap (flashLoanToken → base token)
- * 3. Sell swap (base token → flashLoanToken)
- * 4. Repay flash loan (automatically enforced by Enso)
  */
 export async function buildArbitrageBundle(
   opp: EvaluatedOpportunity,
@@ -46,7 +41,7 @@ export async function buildArbitrageBundle(
 ): Promise<BuiltBundle> {
   const enso = getEnsoClient();
   const chainId = activeChain.chainId;
-  const fromAddress = ''; // Set by router before execution
+  const fromAddress = executionWallet.address; // ✅ valid address
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
 
@@ -57,16 +52,6 @@ export async function buildArbitrageBundle(
     amount: humanAmount.toFixed(flashLoanToken.decimals > 6 ? 4 : 2),
   });
 
-  /**
-   * Enso flash‑loan bundle structure:
-   * 
-   * Action 0: Flash loan from the selected protocol
-   * Action 1: Route (swap) flashLoanToken → base token (buy)
-   * Action 2: Route (swap) base token → flashLoanToken (sell)
-   * 
-   * Enso automatically handles repayment – the flash loan callback
-   * must produce enough tokens to repay the borrowed amount + fees.
-   */
   const actions = [
     // 1. Flash loan
     {
