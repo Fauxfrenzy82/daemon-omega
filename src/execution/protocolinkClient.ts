@@ -15,11 +15,7 @@ let interceptorsAttached = false;
  * body) and exact inbound response for every HTTP call — including
  * ones made internally by @protocolink/api that we never construct
  * ourselves. This is diagnostic-only: it doesn't change behavior, it
- * only logs. If Protocolink's SDK uses its own private axios instance
- * rather than the shared module-level singleton, these interceptors
- * won't catch its calls — that possibility itself is useful
- * information if none of these logs ever appear for a flash loan
- * quotation request.
+ * only logs.
  */
 function attachDiagnosticInterceptors(): void {
   if (interceptorsAttached) return;
@@ -55,6 +51,7 @@ function attachDiagnosticInterceptors(): void {
           ? `${response.config.baseURL}${response.config.url}`
           : response.config?.url,
         data: JSON.stringify(response.data),
+        headers: response.headers,
       });
       return response;
     },
@@ -68,6 +65,7 @@ function attachDiagnosticInterceptors(): void {
         requestData: error?.config?.data ? JSON.stringify(error.config.data) : undefined,
         requestParams: error?.config?.params ? JSON.stringify(error.config.params) : undefined,
         responseData: JSON.stringify(error?.response?.data),
+        headers: error?.response?.headers,
       });
       return Promise.reject(error);
     }
