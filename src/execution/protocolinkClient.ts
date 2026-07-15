@@ -9,14 +9,6 @@ const log = createLogger('protocolinkClient');
 let initialized = false;
 let interceptorsAttached = false;
 
-/**
- * Attaches global axios interceptors BEFORE any Protocolink SDK calls
- * happen, to log the exact outbound request (method, full URL, full
- * body) and exact inbound response for every HTTP call — including
- * ones made internally by @protocolink/api that we never construct
- * ourselves. This is diagnostic-only: it doesn't change behavior, it
- * only logs.
- */
 function attachDiagnosticInterceptors(): void {
   if (interceptorsAttached) return;
   interceptorsAttached = true;
@@ -26,11 +18,8 @@ function attachDiagnosticInterceptors(): void {
       log.info('🌐 OUTBOUND HTTP REQUEST', {
         method: config.method?.toUpperCase(),
         url: config.url,
-        baseURL: config.baseURL,
-        fullUrl: config.baseURL ? `${config.baseURL}${config.url}` : config.url,
         params: config.params ? JSON.stringify(config.params) : undefined,
         data: config.data ? JSON.stringify(config.data) : undefined,
-        headers: config.headers ? JSON.stringify(config.headers) : undefined,
       });
       return config;
     },
@@ -47,11 +36,7 @@ function attachDiagnosticInterceptors(): void {
       log.info('🌐 INBOUND HTTP RESPONSE', {
         status: response.status,
         url: response.config?.url,
-        fullUrl: response.config?.baseURL
-          ? `${response.config.baseURL}${response.config.url}`
-          : response.config?.url,
         data: JSON.stringify(response.data),
-        headers: response.headers,
       });
       return response;
     },
@@ -59,13 +44,7 @@ function attachDiagnosticInterceptors(): void {
       log.error('🌐 INBOUND HTTP ERROR RESPONSE', {
         status: error?.response?.status,
         url: error?.config?.url,
-        fullUrl: error?.config?.baseURL
-          ? `${error.config.baseURL}${error.config.url}`
-          : error?.config?.url,
-        requestData: error?.config?.data ? JSON.stringify(error.config.data) : undefined,
-        requestParams: error?.config?.params ? JSON.stringify(error.config.params) : undefined,
         responseData: JSON.stringify(error?.response?.data),
-        headers: error?.response?.headers,
       });
       return Promise.reject(error);
     }
