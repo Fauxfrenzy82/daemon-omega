@@ -9,10 +9,6 @@ const log = createLogger('ensoClient');
 let ensoClient: EnsoClient | null = null;
 let interceptorsAttached = false;
 
-/**
- * Attach axios interceptors to log every Enso API request/response.
- * This is critical for debugging – you'll see the exact URL and payload.
- */
 function attachDiagnosticInterceptors(): void {
   if (interceptorsAttached) return;
   interceptorsAttached = true;
@@ -66,12 +62,10 @@ export function initEnsoClient(): EnsoClient {
         'ENSO_API_KEY is required. Get one from https://developers.enso.build'
       );
     }
-    // ✅ FIX: Use api.enso.build (not api.enso.finance)
-    // The SDK will append /api/v1/shortcuts/bundle automatically
     attachDiagnosticInterceptors();
     ensoClient = new EnsoClient({
       apiKey: env.ENSO_API_KEY,
-      baseURL: 'https://api.enso.build', // ✅ correct base URL
+      baseURL: env.ENSO_BASE_URL, // Should be https://api.enso.build
     });
     log.info('Enso client initialized', { chainId: activeChain.chainId });
   }
