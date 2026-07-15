@@ -6,7 +6,6 @@ import { BuiltLogics } from './logicBuilder';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
 import { getSafeGasPrices } from '../utils/gas';
-import { deepInspect } from '../utils/diagnostics';
 
 const log = createLogger('router');
 
@@ -28,20 +27,13 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
     logicsCount: built.logics.length,
   });
 
-  // Log the full logics array deeply
-  log.info('📦 Router input logics', {
-    logics: deepInspect(built.logics, 'RouterLogics'),
-  });
-  built.logics.forEach((logic, i) => {
-    log.info(`📦 Router logic ${i}`, {
-      rid: logic?.rid,
-      fields: logic?.fields ? Object.keys(logic.fields) : 'no fields',
-      full: deepInspect(logic, `Logic${i}`),
-    });
+  // Log only summary of logics
+  log.info('📦 Router input logics summary', {
+    count: built.logics.length,
+    types: built.logics.map(l => l?.rid).filter(Boolean),
   });
 
   try {
-    // Build estimate payload
     const estimatePayload = {
       chainId,
       account: executionWallet.address,
@@ -49,14 +41,9 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
     };
 
     log.info('📤 ESTIMATE ROUTER PAYLOAD', {
-      payload: deepInspect(estimatePayload, 'EstimatePayload'),
-      payloadSize: JSON.stringify(estimatePayload).length,
-    });
-
-    built.logics.forEach((logic, index) => {
-      log.info(`📤 ROUTER LOGIC ${index}`, {
-        logic: deepInspect(logic, `Logic${index}`),
-      });
+      chainId,
+      account: estimatePayload.account,
+      logicsCount: estimatePayload.logics.length,
     });
 
     const estimateResult = await withRetry(
@@ -73,7 +60,8 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
 
     const estimateDuration = Date.now() - startTime;
     log.info('📥 ESTIMATE RESULT', {
-      estimate: deepInspect(estimateResult, 'EstimateResult'),
+      gasUsed: estimateResult?.gas,
+      gasPrice: estimateResult?.gasPrice,
       duration: estimateDuration,
     });
 
@@ -83,14 +71,10 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       logics: built.logics,
       ...estimateResult,
     };
-    log.info('📤 BUILD ROUTER TX REQUEST', {
-      payload: deepInspect(routerDataPayload, 'RouterTxPayload'),
-    });
 
     const routerData = await api.buildRouterTransactionRequest(routerDataPayload);
 
     log.info('📥 ROUTER TX DATA', {
-      routerData: deepInspect(routerData, 'RouterData'),
       to: routerData.to,
       value: routerData.value,
       dataLength: routerData.data?.length,
@@ -126,10 +110,7 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       });
       return { success: true, txHash: tx.hash, gasUsed: receipt.gasUsed.toString() };
     } else {
-      log.error('❌ Router transaction reverted', {
-        txHash: tx.hash,
-        receipt: deepInspect(receipt, 'Receipt'),
-      });
+      log.error('❌ Router transaction reverted', { txHash: tx.hash });
       return { success: false, txHash: tx.hash, errorMessage: 'transaction reverted' };
     }
   } catch (err) {
@@ -145,13 +126,6 @@ export async function executeViaRouter(built: BuiltLogics): Promise<RouterExecut
       logicsCount: built.logics.length,
       flashLoanToken: built.flashLoanToken.symbol,
       flashLoanAmount: built.flashLoanAmount,
-      headers: error?.response?.headers,
-      config: error?.config,
-      request: error?.request,
-      stack: error?.stack,
-      axiosCode: error?.code,
-      axiosStatusText: error?.response?.statusText,
-      fullAxiosError: deepInspect(error, 'AxiosError'),
       duration,
     });
 
