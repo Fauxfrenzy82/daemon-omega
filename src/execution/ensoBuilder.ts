@@ -46,7 +46,9 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
-  const actions = [
+  // The SDK's BundleAction type does not include 'flashloan', so we build a plain object
+  // and cast it to any when passing to getBundleData.
+  const actions: any[] = [
     {
       protocol: provider.protocol,
       action: 'flashloan',
@@ -84,13 +86,15 @@ export async function buildArbitrageBundle(
     actions: JSON.stringify(actions, null, 2),
   });
 
+  // Cast actions to any to bypass the incomplete SDK typings.
+  // The API accepts this structure as per Enso's documentation.
   const bundleData = await enso.getBundleData(
     {
       fromAddress,
       chainId,
       routingStrategy: 'router',
     },
-    actions
+    actions as any
   );
 
   log.info('✅ Enso bundle created', {
