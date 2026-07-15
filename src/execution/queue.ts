@@ -10,7 +10,7 @@ import { createLogger } from '../utils/logger';
 import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
 import { TOKENS, TokenInfo } from '../config/tokens';
 import { checkFlashLoanLiquidity, FlashLoanAvailability } from './liquidityChecker';
-import { deepInspect } from '../utils/diagnostics';
+import { logTokenEssentials } from '../utils/diagnostics';
 
 const log = createLogger('execution-queue');
 
@@ -32,19 +32,12 @@ const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.WBTC,
 ];
 
-/**
- * Per-scan-cycle cache of liquidity check results.
- */
 let liquidityCache = new Map<string, Promise<FlashLoanAvailability>>();
 
 function getCachedLiquidityCheck(token: TokenInfo, amount: string): Promise<FlashLoanAvailability> {
   const key = `${token.symbol}:${amount}`;
   const cached = liquidityCache.get(key);
-  if (cached) {
-    log.debug(`Using cached liquidity check for ${key}`);
-    return cached;
-  }
-  log.debug(`No cache for ${key}, performing fresh check`);
+  if (cached) return cached;
   const promise = checkFlashLoanLiquidity(token, amount);
   liquidityCache.set(key, promise);
   return promise;
@@ -54,7 +47,6 @@ function getTokenPriceUsd(token: TokenInfo, opp: EvaluatedOpportunity): number {
   if (token.symbol === 'USDC' || token.symbol === 'USDC.e' || token.symbol === 'USDT' || token.symbol === 'DAI') {
     return 1.0;
   }
-
   const priceMap: Record<string, number> = {
     'WMATIC': 0.5,
     'WETH': 3000,
@@ -70,24 +62,17 @@ export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[])
   }
 
   const ranked = rankExecutable(evaluated);
-
-  if (ranked.length === 0) {
-    return;
-  }
+  if (ranked.length === 0) return;
 
   const gasPrice = await provider.getGasPrice();
   const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-
   if (!checkGasPriceLimit(gasPriceGwei)) {
     log.warn('Gas price too high, skipping execution batch', { gasPriceGwei });
     return;
   }
 
-  // Fresh cache for this batch only
   liquidityCache = new Map();
-
   const dispatchable = ranked.slice(0, Math.max(0, 10));
-
   const STAGGER_MS = 250;
   const executions = dispatchable.map((opp, index) =>
     new Promise<void>((resolve) => {
@@ -96,7 +81,6 @@ export async function processOpportunityBatch(evaluated: EvaluatedOpportunity[])
       }, index * STAGGER_MS);
     })
   );
-
   await Promise.allSettled(executions);
 }
 
@@ -145,13 +129,13 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         .toString();
 
       const humanAmount = Number(flashLoanAmountRaw) / (10 ** candidate.decimals);
-      log.info(`🔁 Trying flash‑loan token: ${candidate.symbol} for pair ${opp.pair.id}`, {
+      log.info(`🔁 Trying flash‑loan token: ${candidate.symbol}`, {
+        pair: opp.pair.id,
         positionSizeUsd: opp.positionSizeUsd,
         priceUsd,
         amountInUnits,
         rawAmount: flashLoanAmountRaw,
         humanAmount: humanAmount.toFixed(candidate.decimals > 6 ? 4 : 2),
-        tokenAddress: candidate.address,
       });
 
       const liquidityCheck = await getCachedLiquidityCheck(candidate, flashLoanAmountRaw);
@@ -162,7 +146,7 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         continue;
       }
 
-      log.info(`✅ Token ${candidate.symbol} is available for flash loans on: ${liquidityCheck.availableProviders.join(', ')}`);
+      log.info(`✅ ${candidate.symbol} is available on: ${liquidityCheck.availableProviders.join(', ')}`);
 
       const built = await buildArbitrageLogics(
         opp,
@@ -183,11 +167,7 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
           txHash: result.txHash,
           gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
         });
-
-        log.info(`✅ Trade executed successfully with flash‑loan token ${candidate.symbol}`, {
-          pairId: opp.pair.id,
-          txHash: result.txHash,
-        });
+        log.info(`✅ Trade executed with ${candidate.symbol}`, { pairId: opp.pair.id, txHash: result.txHash });
         await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
         success = true;
         break;
@@ -204,18 +184,16 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
         (responseData?.message && responseData.message.includes('insufficient borrowing capacity'));
 
       if (isInsufficientCapacity) {
-        log.warn(`⏭️ Token ${candidate.symbol} is not flash‑loanable, trying next candidate...`, {
+        log.warn(`⏭️ ${candidate.symbol} not flash‑loanable, trying next...`, {
           pairId: opp.pair.id,
           error: errorMessage,
-          fullError: deepInspect(err, 'Error'),
         });
         lastError = err;
         continue;
       } else {
-        log.error(`❌ Fatal error with token ${candidate.symbol}, stopping`, {
+        log.error(`❌ Fatal error with ${candidate.symbol}, stopping`, {
           pairId: opp.pair.id,
           error: errorMessage,
-          fullError: deepInspect(err, 'Error'),
         });
         lastError = err;
         break;
@@ -228,11 +206,10 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
       ? (lastError?.response?.data?.message || lastError?.message || String(lastError))
       : 'All flash‑loan tokens failed';
     await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
-    log.warn('❌ Trade execution failed after trying all flash‑loan candidates', {
+    log.warn('❌ Trade failed after trying all candidates', {
       pairId: opp.pair.id,
       error: finalMessage,
       triedTokens,
-      lastError: deepInspect(lastError, 'LastError'),
     });
     await alertTradeFailed(opp.pair.id, finalMessage);
   }
