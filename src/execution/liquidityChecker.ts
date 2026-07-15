@@ -2,6 +2,7 @@ import * as api from '@protocolink/api';
 import { TokenInfo } from '../config/tokens';
 import { getChainId } from './protocolinkClient';
 import { createLogger } from '../utils/logger';
+import { deepInspect, logObjectStructure } from '../utils/diagnostics';
 
 const log = createLogger('liquidityChecker');
 
@@ -30,8 +31,11 @@ export async function checkFlashLoanLiquidity(
     rawAmount: amount,
     humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
   });
+  log.info('🔍 Input token full details', { token: deepInspect(token, 'InputToken') });
+  logObjectStructure(token, 'InputToken');
 
   async function testProvider(providerName: string, getQuoteFn: (matchedToken: any) => Promise<any>) {
+    const startTime = Date.now();
     log.info(`📡 Testing ${providerName} for ${token.symbol}`, {
       amount: amount,
       humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
@@ -40,6 +44,7 @@ export async function checkFlashLoanLiquidity(
     try {
       let tokenList: any[] = [];
       let matchedToken: any = null;
+      let listError: any = null;
 
       try {
         if (providerName === 'Aave V3') {
@@ -50,25 +55,34 @@ export async function checkFlashLoanLiquidity(
         log.info(`📋 ${providerName} token list received`, {
           count: tokenList?.length || 0,
           sample: tokenList?.slice(0, 3).map((t: any) => ({ symbol: t.symbol, address: t.address })),
+          // Log full list? We'll log it but it may be large.
+          fullList: deepInspect(tokenList, `${providerName}TokenList`),
         });
+        // Log the first token fully to see its shape
+        if (tokenList && tokenList.length > 0) {
+          log.info(`📋 ${providerName} first token full shape`, {
+            firstToken: deepInspect(tokenList[0], 'FirstToken'),
+          });
+          logObjectStructure(tokenList[0], `${providerName}FirstToken`);
+        }
 
-        // Use the ACTUAL token object the provider returned — not a
-        // reconstructed one — since Protocolink's flash-loan token
-        // objects may carry protocol-specific fields our own TokenInfo
-        // doesn't have. This is THE fix for "insufficient borrowing
-        // capacity" appearing on tokens with tens of millions of
-        // dollars in real, verified on-chain liquidity.
         matchedToken = tokenList.find(
           (t: any) => t.address.toLowerCase() === token.address.toLowerCase()
         );
         log.info(`🔎 Token ${token.symbol} matched object in ${providerName} list?`, {
           found: !!matchedToken,
           matchedTokenShape: matchedToken ? Object.keys(matchedToken) : null,
+          matchedTokenFull: matchedToken ? deepInspect(matchedToken, 'MatchedToken') : null,
         });
+        if (matchedToken) {
+          logObjectStructure(matchedToken, `MatchedToken-${providerName}`);
+        }
       } catch (listError: any) {
         log.warn(`⚠️ Failed to fetch ${providerName} token list`, {
           error: listError?.message || String(listError),
           responseData: listError?.response?.data,
+          stack: listError?.stack,
+          fullError: deepInspect(listError, 'ListError'),
         });
       }
 
@@ -79,22 +93,40 @@ export async function checkFlashLoanLiquidity(
         return;
       }
 
+      // Compare our token with the matched token
+      log.info(`🔍 Token comparison: our token vs provider's matched token`, {
+        ourToken: deepInspect(token, 'OurToken'),
+        matchedToken: deepInspect(matchedToken, 'MatchedToken'),
+        addressMatch: token.address.toLowerCase() === matchedToken.address.toLowerCase(),
+        decimalsMatch: token.decimals === matchedToken.decimals,
+        symbolMatch: token.symbol === matchedToken.symbol,
+      });
+
+      const request = { loans: [{ token: matchedToken, amount: amount }] };
       log.info(`📤 Requesting flash loan quotation from ${providerName}`, {
         token: token.symbol,
         tokenAddress: matchedToken.address,
         amount: amount,
         humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
+        chainId,
+        request: deepInspect(request, 'FlashLoanRequest'),
+        requestSize: JSON.stringify(request).length,
       });
 
       const quote = await getQuoteFn(matchedToken);
+      const duration = Date.now() - startTime;
 
       log.info(`✅ ${providerName} flash loan quotation succeeded`, {
         token: token.symbol,
         amount: amount,
+        humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
+        duration,
+        quote: deepInspect(quote, 'Quote'),
       });
 
       availableProviders.push(providerName);
     } catch (error: any) {
+      const duration = Date.now() - startTime;
       const errorMessage = error?.message || String(error);
       const responseData = error?.response?.data;
       const statusCode = error?.response?.status;
@@ -103,9 +135,19 @@ export async function checkFlashLoanLiquidity(
         token: token.symbol,
         amount: amount,
         humanAmount: humanAmount.toFixed(token.decimals > 6 ? 4 : 2),
+        duration,
         statusCode,
         errorMessage,
         responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData ?? {}),
+        stack: error?.stack,
+        code: error?.code,
+        config: error?.config,
+        request: error?.request,
+        headers: error?.response?.headers,
+        fullError: deepInspect(error, 'AxiosError'),
+        // Log all properties of the error
+        allProps: Reflect.ownKeys(error),
+        descriptors: Object.getOwnPropertyDescriptors(error),
       });
     }
   }
@@ -137,6 +179,7 @@ export async function checkFlashLoanLiquidity(
     isAvailable,
     availableProviders,
     reason: result.reason,
+    result: deepInspect(result, 'Result'),
   });
 
   return result;
