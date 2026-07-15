@@ -61,7 +61,7 @@ async function getMatchedFlashLoanToken(
         count: flashLoanTokenListCache[providerName]?.length || 0,
         fullList: deepInspect(flashLoanTokenListCache[providerName], `${providerName}TokenList`),
       });
-    } catch (err) {
+    } catch (err: any) {   // ✅ Fixed: typed as any
       log.warn(`Failed to fetch ${providerName} flash loan token list`, {
         error: err instanceof Error ? err.message : String(err),
         stack: err?.stack,
@@ -161,7 +161,7 @@ export async function buildArbitrageLogics(
       logObjectStructure(flashLoanLoanLogic, 'LoanLogic');
       logObjectStructure(flashLoanRepayLogic, 'RepayLogic');
       break;
-    } catch (err) {
+    } catch (err: any) {
       log.warn(`Failed to use ${provider.name} for flash loan, trying next`, {
         error: String(err),
         fullError: deepInspect(err, 'Error'),
