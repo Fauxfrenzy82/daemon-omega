@@ -34,10 +34,10 @@ function toProtocolinkToken(chainId: number, token: TokenInfo) {
   };
 }
 
-// Flash loan providers in priority order (Balancer V2 first, then Aave V3)
+// Priority: Aave V3 first (better liquidity for WMATIC/WETH), then Balancer V2
 const FLASH_LOAN_PROVIDERS = [
-  { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair?.(loans) },
   { name: 'Aave V3', getLogic: (loans: any[]) => api.protocols.aavev3?.newFlashLoanLogicPair?.(loans) },
+  { name: 'Balancer V2', getLogic: (loans: any[]) => api.protocols.balancerv2?.newFlashLoanLogicPair?.(loans) },
 ];
 
 export async function buildArbitrageLogics(
@@ -100,14 +100,14 @@ export async function buildArbitrageLogics(
 
   logics.push(flashLoanLoanLogic);
 
-  // --- FIX: Buy swap uses flashLoanToken (not opp.pair.quote) ---
+  // Buy swap: flashLoanToken -> base
   const buySource = opp.spreadOpp.buySource;
   const buyRequiresRequote = options.buyRequiresRequote || false;
   const buyResult = await buildSwapLogic(
     buySource,
     buyRequiresRequote,
-    flashLoanToken,          // ✅ borrow token
-    opp.pair.base,           // target token
+    flashLoanToken,
+    opp.pair.base,
     flashLoanAmountRaw,
     opp
   );
@@ -116,14 +116,14 @@ export async function buildArbitrageLogics(
   }
   logics.push(buyResult.logic);
 
-  // --- FIX: Sell swap outputs flashLoanToken (not opp.pair.quote) ---
+  // Sell swap: base -> flashLoanToken
   const sellSource = opp.spreadOpp.sellSource;
   const sellRequiresRequote = options.sellRequiresRequote || false;
   const sellResult = await buildSwapLogic(
     sellSource,
     sellRequiresRequote,
-    opp.pair.base,           // token we now hold
-    flashLoanToken,          // ✅ repay token
+    opp.pair.base,
+    flashLoanToken,
     buyResult.actualOutputAmount,
     opp
   );
@@ -160,7 +160,7 @@ export async function buildArbitrageLogics(
   };
 }
 
-// --- The rest of the file (buildSwapLogic) is unchanged ---
+// --- buildSwapLogic remains unchanged ---
 async function buildSwapLogic(
   source: string,
   requiresRequote: boolean,
