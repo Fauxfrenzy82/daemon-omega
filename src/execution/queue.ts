@@ -20,14 +20,15 @@ interface QueueState {
 
 const state: QueueState = { activeTrades: 0 };
 
+// Limit tokens to avoid hitting rate limits
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.DAI,
-  TOKENS.USDCe,
-  TOKENS.USDT,
   TOKENS.USDC,
   TOKENS.WMATIC,
-  TOKENS.WETH,
-  TOKENS.WBTC,
+  // TOKENS.USDCe,
+  // TOKENS.USDT,
+  // TOKENS.WETH,
+  // TOKENS.WBTC,
 ];
 
 function getTokenPriceUsd(token: TokenInfo): number {
@@ -41,6 +42,9 @@ function getTokenPriceUsd(token: TokenInfo): number {
   };
   return priceMap[token.symbol] || 0.01;
 }
+
+// Delay helper
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function processOpportunityBatch(
   evaluated: EvaluatedOpportunity[]
@@ -63,7 +67,7 @@ export async function processOpportunityBatch(
     return;
   }
 
-  const dispatchable = ranked.slice(0, 10);
+  const dispatchable = ranked.slice(0, 3); // Limit to 3 opportunities per batch
   const executions = dispatchable.map((opp) => dispatchOpportunity(opp));
   await Promise.allSettled(executions);
 }
@@ -163,12 +167,18 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
           error: errorMessage,
         });
         lastError = err;
+
+        // Delay to avoid hitting rate limits
+        await sleep(300);
       }
     }
 
     if (success) {
       break;
     }
+
+    // Delay between different tokens as well
+    await sleep(300);
   }
 
   if (!success) {
