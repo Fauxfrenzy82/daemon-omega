@@ -58,31 +58,28 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
-  // Using the SDK's own getBundleData(params, actions) — a TWO-argument
-  // call, not a single flattened object — instead of hand-built axios.
-  // Every prior attempt sent { fromAddress, chainId, routingStrategy,
-  // actions } as one flat JSON body via raw HTTP, and Enso rejected it
-  // with "fromAddress must be an Ethereum address" even when the
-  // address itself was independently verified correct (right length,
-  // valid hex, both lowercase and checksummed forms tried). The
-  // SDK's documented signature — getBundleData(params, actions) —
-  // takes params and actions as SEPARATE arguments, meaning the SDK
-  // very likely serializes the actual HTTP request differently than
-  // a flat merge, and Enso's backend schema validator may reject a
-  // flat body's structure entirely, surfacing a misleading first-field
-  // error rather than the real structural mismatch. Using the actual
-  // SDK method guarantees the request matches what Enso's team tests
-  // against, removing our own HTTP-layer guesswork from the equation.
   const bundleParams = {
     fromAddress,
     chainId,
     routingStrategy: 'router' as const,
   };
 
-  // ⚠️ Still unverified: whether useOutputOfCallAt indexes correctly
-  // into a flashloan's nested callback array. Check bundleData's
-  // route/simulation breakdown once a request succeeds, before
-  // trusting executed swap amounts at real position sizes.
+  // FIX: callback steps form their OWN independent index sequence,
+  // separate from the outer bundle's top-level actions. Confirmed via
+  // Enso's live getActions()/getActionsBySlug() schema: "callback"
+  // takes ActionToBundle[], and useOutputOfCallAt indexes into
+  // whichever action-list context it's evaluated in.
+  //
+  // The first callback step (buy swap) has NO prior callback action
+  // to reference — it must use the literal flashloanAmount directly,
+  // not { useOutputOfCallAt: 0 }, since index 0 IS this step itself.
+  // "No previous call found with index 0" was Enso correctly
+  // reporting exactly that: nothing exists yet at that point to
+  // reference.
+  //
+  // Only the SECOND callback step (sell swap) correctly uses
+  // { useOutputOfCallAt: 0 } — meaning "the output of callback step
+  // at index 0", which by then is the completed first swap.
   const actions = [
     {
       protocol: provider.protocol,
@@ -98,7 +95,7 @@ export async function buildArbitrageBundle(
             args: {
               tokenIn: flashLoanToken.address as `0x${string}`,
               tokenOut: opp.pair.base.address as `0x${string}`,
-              amountIn: { useOutputOfCallAt: 0 },
+              amountIn: flashLoanAmountRaw, // literal amount — this IS index 0, nothing to reference yet
               slippage: '100',
             },
           },
@@ -108,7 +105,7 @@ export async function buildArbitrageBundle(
             args: {
               tokenIn: opp.pair.base.address as `0x${string}`,
               tokenOut: flashLoanToken.address as `0x${string}`,
-              amountIn: { useOutputOfCallAt: 1 },
+              amountIn: { useOutputOfCallAt: 0 }, // output of callback step 0 (the buy swap above)
               slippage: '100',
             },
           },
