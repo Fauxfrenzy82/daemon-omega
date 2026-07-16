@@ -59,13 +59,13 @@ export function initEnsoClient(): EnsoClient {
   if (!ensoClient) {
     if (!env.ENSO_API_KEY) {
       throw new Error(
-        'ENSO_API_KEY is required. Get one from https://developers.enso.build'
+        'ENSO_API_KEY is required. Get one from https://developers.enso.finance'
       );
     }
     attachDiagnosticInterceptors();
     ensoClient = new EnsoClient({
       apiKey: env.ENSO_API_KEY,
-      baseURL: env.ENSO_BASE_URL, // Should be https://api.enso.build
+      baseURL: env.ENSO_BASE_URL, // Correct base is https://api.enso.finance — verified against official SDK docs, GitHub README, and live Swagger UI at api.enso.finance/api. The previous default (api.enso.build) does not match any documented or verifiable Enso endpoint.
     });
     log.info('Enso client initialized', { chainId: activeChain.chainId });
   }
