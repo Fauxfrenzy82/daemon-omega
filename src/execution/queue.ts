@@ -20,15 +20,10 @@ interface QueueState {
 
 const state: QueueState = { activeTrades: 0 };
 
-// Limit tokens to avoid hitting rate limits
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.DAI,
   TOKENS.USDC,
   TOKENS.WMATIC,
-  // TOKENS.USDCe,
-  // TOKENS.USDT,
-  // TOKENS.WETH,
-  // TOKENS.WBTC,
 ];
 
 function getTokenPriceUsd(token: TokenInfo): number {
@@ -43,7 +38,6 @@ function getTokenPriceUsd(token: TokenInfo): number {
   return priceMap[token.symbol] || 0.01;
 }
 
-// Delay helper
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function processOpportunityBatch(
@@ -67,7 +61,7 @@ export async function processOpportunityBatch(
     return;
   }
 
-  const dispatchable = ranked.slice(0, 3); // Limit to 3 opportunities per batch
+  const dispatchable = ranked.slice(0, 3);
   const executions = dispatchable.map((opp) => dispatchOpportunity(opp));
   await Promise.allSettled(executions);
 }
@@ -110,6 +104,21 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
   let success = false;
 
   for (const candidate of FLASH_LOAN_CANDIDATES) {
+    // FIX: skip any flashloan candidate whose token IS the pair's base
+    // token. Using WMATIC as the flashloan token for the WMATIC-USDC
+    // pair means the buy leg becomes WMATIC→WMATIC (flashLoanToken →
+    // opp.pair.base, both WMATIC) — a same-token swap with no real
+    // route, which is exactly the "No route found from 0x0d50...1270
+    // -> 0x0d50...1270" error seen repeatedly in logs. This candidate
+    // can never work for this pair by construction, so it's skipped
+    // before even attempting a quote or bundle build.
+    if (candidate.address.toLowerCase() === opp.pair.base.address.toLowerCase()) {
+      log.debug(`Skipping ${candidate.symbol} as flashloan token — matches pair base token`, {
+        pairId: opp.pair.id,
+      });
+      continue;
+    }
+
     const priceUsd = getTokenPriceUsd(candidate);
     const amountInUnits = opp.positionSizeUsd / priceUsd;
     const flashLoanAmountRaw = ethers.utils
@@ -167,8 +176,6 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
           error: errorMessage,
         });
         lastError = err;
-
-        // Delay to avoid hitting rate limits
         await sleep(300);
       }
     }
@@ -177,7 +184,6 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
       break;
     }
 
-    // Delay between different tokens as well
     await sleep(300);
   }
 
