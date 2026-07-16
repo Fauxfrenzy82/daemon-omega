@@ -1,3 +1,4 @@
+import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
 import { EvaluatedOpportunity } from '../profitability/evaluator';
 import { executionWallet } from '../treasury/wallets';
@@ -19,7 +20,6 @@ export interface FlashLoanProvider {
   protocol: 'aave-v3' | 'morpho-markets-v1' | 'balancer-v3' | 'uniswap-v3';
 }
 
-// Simple cache to avoid repeating the same request within 10 seconds
 const bundleCache = new Map<string, { data: any; timestamp: number }>();
 const CACHE_TTL_MS = 10000;
 
@@ -36,12 +36,18 @@ export async function buildArbitrageBundle(
   options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
 ): Promise<BuiltBundle> {
   const chainId = activeChain.chainId;
-  // ✅ FIX: Enso API expects lowercase addresses (not checksummed)
-  const fromAddress = executionWallet.address.toLowerCase() as `0x${string}`;
+
+  // Enso's docs (docs.enso.build) type fromAddress simply as a
+  // standard "Address" with no documented lowercase requirement. The
+  // previous .toLowerCase() call was an unverified assumption that
+  // directly caused every request to fail with "fromAddress must be
+  // an Ethereum address" — a properly EIP-55 checksummed address
+  // (mixed case, produced by ethers.utils.getAddress) is what Enso's
+  // backend validator actually appears to require.
+  const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
 
-  // Build cache key
   const cacheKey = `${provider.protocol}:${flashLoanToken.address}:${flashLoanAmountRaw}`;
   const cached = bundleCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -61,6 +67,11 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
+  // ⚠️ UNVERIFIED STRUCTURE — see prior note: no official Enso example
+  // shows useOutputOfCallAt indexing into a nested flashloan `callback`
+  // array the way this does. Verify actual executed swap amounts
+  // against bundleData once a request succeeds, before trusting this
+  // blindly at real position sizes.
   const actions = [
     {
       protocol: provider.protocol,
@@ -106,7 +117,7 @@ export async function buildArbitrageBundle(
     payload: JSON.stringify(requestBody, null, 2),
   });
 
-  const baseUrl = env.ENSO_BASE_URL || 'https://api.enso.build';
+  const baseUrl = env.ENSO_BASE_URL || 'https://api.enso.finance';
   const endpoint = `${baseUrl}/api/v1/shortcuts/bundle`;
 
   try {
