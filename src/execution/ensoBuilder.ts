@@ -26,9 +26,6 @@ const CACHE_TTL_MS = 10000;
 export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Aave V3', protocol: 'aave-v3' },
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
-  // Balancer and Uniswap often have lower liquidity; try them later if needed.
-  // { name: 'Balancer V3', protocol: 'balancer-v3' },
-  // { name: 'Uniswap V3', protocol: 'uniswap-v3' },
 ];
 
 export async function buildArbitrageBundle(
@@ -39,11 +36,12 @@ export async function buildArbitrageBundle(
   options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
 ): Promise<BuiltBundle> {
   const chainId = activeChain.chainId;
-  const fromAddress = executionWallet.address as `0x${string}`;
+  // ✅ FIX: Enso API expects lowercase addresses (not checksummed)
+  const fromAddress = executionWallet.address.toLowerCase() as `0x${string}`;
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
 
-  // Build a cache key
+  // Build cache key
   const cacheKey = `${provider.protocol}:${flashLoanToken.address}:${flashLoanAmountRaw}`;
   const cached = bundleCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -121,8 +119,6 @@ export async function buildArbitrageBundle(
     });
 
     const bundleData = response.data;
-
-    // Cache the successful response
     bundleCache.set(cacheKey, { data: bundleData, timestamp: Date.now() });
 
     log.info('✅ Enso bundle created (direct HTTP)', {
@@ -138,10 +134,15 @@ export async function buildArbitrageBundle(
       flashLoanToken,
     };
   } catch (error: any) {
-    // If we get a 429, cache the failure to avoid retrying immediately
     if (error?.response?.status === 429) {
       log.warn(`⏳ Rate limited for ${provider.name} / ${flashLoanToken.symbol}, caching failure for ${CACHE_TTL_MS}ms`);
       bundleCache.set(cacheKey, { data: null, timestamp: Date.now() });
+    } else {
+      log.error(`❌ Enso API error for ${provider.name} / ${flashLoanToken.symbol}`, {
+        status: error?.response?.status,
+        data: error?.response?.data,
+        message: error?.message,
+      });
     }
     throw error;
   }
