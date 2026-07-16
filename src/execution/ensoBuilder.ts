@@ -1,9 +1,10 @@
 import { TokenInfo } from '../config/tokens';
 import { EvaluatedOpportunity } from '../profitability/evaluator';
-import { getEnsoClient } from './ensoClient';
 import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
+import axios from 'axios';
+import { env } from '../config/env';
 
 const log = createLogger('ensoBuilder');
 
@@ -32,13 +33,12 @@ export async function buildArbitrageBundle(
   provider: FlashLoanProvider,
   options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
 ): Promise<BuiltBundle> {
-  const enso = getEnsoClient();
   const chainId = activeChain.chainId;
   const fromAddress = executionWallet.address as `0x${string}`;
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
 
-  log.info('💡 Building Enso flash‑loan bundle', {
+  log.info('💡 Building Enso flash‑loan bundle (direct HTTP)', {
     pair: opp.pair.id,
     flashLoanToken: flashLoanToken.symbol,
     provider: provider.name,
@@ -46,9 +46,8 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
-  // The SDK's BundleAction type does not include 'flashloan', so we build a plain object
-  // and cast it to any when passing to getBundleData.
-  const actions: any[] = [
+  // Build the actions array exactly as before
+  const actions = [
     {
       protocol: provider.protocol,
       action: 'flashloan',
@@ -82,25 +81,41 @@ export async function buildArbitrageBundle(
     },
   ];
 
-  log.debug('📦 Enso bundle actions', {
-    actions: JSON.stringify(actions, null, 2),
+  // Build the full request payload
+  const requestBody = {
+    fromAddress,
+    chainId,
+    routingStrategy: 'router',
+    actions,
+  };
+
+  log.debug('📦 Enso bundle payload', {
+    payload: JSON.stringify(requestBody, null, 2),
   });
 
-  // Cast actions to any to bypass the incomplete SDK typings.
-  // The API accepts this structure as per Enso's documentation.
-  const bundleData = await enso.getBundleData(
-    {
-      fromAddress,
-      chainId,
-      routingStrategy: 'router',
-    },
-    actions as any
-  );
+  // Determine the correct endpoint
+  // According to Enso docs: https://docs.enso.build/pages/build/reference/bundle
+  // The endpoint is POST /api/v1/shortcuts/bundle
+  const baseUrl = env.ENSO_BASE_URL || 'https://api.enso.build';
+  const endpoint = `${baseUrl}/api/v1/shortcuts/bundle`;
 
-  log.info('✅ Enso bundle created', {
+  log.info(`📤 POST ${endpoint}`);
+
+  const response = await axios.post(endpoint, requestBody, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${env.ENSO_API_KEY}`,
+    },
+    timeout: 15000,
+  });
+
+  const bundleData = response.data;
+
+  log.info('✅ Enso bundle created (direct HTTP)', {
     provider: provider.name,
     actionsCount: actions.length,
     hasTx: !!bundleData?.tx,
+    status: response.status,
   });
 
   return {
