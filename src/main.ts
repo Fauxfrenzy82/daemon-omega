@@ -1,6 +1,6 @@
 import { env } from './config/env';
 import { initSchema, closePool } from './db/client';
-import { initEnsoClient } from './execution/ensoClient';
+import { initEnsoClient, getEnsoClient } from './execution/ensoClient';
 import { startScanLoop, stopScanLoop } from './scanner/scanLoop';
 import { sweepAllProfitTokens } from './treasury/sweep';
 import { executionWallet } from './treasury/wallets';
@@ -85,6 +85,25 @@ async function bootstrap(): Promise<void> {
 
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
+
+  // ONE-TIME DIAGNOSTIC: dump Enso's own live schema for the
+  // flashloan action, straight from their API, rather than continuing
+  // to guess at the correct request shape from prose documentation.
+  // This directly answers what "callback" actually expects and
+  // whether a same-chain flashloan+swap sequence is even the intended
+  // use of this field. Safe to remove once the correct shape is known.
+  try {
+    const enso = getEnsoClient();
+    const aaveActions = await (enso as any).getActionsBySlug('aave-v3');
+    log.info('🔬 DIAGNOSTIC: aave-v3 actions schema', {
+      raw: JSON.stringify(aaveActions, null, 2),
+    });
+  } catch (err) {
+    log.warn('Diagnostic action-schema fetch failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   startScanLoop();
 
   const nativePrice = await getNativeUsdPriceWithRetry();
