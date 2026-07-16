@@ -2,7 +2,7 @@ import { SpreadOpportunity } from '../scanner/spreadCalculator';
 import { PairConfig } from '../config/pairs';
 import { estimateFullCost } from './feeModel';
 import { checkThresholds, ThresholdCheck } from './thresholds';
-import { assessSlippage, meetsLiquidityFloor } from '../scanner/liquidityCheck';
+import { meetsLiquidityFloor } from '../scanner/liquidityCheck';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 
@@ -25,9 +25,18 @@ export interface EvaluatedOpportunity {
 }
 
 /**
- * Sanity check: reject spreads that are obviously impossible (too large).
- * A 100% spread = 10,000 bps is impossible in liquid markets.
- * Reject anything above 1,000 bps (10%) as likely a decimal error.
+ * Sanity check: reject spreads that are obviously impossible.
+ * Real, sustained cross-DEX arb spreads on these pairs rarely exceed
+ * low hundreds of bps even in volatile moments; anything approaching
+ * 10% (1000 bps) is essentially always a bad quote (thin/mispriced
+ * pool), not a real opportunity. This catches the extreme cases
+ * (e.g. 95,971 bps DAI-USDC) but NOT more moderate noise like the
+ * observed 614 bps → 4.6 bps flip within 10 seconds on the same pair
+ * — that pattern indicates an unreliable underlying quote source
+ * (most likely a thin Uniswap V3 pool being selected), which must be
+ * fixed at the source (uniswapV3.ts), not here. This threshold is a
+ * backstop against extreme garbage, not a substitute for a reliable
+ * price source.
  */
 const MAX_SANE_SPREAD_BPS = 1000;
 
@@ -43,7 +52,6 @@ export async function evaluateOpportunity(
   const positionSizeUsd = Math.min(pair.maxPositionUsd, env.MAX_POSITION_SIZE_USD);
   const grossProfitUsd = positionSizeUsd * (spreadOpp.spreadBps / 10000);
 
-  // 🔴 Sanity check: reject impossible spreads
   if (spreadOpp.spreadBps > MAX_SANE_SPREAD_BPS) {
     log.error(`🚨 IMPOSSIBLE SPREAD DETECTED: ${spreadOpp.spreadBps} bps for ${pair.id}`, {
       spreadBps: spreadOpp.spreadBps,
@@ -56,7 +64,6 @@ export async function evaluateOpportunity(
       sellAmountIn: spreadOpp.sellQuote.amountIn,
       sellAmountOut: spreadOpp.sellQuote.amountOut,
     });
-    // Return a non-executable opportunity
     const thresholdCheck = checkThresholds(pair, spreadOpp.spreadBps, -999);
     return {
       pair,
@@ -80,29 +87,24 @@ export async function evaluateOpportunity(
 
   const thresholdCheck = checkThresholds(pair, spreadOpp.spreadBps, netProfitUsd);
 
-  let slippageOk = true;
-  let slippageReason = 'no slippage check';
-  if (options?.buyRequiresRequote || options?.sellRequiresRequote) {
-    slippageOk = true;
-    slippageReason = 'skipped (will re-quote)';
-  } else {
-    if (spreadOpp.buyQuote && spreadOpp.sellQuote) {
-      const buyAssessment = assessSlippage(
-        spreadOpp.buyQuote,
-        spreadOpp.buyQuote,
-        env.MAX_SLIPPAGE_BPS
-      );
-      const sellAssessment = assessSlippage(
-        spreadOpp.sellQuote,
-        spreadOpp.sellQuote,
-        env.MAX_SLIPPAGE_BPS
-      );
-      slippageOk = buyAssessment.sufficient && sellAssessment.sufficient;
-      if (!slippageOk) {
-        slippageReason = `buy=${buyAssessment.estSlippageBps.toFixed(1)} bps, sell=${sellAssessment.estSlippageBps.toFixed(1)} bps (max=${env.MAX_SLIPPAGE_BPS} bps)`;
-      }
-    }
-  }
+  // ⚠️ HONEST FLAG: this was previously a no-op "slippage check" —
+  // assessSlippage(spreadOpp.buyQuote, spreadOpp.buyQuote, ...) compared
+  // the same quote object to itself, which always yields zero
+  // difference, meaning slippageOk was unconditionally true whenever
+  // this branch ran. That gave the illusion of a safety check that
+  // was never actually protecting anything. Rather than leave that
+  // misleading behavior in place, it's disabled here and marked
+  // explicitly as not-yet-implemented. A real slippage check requires
+  // fetching a genuinely separate reference quote (e.g. a small
+  // fixed-size quote alongside the real position-size quote) to
+  // compare against — that plumbing doesn't exist yet anywhere in
+  // this pipeline. Until it does, slippageOk is left true (matching
+  // prior real-world behavior) but is no longer pretending to have
+  // verified anything.
+  const slippageOk = true;
+  const slippageReason = options?.buyRequiresRequote || options?.sellRequiresRequote
+    ? 'skipped (will re-quote)'
+    : 'not implemented — see comment in evaluator.ts';
 
   const liquidityOk =
     meetsLiquidityFloor(spreadOpp.buyQuote, positionSizeUsd) &&
@@ -120,9 +122,6 @@ export async function evaluateOpportunity(
       if (!thresholdCheck.passesProfit) {
         reasons.push(`net profit $${netProfitUsd.toFixed(4)} < $${thresholdCheck.minProfitUsd}`);
       }
-    }
-    if (!slippageOk) {
-      reasons.push(`slippage: ${slippageReason}`);
     }
     if (!liquidityOk) {
       reasons.push('insufficient liquidity');
@@ -150,6 +149,7 @@ export async function evaluateOpportunity(
       sellSource: spreadOpp.sellSource,
       buyRequiresRequote: options?.buyRequiresRequote || false,
       sellRequiresRequote: options?.sellRequiresRequote || false,
+      note: 'slippage not independently verified — see evaluator.ts',
     });
   }
 
