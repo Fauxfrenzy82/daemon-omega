@@ -72,7 +72,6 @@ async function bootstrap(): Promise<void> {
 
   await initSchema();
 
-  // Initialize Enso client
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
@@ -86,23 +85,40 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // ONE-TIME DIAGNOSTIC: dump Enso's own live schema for the
-  // flashloan action, straight from their API, rather than continuing
-  // to guess at the correct request shape from prose documentation.
-  // This directly answers what "callback" actually expects and
-  // whether a same-chain flashloan+swap sequence is even the intended
-  // use of this field. Safe to remove once the correct shape is known.
+  // ONE-TIME DIAGNOSTIC — deliberately loud and impossible to miss,
+  // using plain console.log with unique START/END markers so it can
+  // be found via a text search of the deploy log regardless of how
+  // the log viewer paginates or truncates. Prints Enso's own live
+  // action schemas rather than continuing to guess at request shape.
+  log.info('=================================================');
+  log.info('ENSO SCHEMA DIAGNOSTIC STARTING — SEARCH FOR ENSO_DIAGNOSTIC');
+  log.info('=================================================');
+
+  try {
+    const enso = getEnsoClient();
+    const allActions = await (enso as any).getActions();
+    console.log('ENSO_DIAGNOSTIC_ALL_ACTIONS_START');
+    console.log(JSON.stringify(allActions));
+    console.log('ENSO_DIAGNOSTIC_ALL_ACTIONS_END');
+  } catch (err) {
+    console.log('ENSO_DIAGNOSTIC_ALL_ACTIONS_ERROR');
+    console.log(String(err instanceof Error ? err.stack || err.message : err));
+  }
+
   try {
     const enso = getEnsoClient();
     const aaveActions = await (enso as any).getActionsBySlug('aave-v3');
-    log.info('🔬 DIAGNOSTIC: aave-v3 actions schema', {
-      raw: JSON.stringify(aaveActions, null, 2),
-    });
+    console.log('ENSO_DIAGNOSTIC_AAVE_ACTIONS_START');
+    console.log(JSON.stringify(aaveActions));
+    console.log('ENSO_DIAGNOSTIC_AAVE_ACTIONS_END');
   } catch (err) {
-    log.warn('Diagnostic action-schema fetch failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    console.log('ENSO_DIAGNOSTIC_AAVE_ACTIONS_ERROR');
+    console.log(String(err instanceof Error ? err.stack || err.message : err));
   }
+
+  log.info('=================================================');
+  log.info('ENSO SCHEMA DIAGNOSTIC COMPLETE');
+  log.info('=================================================');
 
   startScanLoop();
 
