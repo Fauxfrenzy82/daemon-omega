@@ -4,8 +4,7 @@ import { EvaluatedOpportunity } from '../profitability/evaluator';
 import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
-import axios from 'axios';
-import { env } from '../config/env';
+import { getEnsoClient } from './ensoClient';
 
 const log = createLogger('ensoBuilder');
 
@@ -36,14 +35,6 @@ export async function buildArbitrageBundle(
   options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
 ): Promise<BuiltBundle> {
   const chainId = activeChain.chainId;
-
-  // Enso's docs (docs.enso.build) type fromAddress simply as a
-  // standard "Address" with no documented lowercase requirement. The
-  // previous .toLowerCase() call was an unverified assumption that
-  // directly caused every request to fail with "fromAddress must be
-  // an Ethereum address" — a properly EIP-55 checksummed address
-  // (mixed case, produced by ethers.utils.getAddress) is what Enso's
-  // backend validator actually appears to require.
   const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
@@ -59,7 +50,7 @@ export async function buildArbitrageBundle(
     };
   }
 
-  log.info('💡 Building Enso flash‑loan bundle (direct HTTP)', {
+  log.info('💡 Building Enso flash‑loan bundle (via SDK)', {
     pair: opp.pair.id,
     flashLoanToken: flashLoanToken.symbol,
     provider: provider.name,
@@ -67,15 +58,35 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
-  // ⚠️ UNVERIFIED STRUCTURE — see prior note: no official Enso example
-  // shows useOutputOfCallAt indexing into a nested flashloan `callback`
-  // array the way this does. Verify actual executed swap amounts
-  // against bundleData once a request succeeds, before trusting this
-  // blindly at real position sizes.
+  // Using the SDK's own getBundleData(params, actions) — a TWO-argument
+  // call, not a single flattened object — instead of hand-built axios.
+  // Every prior attempt sent { fromAddress, chainId, routingStrategy,
+  // actions } as one flat JSON body via raw HTTP, and Enso rejected it
+  // with "fromAddress must be an Ethereum address" even when the
+  // address itself was independently verified correct (right length,
+  // valid hex, both lowercase and checksummed forms tried). The
+  // SDK's documented signature — getBundleData(params, actions) —
+  // takes params and actions as SEPARATE arguments, meaning the SDK
+  // very likely serializes the actual HTTP request differently than
+  // a flat merge, and Enso's backend schema validator may reject a
+  // flat body's structure entirely, surfacing a misleading first-field
+  // error rather than the real structural mismatch. Using the actual
+  // SDK method guarantees the request matches what Enso's team tests
+  // against, removing our own HTTP-layer guesswork from the equation.
+  const bundleParams = {
+    fromAddress,
+    chainId,
+    routingStrategy: 'router' as const,
+  };
+
+  // ⚠️ Still unverified: whether useOutputOfCallAt indexes correctly
+  // into a flashloan's nested callback array. Check bundleData's
+  // route/simulation breakdown once a request succeeds, before
+  // trusting executed swap amounts at real position sizes.
   const actions = [
     {
       protocol: provider.protocol,
-      action: 'flashloan',
+      action: 'flashloan' as const,
       args: {
         flashloanToken: flashLoanToken.address as `0x${string}`,
         flashloanAmount: flashLoanAmountRaw,
@@ -106,37 +117,21 @@ export async function buildArbitrageBundle(
     },
   ];
 
-  const requestBody = {
-    fromAddress,
-    chainId,
-    routingStrategy: 'router',
-    actions,
-  };
-
-  log.debug('📦 Enso bundle payload', {
-    payload: JSON.stringify(requestBody, null, 2),
+  log.debug('📦 Enso bundle params + actions', {
+    bundleParams: JSON.stringify(bundleParams, null, 2),
+    actions: JSON.stringify(actions, null, 2),
   });
 
-  const baseUrl = env.ENSO_BASE_URL || 'https://api.enso.finance';
-  const endpoint = `${baseUrl}/api/v1/shortcuts/bundle`;
-
   try {
-    const response = await axios.post(endpoint, requestBody, {
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.ENSO_API_KEY}`,
-      },
-      timeout: 15000,
-    });
+    const enso = getEnsoClient();
+    const bundleData = await enso.getBundleData(bundleParams, actions as any);
 
-    const bundleData = response.data;
     bundleCache.set(cacheKey, { data: bundleData, timestamp: Date.now() });
 
-    log.info('✅ Enso bundle created (direct HTTP)', {
+    log.info('✅ Enso bundle created (via SDK)', {
       provider: provider.name,
       actionsCount: actions.length,
-      hasTx: !!bundleData?.tx,
-      status: response.status,
+      hasTx: !!(bundleData as any)?.tx,
     });
 
     return {
@@ -145,13 +140,15 @@ export async function buildArbitrageBundle(
       flashLoanToken,
     };
   } catch (error: any) {
-    if (error?.response?.status === 429) {
+    const isEnsoApiError = error?.constructor?.name === 'EnsoApiError';
+    if (error?.statusCode === 429 || error?.response?.status === 429) {
       log.warn(`⏳ Rate limited for ${provider.name} / ${flashLoanToken.symbol}, caching failure for ${CACHE_TTL_MS}ms`);
       bundleCache.set(cacheKey, { data: null, timestamp: Date.now() });
     } else {
       log.error(`❌ Enso API error for ${provider.name} / ${flashLoanToken.symbol}`, {
-        status: error?.response?.status,
-        data: error?.response?.data,
+        isEnsoApiError,
+        statusCode: error?.statusCode || error?.response?.status,
+        responseData: error?.responseData || error?.response?.data,
         message: error?.message,
       });
     }
