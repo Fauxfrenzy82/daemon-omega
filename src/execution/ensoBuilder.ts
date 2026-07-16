@@ -19,11 +19,16 @@ export interface FlashLoanProvider {
   protocol: 'aave-v3' | 'morpho-markets-v1' | 'balancer-v3' | 'uniswap-v3';
 }
 
+// Simple cache to avoid repeating the same request within 10 seconds
+const bundleCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL_MS = 10000;
+
 export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Aave V3', protocol: 'aave-v3' },
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
-  { name: 'Balancer V3', protocol: 'balancer-v3' },
-  { name: 'Uniswap V3', protocol: 'uniswap-v3' },
+  // Balancer and Uniswap often have lower liquidity; try them later if needed.
+  // { name: 'Balancer V3', protocol: 'balancer-v3' },
+  // { name: 'Uniswap V3', protocol: 'uniswap-v3' },
 ];
 
 export async function buildArbitrageBundle(
@@ -38,6 +43,18 @@ export async function buildArbitrageBundle(
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
 
+  // Build a cache key
+  const cacheKey = `${provider.protocol}:${flashLoanToken.address}:${flashLoanAmountRaw}`;
+  const cached = bundleCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    log.info(`✅ Using cached bundle for ${provider.name} / ${flashLoanToken.symbol}`);
+    return {
+      bundleData: cached.data,
+      flashLoanAmount: flashLoanAmountRaw,
+      flashLoanToken,
+    };
+  }
+
   log.info('💡 Building Enso flash‑loan bundle (direct HTTP)', {
     pair: opp.pair.id,
     flashLoanToken: flashLoanToken.symbol,
@@ -46,7 +63,6 @@ export async function buildArbitrageBundle(
     chainId,
   });
 
-  // Build the actions array exactly as before
   const actions = [
     {
       protocol: provider.protocol,
@@ -81,7 +97,6 @@ export async function buildArbitrageBundle(
     },
   ];
 
-  // Build the full request payload
   const requestBody = {
     fromAddress,
     chainId,
@@ -93,34 +108,41 @@ export async function buildArbitrageBundle(
     payload: JSON.stringify(requestBody, null, 2),
   });
 
-  // Determine the correct endpoint
-  // According to Enso docs: https://docs.enso.build/pages/build/reference/bundle
-  // The endpoint is POST /api/v1/shortcuts/bundle
   const baseUrl = env.ENSO_BASE_URL || 'https://api.enso.build';
   const endpoint = `${baseUrl}/api/v1/shortcuts/bundle`;
 
-  log.info(`📤 POST ${endpoint}`);
+  try {
+    const response = await axios.post(endpoint, requestBody, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.ENSO_API_KEY}`,
+      },
+      timeout: 15000,
+    });
 
-  const response = await axios.post(endpoint, requestBody, {
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${env.ENSO_API_KEY}`,
-    },
-    timeout: 15000,
-  });
+    const bundleData = response.data;
 
-  const bundleData = response.data;
+    // Cache the successful response
+    bundleCache.set(cacheKey, { data: bundleData, timestamp: Date.now() });
 
-  log.info('✅ Enso bundle created (direct HTTP)', {
-    provider: provider.name,
-    actionsCount: actions.length,
-    hasTx: !!bundleData?.tx,
-    status: response.status,
-  });
+    log.info('✅ Enso bundle created (direct HTTP)', {
+      provider: provider.name,
+      actionsCount: actions.length,
+      hasTx: !!bundleData?.tx,
+      status: response.status,
+    });
 
-  return {
-    bundleData,
-    flashLoanAmount: flashLoanAmountRaw,
-    flashLoanToken,
-  };
+    return {
+      bundleData,
+      flashLoanAmount: flashLoanAmountRaw,
+      flashLoanToken,
+    };
+  } catch (error: any) {
+    // If we get a 429, cache the failure to avoid retrying immediately
+    if (error?.response?.status === 429) {
+      log.warn(`⏳ Rate limited for ${provider.name} / ${flashLoanToken.symbol}, caching failure for ${CACHE_TTL_MS}ms`);
+      bundleCache.set(cacheKey, { data: null, timestamp: Date.now() });
+    }
+    throw error;
+  }
 }
