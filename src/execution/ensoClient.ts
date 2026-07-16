@@ -63,9 +63,20 @@ export function initEnsoClient(): EnsoClient {
       );
     }
     attachDiagnosticInterceptors();
+
+    // No custom baseURL passed — every official Enso example
+    // (docs.enso.build, GitHub README, npm page) constructs
+    // EnsoClient with only { apiKey }. The prior attempt of manually
+    // supplying baseURL (first api.enso.build, then corrected to
+    // api.enso.finance) caused the SDK to skip its own internal
+    // /api/v1 path prefix entirely — visible in the last log as a
+    // request to the bare /shortcuts/bundle path with params
+    // serialized as a query string instead of a JSON body, a strong
+    // sign the custom baseURL bypassed the SDK's normal internal
+    // request construction. Letting the SDK use its own default
+    // should restore the correct path and POST-body behavior.
     ensoClient = new EnsoClient({
       apiKey: env.ENSO_API_KEY,
-      baseURL: env.ENSO_BASE_URL, // Correct base is https://api.enso.finance — verified against official SDK docs, GitHub README, and live Swagger UI at api.enso.finance/api. The previous default (api.enso.build) does not match any documented or verifiable Enso endpoint.
     });
     log.info('Enso client initialized', { chainId: activeChain.chainId });
   }
