@@ -24,6 +24,13 @@ const POOL_ABI = [
 
 const FEE_TIERS = [100, 500, 3000, 10000];
 
+// Maximum acceptable divergence between a tiny reference quote's implied
+// price and the real-size quote's implied price. A genuinely deep pool
+// should give nearly identical prices for a tiny trade vs a $500 trade;
+// large divergence means the pool is too thin at this size regardless
+// of its raw liquidity() value being nonzero.
+const MAX_PRICE_IMPACT_PCT = 5;
+
 const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 const quoter = new ethers.Contract(QUOTER_V2_ADDRESS, QUOTER_ABI, provider);
 const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, provider);
@@ -53,6 +60,22 @@ async function findBestPool(tokenA: string, tokenB: string): Promise<{ pool: str
   return candidates[0];
 }
 
+async function quoteExactInput(
+  tokenIn: string,
+  tokenOut: string,
+  amountIn: string,
+  fee: number
+): Promise<ethers.BigNumber> {
+  const result = await quoter.callStatic.quoteExactInputSingle({
+    tokenIn,
+    tokenOut,
+    amountIn,
+    fee,
+    sqrtPriceLimitX96: 0,
+  });
+  return result.amountOut;
+}
+
 export const uniswapV3Source: PriceSource = {
   name: 'uniswapv3',
   supportsExecution: true,
@@ -69,23 +92,65 @@ export const uniswapV3Source: PriceSource = {
         return null;
       }
 
-      const result = await withRetry(
-        () =>
-          quoter.callStatic.quoteExactInputSingle({
-            tokenIn: req.tokenIn.address,
-            tokenOut: req.tokenOut.address,
-            amountIn: req.amountIn,
-            fee: poolInfo.fee,
-            sqrtPriceLimitX96: 0,
-          }),
+      const amountOut = await withRetry(
+        () => quoteExactInput(req.tokenIn.address, req.tokenOut.address, req.amountIn, poolInfo.fee),
         { label: 'uniswapV3.quote', shouldRetry: isTransientError }
       );
-
-      const amountOut: ethers.BigNumber = result.amountOut;
 
       const amountInHuman = Number(ethers.utils.formatUnits(req.amountIn, req.tokenIn.decimals));
       const amountOutHuman = Number(ethers.utils.formatUnits(amountOut, req.tokenOut.decimals));
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
+
+      // Price-impact sanity check: compare against a tiny reference
+      // quote (1/1000th the real size) from the SAME pool. liquidity()
+      // only reflects virtual liquidity at the current tick, not full
+      // depth — a pool can report nonzero liquidity while still being
+      // far too thin for the real trade size, producing wildly wrong
+      // prices (e.g. 47 DAI returned for 500 USDC, ~90% off real value,
+      // seen in production logs). If the tiny quote's implied price
+      // diverges too much from the real quote's, this pool is rejected
+      // outright rather than silently used.
+      const referenceAmountIn = ethers.BigNumber.from(req.amountIn).div(1000);
+
+      if (referenceAmountIn.gt(0)) {
+        try {
+          const referenceAmountOut = await withRetry(
+            () => quoteExactInput(req.tokenIn.address, req.tokenOut.address, referenceAmountIn.toString(), poolInfo.fee),
+            { label: 'uniswapV3.referenceQuote', shouldRetry: isTransientError, retries: 1 }
+          );
+
+          const refAmountInHuman = Number(ethers.utils.formatUnits(referenceAmountIn, req.tokenIn.decimals));
+          const refAmountOutHuman = Number(ethers.utils.formatUnits(referenceAmountOut, req.tokenOut.decimals));
+          const referencePrice = refAmountInHuman > 0 ? refAmountOutHuman / refAmountInHuman : 0;
+
+          if (referencePrice > 0 && price > 0) {
+            const divergencePct = Math.abs((price - referencePrice) / referencePrice) * 100;
+
+            if (divergencePct > MAX_PRICE_IMPACT_PCT) {
+              log.warn('Rejecting quote: price impact too high, pool too thin for this size', {
+                tokenIn: req.tokenIn.symbol,
+                tokenOut: req.tokenOut.symbol,
+                pool: poolInfo.pool,
+                fee: poolInfo.fee,
+                realPrice: price,
+                referencePrice,
+                divergencePct: divergencePct.toFixed(2),
+              });
+              return null;
+            }
+          }
+        } catch (refErr) {
+          // If the reference quote itself fails, we can't validate —
+          // treat as a rejection rather than silently trusting the
+          // unverified real quote.
+          log.warn('Reference quote failed, cannot validate price impact, rejecting', {
+            tokenIn: req.tokenIn.symbol,
+            tokenOut: req.tokenOut.symbol,
+            error: refErr instanceof Error ? refErr.message : String(refErr),
+          });
+          return null;
+        }
+      }
 
       return {
         source: 'uniswapv3',
