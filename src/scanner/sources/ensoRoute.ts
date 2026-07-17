@@ -7,6 +7,20 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('ensoRoute-source');
 
+/**
+ * Prices swaps using Enso's own /shortcuts/route endpoint — the SAME
+ * routing engine that later builds and executes the actual flashloan
+ * bundle. Confirmed field name via live diagnostic: response includes
+ * amountOut, gas, priceImpact, minAmountOut, tx, and route.
+ *
+ * This replaces pricing via Uniswap V3 direct + ParaSwap's separate
+ * price API, which routinely disagreed with Enso's real execution by
+ * 100+ bps in production (e.g. scanner estimated +67 bps profit;
+ * Enso's actual execution came back -84 bps short, same pair, same
+ * moment). It also removes the ParaSwap dependency entirely, which
+ * has begun hard rate-limiting (429s) on every request as of this
+ * session — a second, independent problem this same change resolves.
+ */
 export const ensoRouteSource: PriceSource = {
   name: 'enso-route',
   supportsExecution: true,
@@ -34,12 +48,6 @@ export const ensoRouteSource: PriceSource = {
           retries: 1,
         }
       );
-
-      // TEMPORARY DIAGNOSTIC — remove once the real field name for the
-      // output amount is confirmed from a live response.
-      console.log('ENSO_ROUTE_DIAGNOSTIC_START');
-      console.log(JSON.stringify(routeData));
-      console.log('ENSO_ROUTE_DIAGNOSTIC_END');
 
       const amountOut = (routeData as any)?.amountOut;
       if (!amountOut) {
