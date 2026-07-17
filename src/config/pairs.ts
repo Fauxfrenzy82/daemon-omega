@@ -37,7 +37,7 @@ export const PAIRS: PairConfig[] = [
     minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
     minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
     maxPositionUsd: env.MAX_POSITION_SIZE_USD,
-    enabled: true,
+    enabled: false,
   },
   {
     id: 'USDCe-USDT',
