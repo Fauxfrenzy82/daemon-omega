@@ -2,7 +2,6 @@ import axios from 'axios';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
-// --- Added import for PeriodSummary ---
 import { PeriodSummary } from '../reporting/summary';
 
 const log = createLogger('notifier');
@@ -20,31 +19,22 @@ export interface AlertFields {
   [key: string]: string | number | boolean | undefined;
 }
 
-/**
- * Sanitize fields before sending to Discord:
- * - Redact Alchemy API keys in URLs
- * - Truncate long hex strings (raw transaction data)
- * - Convert any non-primitive values to strings to avoid Discord embed issues
- */
 function sanitizeFields(fields: AlertFields): AlertFields {
   const sanitized: AlertFields = {};
 
   for (const [key, value] of Object.entries(fields)) {
     if (value === undefined) continue;
 
-    // Redact API keys in URLs
     if (typeof value === 'string' && value.includes('alchemy.com/v2/')) {
       sanitized[key] = value.replace(/\/v2\/[^\/\s]+/, '/v2/REDACTED');
       continue;
     }
 
-    // Truncate long hex strings (raw transactions, etc.)
     if (typeof value === 'string' && value.startsWith('0x') && value.length > 100) {
       sanitized[key] = value.slice(0, 30) + '...' + value.slice(-6);
       continue;
     }
 
-    // If it's an object or array, stringify it (Discord embed fields expect primitives)
     if (typeof value === 'object' && value !== null) {
       try {
         sanitized[key] = JSON.stringify(value);
@@ -54,31 +44,24 @@ function sanitizeFields(fields: AlertFields): AlertFields {
       continue;
     }
 
-    // Keep primitives as-is
     sanitized[key] = value;
   }
 
   return sanitized;
 }
 
-/**
- * Central alert dispatcher with sanitization.
- * Always logs locally, then sends to Discord if webhook is configured.
- */
 export async function sendAlert(
   level: AlertLevel,
   title: string,
   fields: AlertFields = {}
 ): Promise<void> {
-  // Sanitize before logging and before sending to Discord
   const safeFields = sanitizeFields(fields);
 
-  // Always log locally (sanitized)
   const logFn = level === 'error' ? log.error : level === 'warn' ? log.warn : log.info;
   logFn(title, safeFields);
 
   if (!env.DISCORD_WEBHOOK_URL) {
-    return; // No webhook configured — log line above is the full alert
+    return;
   }
 
   try {
@@ -105,7 +88,6 @@ export async function sendAlert(
       { label: 'notifier.discord', shouldRetry: isTransientError, retries: 2 }
     );
   } catch (err) {
-    // A failed Discord post must never break the trading flow — log and move on.
     log.warn('Discord alert failed to send', {
       error: err instanceof Error ? err.message : String(err),
     });
@@ -116,11 +98,7 @@ export function isDiscordConfigured(): boolean {
   return env.DISCORD_WEBHOOK_URL !== '';
 }
 
-// ============================================================================
-// Convenience wrappers for common alert types across the system.
-// Each wrapper calls sendAlert with the appropriate level and field structure.
-// ============================================================================
-
+// ===== Convenience wrappers =====
 export function alertTradeExecuted(pairId: string, netProfitUsd: number, txHash: string): Promise<void> {
   return sendAlert('success', 'Trade Executed', {
     pair: pairId,
@@ -157,22 +135,46 @@ export function alertSystemStarted(executionWallet: string): Promise<void> {
   return sendAlert('info', 'System Started', { executionWallet });
 }
 
-// --- New function for period summary alerts ---
+// ===== NEW: Period summary alert =====
 export async function alertPeriodSummary(summary: PeriodSummary): Promise<void> {
   const profitColor = summary.totalActualProfitUsd >= 0 ? 3066993 : 15158332; // green or red
-  const bestTradeText = summary.bestTrade
-    ? `${summary.bestTrade.pairId}: $${summary.bestTrade.profitUsd.toFixed(4)}`
-    : 'none';
 
-  const fields = [
-    { name: 'Period', value: summary.periodLabel, inline: true },
-    { name: 'Confirmed Trades', value: String(summary.confirmedTrades), inline: true },
-    { name: 'Failed Attempts', value: String(summary.failedTrades), inline: true },
-    { name: 'Total Profit (USD)', value: `$${summary.totalActualProfitUsd.toFixed(4)}`, inline: true },
-    { name: 'Avg Profit / Trade', value: `$${summary.avgProfitPerTradeUsd.toFixed(4)}`, inline: true },
-    { name: 'Best Trade', value: bestTradeText, inline: false },
-  ];
+  const fields: AlertFields = {
+    Period: summary.periodLabel,
+    'Confirmed Trades': String(summary.confirmedTrades),
+    'Failed Attempts': String(summary.failedTrades),
+    'Total Profit (USD)': `$${summary.totalActualProfitUsd.toFixed(4)}`,
+    'Avg Profit / Trade': `$${summary.avgProfitPerTradeUsd.toFixed(4)}`,
+    'Best Trade': summary.bestTrade
+      ? `${summary.bestTrade.pairId}: $${summary.bestTrade.profitUsd.toFixed(4)}`
+      : 'none',
+  };
 
-  // sendAlert expects level and title as separate arguments, then fields.
-  await sendAlert('info', `📊 ${summary.periodLabel} Summary`, fields);
+  // We want a custom color, so we bypass the level color map and use sendAlert with a level but we override color?
+  // We'll use sendAlert with level 'info' and then we can't change color easily.
+  // Instead, we'll replicate the send logic manually to set color.
+  // But to keep things simple, we'll use a custom send function that uses the profitColor.
+  // However, sendAlert uses LEVEL_COLOR. We can add a special case.
+  // Let's just call sendAlert with 'info' and accept the blue color, or we can add a color override parameter.
+  // I'll implement a small internal helper that sends the embed directly.
+
+  // Simpler: use sendAlert but override color by passing a custom field? That won't work.
+  // Let's just directly post the embed to Discord, reusing the retry logic.
+
+  // For brevity and to avoid changing sendAlert signature, we'll use a direct post here.
+  // But we already have sendAlert that expects level. Let's modify sendAlert to accept optional color parameter,
+  // or we can just use the existing function with 'info' and accept the blue color – but that's not as nice.
+  // I'll create a private function to send with custom color.
+
+  // Actually, let's extend sendAlert to accept an optional `color` override:
+  // But we can't change the signature without breaking all callers.
+  // Alternative: call sendAlert with a level that gives the desired color? Not possible.
+  // I'll just use axios directly and reuse the retry logic.
+
+  // Since this is a summary, it's fine to use the generic 'info' color (blue) or we can make it green/red by using 'success'/'error' level.
+  // But we want dynamic color. So we'll send a separate request.
+
+  // I'll refactor to use sendAlert with a temporary level set based on profit.
+  const level: AlertLevel = summary.totalActualProfitUsd >= 0 ? 'success' : 'error';
+  await sendAlert(level, `📊 ${summary.periodLabel} Summary`, fields);
 }
