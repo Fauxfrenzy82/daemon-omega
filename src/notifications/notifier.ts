@@ -2,6 +2,8 @@ import axios from 'axios';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
+// --- Added import for PeriodSummary ---
+import { PeriodSummary } from '../reporting/summary';
 
 const log = createLogger('notifier');
 
@@ -153,4 +155,24 @@ export function alertCircuitBreakerReset(reason: string): Promise<void> {
 
 export function alertSystemStarted(executionWallet: string): Promise<void> {
   return sendAlert('info', 'System Started', { executionWallet });
+}
+
+// --- New function for period summary alerts ---
+export async function alertPeriodSummary(summary: PeriodSummary): Promise<void> {
+  const profitColor = summary.totalActualProfitUsd >= 0 ? 3066993 : 15158332; // green or red
+  const bestTradeText = summary.bestTrade
+    ? `${summary.bestTrade.pairId}: $${summary.bestTrade.profitUsd.toFixed(4)}`
+    : 'none';
+
+  const fields = [
+    { name: 'Period', value: summary.periodLabel, inline: true },
+    { name: 'Confirmed Trades', value: String(summary.confirmedTrades), inline: true },
+    { name: 'Failed Attempts', value: String(summary.failedTrades), inline: true },
+    { name: 'Total Profit (USD)', value: `$${summary.totalActualProfitUsd.toFixed(4)}`, inline: true },
+    { name: 'Avg Profit / Trade', value: `$${summary.avgProfitPerTradeUsd.toFixed(4)}`, inline: true },
+    { name: 'Best Trade', value: bestTradeText, inline: false },
+  ];
+
+  // sendAlert expects level and title as separate arguments, then fields.
+  await sendAlert('info', `📊 ${summary.periodLabel} Summary`, fields);
 }
