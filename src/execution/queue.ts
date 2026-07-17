@@ -1,5 +1,5 @@
 import { EvaluatedOpportunity, rankExecutable } from '../profitability/evaluator';
-import { buildArbitrageBundle, FLASH_LOAN_PROVIDERS } from './ensoBuilder';
+import { buildArbitrageBundle, FLASH_LOAN_PROVIDERS, FlashLoanProvider } from './ensoBuilder';
 import { executeBundle } from './ensoRouter';
 import { logOpportunity, logTrade, updateTradeStatus } from '../db/logger';
 import { isBreakerTripped } from '../risk/circuitBreaker';
@@ -9,6 +9,7 @@ import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 import { alertTradeExecuted, alertTradeFailed } from '../notifications/notifier';
 import { TOKENS, TokenInfo } from '../config/tokens';
+import { executionWallet } from '../treasury/wallets';
 
 const log = createLogger('execution-queue');
 
@@ -26,15 +27,21 @@ const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.WMATIC,
 ];
 
-// If more than this many ms have passed since the opportunity was
-// evaluated, discard it rather than attempt execution — the quote is
-// too likely to be stale. Production logs showed real repayment
-// shortfalls (Enso's own simulation) even on trades that passed the
-// evaluator's profit check, traced to 4-6+ seconds elapsing between
-// evaluation and the eventual successful (or exhausted) attempt due
-// to sequential, delayed flashloan-candidate retries. This is a hard
-// backstop independent of the parallelization fix below.
-const MAX_OPPORTUNITY_AGE_MS = 3000;
+// A single up-front guard: if the opportunity is already this old by
+// the time we're about to dispatch, don't bother — its quote is
+// almost certainly stale. Since every candidate×provider combination
+// now races in parallel (see below) rather than sequentially, actual
+// dispatch normally starts within milliseconds of evaluation, so this
+// is a generous safety net for abnormal delays (e.g. event-loop
+// backpressure), not a tight per-step timer like before.
+const MAX_OPPORTUNITY_AGE_MS = 5000;
+
+const ERC20_ABI = ['function balanceOf(address) view returns (uint256)'];
+
+async function getTokenBalance(token: TokenInfo): Promise<ethers.BigNumber> {
+  const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
+  return contract.balanceOf(executionWallet.address);
+}
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
@@ -70,20 +77,22 @@ export async function processOpportunityBatch(
   }
 
   const dispatchable = ranked.slice(0, 3);
-
-  // Dispatch all opportunities in this batch immediately and in
-  // parallel — no artificial stagger — since minimizing time between
-  // evaluation and execution attempt is now the primary lever against
-  // staleness-driven repayment shortfalls.
   const executions = dispatchable.map((opp) => dispatchOpportunity(opp));
   await Promise.allSettled(executions);
 }
 
-async function tryFlashLoanCandidate(
+interface AttemptResult {
+  txHash?: string;
+  gasUsed?: string;
+  providerName: string;
+  candidate: TokenInfo;
+}
+
+async function attemptOne(
   opp: EvaluatedOpportunity,
   candidate: TokenInfo,
-  tradeId: number
-): Promise<{ success: true; txHash?: string; gasUsed?: string; providerName: string; candidateSymbol: string } | { success: false; error: string }> {
+  provider: FlashLoanProvider
+): Promise<AttemptResult> {
   const priceUsd = getTokenPriceUsd(candidate);
   const amountInUnits = opp.positionSizeUsd / priceUsd;
   const flashLoanAmountRaw = ethers.utils
@@ -92,52 +101,34 @@ async function tryFlashLoanCandidate(
 
   const humanAmount = Number(flashLoanAmountRaw) / 10 ** candidate.decimals;
 
-  // Race all providers for this candidate token in parallel — take
-  // whichever succeeds first, rather than trying them one at a time
-  // with delays between. Promise.any resolves on the first fulfilled
-  // promise and only rejects if ALL of them reject.
-  const attempts = FLASH_LOAN_PROVIDERS.map(async (provider) => {
-    log.info(`🔁 Trying ${provider.name} flash loan with ${candidate.symbol}`, {
-      pair: opp.pair.id,
-      amount: humanAmount.toFixed(candidate.decimals > 6 ? 4 : 2),
-    });
-
-    const built = await buildArbitrageBundle(
-      opp,
-      candidate,
-      flashLoanAmountRaw,
-      provider,
-      {
-        buyRequiresRequote: opp.buyRequiresRequote || false,
-        sellRequiresRequote: opp.sellRequiresRequote || false,
-      }
-    );
-
-    const result = await executeBundle(built);
-
-    if (!result.success) {
-      throw new Error(`Execution failed: ${result.errorMessage}`);
-    }
-
-    return {
-      success: true as const,
-      txHash: result.txHash,
-      gasUsed: result.gasUsed,
-      providerName: provider.name,
-      candidateSymbol: candidate.symbol,
-    };
+  log.info(`🔁 Trying ${provider.name} flash loan with ${candidate.symbol}`, {
+    pair: opp.pair.id,
+    amount: humanAmount.toFixed(candidate.decimals > 6 ? 4 : 2),
   });
 
-  try {
-    const winner = await Promise.any(attempts);
-    return winner;
-  } catch (aggregateErr: any) {
-    // AggregateError from Promise.any — all providers failed for this
-    // candidate token. Surface the first underlying error for logging.
-    const firstError = aggregateErr?.errors?.[0];
-    const errorMessage = firstError?.message || aggregateErr?.message || String(aggregateErr);
-    return { success: false, error: errorMessage };
+  const built = await buildArbitrageBundle(
+    opp,
+    candidate,
+    flashLoanAmountRaw,
+    provider,
+    {
+      buyRequiresRequote: opp.buyRequiresRequote || false,
+      sellRequiresRequote: opp.sellRequiresRequote || false,
+    }
+  );
+
+  const result = await executeBundle(built);
+
+  if (!result.success) {
+    throw new Error(`Execution failed: ${result.errorMessage}`);
   }
+
+  return {
+    txHash: result.txHash,
+    gasUsed: result.gasUsed,
+    providerName: provider.name,
+    candidate,
+  };
 }
 
 async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
@@ -149,6 +140,16 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
   }
 
   const dispatchStartedAt = Date.now();
+  const ageAtDispatch = dispatchStartedAt - opp.evaluatedAt;
+  if (ageAtDispatch > MAX_OPPORTUNITY_AGE_MS) {
+    log.warn(`⏱️ Opportunity too stale to dispatch`, {
+      pairId: opp.pair.id,
+      ageAtDispatch,
+    });
+    await alertTradeFailed(opp.pair.id, `Discarded before dispatch, already ${ageAtDispatch}ms old`);
+    return;
+  }
+
   state.activeTrades += 1;
 
   const opportunityId = await logOpportunity({
@@ -175,53 +176,105 @@ async function dispatchOpportunity(opp: EvaluatedOpportunity): Promise<void> {
     expectedProfitUsd: opp.netProfitUsd,
   });
 
-  let lastError: string | null = null;
-  let success = false;
-
   const eligibleCandidates = FLASH_LOAN_CANDIDATES.filter(
     (candidate) => candidate.address.toLowerCase() !== opp.pair.base.address.toLowerCase()
   );
 
+  // Capture balances of every candidate token BEFORE any attempt, so
+  // whichever one ends up winning has a real "before" snapshot to
+  // diff against. This is what previously never existed — the
+  // reported profit was always the pre-trade estimate, never a
+  // measured outcome. Best-effort: if a balance read fails, that
+  // token just won't have an actual-profit figure available later.
+  const balancesBefore = new Map<string, ethers.BigNumber>();
+  await Promise.all(
+    eligibleCandidates.map(async (candidate) => {
+      try {
+        const bal = await getTokenBalance(candidate);
+        balancesBefore.set(candidate.symbol, bal);
+      } catch (err) {
+        log.debug('Failed to read pre-trade balance', {
+          token: candidate.symbol,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })
+  );
+
+  // Race EVERY candidate × provider combination simultaneously,
+  // instead of trying candidates one at a time with each candidate's
+  // providers also sequential. The prior sequential approach meant
+  // each candidate took ~1.7-2s (waiting for both providers to fail
+  // before moving on), so a 3000ms staleness cutoff only allowed
+  // ~1.5 candidates before aborting — starving WMATIC of any real
+  // chance and discarding otherwise-viable opportunities purely due
+  // to our own retry structure, not real market staleness. Full
+  // parallelization means total time-to-first-success (or
+  // time-to-know-everything-failed) is roughly one round-trip, not
+  // the sum of several.
+  const allAttempts: Promise<AttemptResult>[] = [];
   for (const candidate of eligibleCandidates) {
-    const elapsedMs = Date.now() - dispatchStartedAt;
-    if (elapsedMs > MAX_OPPORTUNITY_AGE_MS) {
-      lastError = `Opportunity discarded as stale after ${elapsedMs}ms (max ${MAX_OPPORTUNITY_AGE_MS}ms)`;
-      log.warn(`⏱️ Aborting further attempts — opportunity too stale`, {
-        pairId: opp.pair.id,
-        elapsedMs,
+    for (const flProvider of FLASH_LOAN_PROVIDERS) {
+      allAttempts.push(attemptOne(opp, candidate, flProvider));
+    }
+  }
+
+  let success = false;
+  let lastError: string | null = null;
+
+  try {
+    await updateTradeStatus(tradeId, 'submitted');
+    const winner = await Promise.any(allAttempts);
+
+    // Measure REAL, on-chain profit: balance of the winning token
+    // after the trade, minus its balance before. This replaces the
+    // pre-trade estimate as the number that gets logged and alerted
+    // — the estimate stays available in the opportunity log for
+    // comparison, but is no longer presented as the outcome.
+    let actualNetProfitUsd: number | null = null;
+    try {
+      const balanceAfter = await getTokenBalance(winner.candidate);
+      const before = balancesBefore.get(winner.candidate.symbol);
+      if (before) {
+        const deltaRaw = balanceAfter.sub(before);
+        const deltaHuman = Number(ethers.utils.formatUnits(deltaRaw, winner.candidate.decimals));
+        actualNetProfitUsd = deltaHuman * getTokenPriceUsd(winner.candidate);
+      }
+    } catch (balErr) {
+      log.warn('Failed to measure actual post-trade profit', {
+        error: balErr instanceof Error ? balErr.message : String(balErr),
       });
-      break;
     }
 
-    const result = await tryFlashLoanCandidate(opp, candidate, tradeId);
+    await updateTradeStatus(tradeId, 'confirmed', {
+      txHash: winner.txHash,
+      gasUsed: winner.gasUsed ? Number(winner.gasUsed) : undefined,
+      actualProfitUsd: actualNetProfitUsd ?? undefined,
+    });
 
-    if (result.success) {
-      await updateTradeStatus(tradeId, 'confirmed', {
-        txHash: result.txHash,
-        gasUsed: result.gasUsed ? Number(result.gasUsed) : undefined,
-      });
+    log.info(`✅ Trade executed with ${winner.providerName} / ${winner.candidate.symbol}`, {
+      pairId: opp.pair.id,
+      txHash: winner.txHash,
+      estimatedNetProfitUsd: opp.netProfitUsd.toFixed(4),
+      actualNetProfitUsd: actualNetProfitUsd !== null ? actualNetProfitUsd.toFixed(4) : 'unavailable',
+      totalElapsedMs: Date.now() - dispatchStartedAt,
+    });
 
-      log.info(`✅ Trade executed with ${result.providerName} / ${result.candidateSymbol}`, {
-        pairId: opp.pair.id,
-        txHash: result.txHash,
-        totalElapsedMs: Date.now() - dispatchStartedAt,
-      });
-      await alertTradeExecuted(opp.pair.id, opp.netProfitUsd, result.txHash ?? 'unknown');
-      success = true;
-      break;
-    } else {
-      log.warn(`❌ All providers failed for ${candidate.symbol}`, {
-        pairId: opp.pair.id,
-        error: result.error,
-      });
-      lastError = result.error;
-    }
+    await alertTradeExecuted(
+      opp.pair.id,
+      actualNetProfitUsd !== null ? actualNetProfitUsd : opp.netProfitUsd,
+      winner.txHash ?? 'unknown'
+    );
+    success = true;
+  } catch (aggregateErr: any) {
+    const firstError = aggregateErr?.errors?.[0];
+    lastError = firstError?.message || aggregateErr?.message || String(aggregateErr);
   }
 
   if (!success) {
     const finalMessage = lastError || 'All flash‑loan tokens and providers failed';
     await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
-    log.warn('❌ Trade failed after trying all candidates', {
+    log.warn('❌ Trade failed — all candidates/providers failed', {
       pairId: opp.pair.id,
       error: finalMessage,
       totalElapsedMs: Date.now() - dispatchStartedAt,
