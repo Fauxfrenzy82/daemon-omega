@@ -13,20 +13,28 @@ export const ESTIMATED_GAS_UNITS = {
 
 const AAVE_FLASHLOAN_FEE_BPS = 5;
 
-// RAISED from 25 to 200 bps based on real, measured data: the first
-// successfully executed trade (WBTC-USDC, $400 position, Morpho/USDC
-// flashloan) was logged as $0.8083 estimated net profit but the
-// wallet's actual on-chain balance increase was only $0.01 — a real
-// shortfall of ~200 bps, roughly 8x the previous buffer. Enso's real
-// route split across multiple pools (Uniswap V4, Ramses V3, and
-// others) rather than the simple two-source path our scanner models,
-// and each hop adds real slippage our pre-trade spread calculation
-// doesn't see. This is one data point, not a statistically robust
-// average — it should be revisited as more real trades complete and
-// logged (see queue.ts's new actual-profit measurement), but erring
-// toward a much larger buffer is the responsible choice until there's
-// enough real data to calibrate this more precisely.
-const ESTIMATED_SLIPPAGE_BUFFER_BPS = 200;
+// LOWERED from 200 to 50 bps. The 200 bps figure came from a single
+// real trade (WBTC-USDC, $400, routed through Uniswap V4 + Ramses V3
+// + others) and was being applied as a flat tax to every pair
+// regardless of its actual route complexity — this was filtering out
+// genuinely strong opportunities (e.g. WBTC-USDC repeatedly showing
+// 48-50 bps real spread, $4.90 gross profit, rejected every cycle
+// solely by this buffer) before they ever got a chance to reach
+// Enso's real simulation.
+//
+// The correct division of labor: this evaluator is a CHEAP PRE-FILTER
+// to avoid wasting API calls on obviously-hopeless spreads (near-zero
+// bps), not a precise profit predictor — Enso's own flashloan
+// repayment check already IS the accurate, real-time simulator (it
+// caught every genuinely-unprofitable attempt this session with
+// correct on-chain math). A pre-filter that's too aggressive costs
+// real opportunities; one that's too loose costs a few wasted API
+# calls on attempts Enso itself will correctly reject. The latter is
+// the safer failure mode. 50 bps is set to comfortably clear the
+// Aave fee (5 bps) plus a reasonable single-hop slippage margin,
+// while still letting genuine 25+ bps spreads through to Enso, where
+// they'll be validated for real.
+const ESTIMATED_SLIPPAGE_BUFFER_BPS = 50;
 
 export interface GasCostEstimate {
   gasPriceGwei: number;
