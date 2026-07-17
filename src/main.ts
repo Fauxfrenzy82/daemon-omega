@@ -4,13 +4,17 @@ import { initEnsoClient, getEnsoClient } from './execution/ensoClient';
 import { startScanLoop, stopScanLoop } from './scanner/scanLoop';
 import { sweepAllProfitTokens } from './treasury/sweep';
 import { executionWallet } from './treasury/wallets';
-import { alertSystemStarted, isDiscordConfigured } from './notifications/notifier';
+import { alertSystemStarted, isDiscordConfigured, alertPeriodSummary } from './notifications/notifier';
 import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
+// --- Added imports for summary generation ---
+import { getHourlySummary, getDailySummary } from './reporting/summary';
 
 const log = createLogger('main');
 
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const HOURLY_SUMMARY_MS = 60 * 60 * 1000;
+const DAILY_SUMMARY_MS = 24 * 60 * 60 * 1000;
 
 async function getPolUsdPrice(): Promise<number> {
   try {
@@ -125,6 +129,7 @@ async function bootstrap(): Promise<void> {
   const nativePrice = await getNativeUsdPriceWithRetry();
   log.info('Initial native token price fetched', { nativePrice });
 
+  // Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await getNativeUsdPriceWithRetry();
@@ -135,6 +140,30 @@ async function bootstrap(): Promise<void> {
       });
     }
   }, SWEEP_INTERVAL_MS);
+
+  // --- Hourly summary interval ---
+  setInterval(async () => {
+    try {
+      const summary = await getHourlySummary();
+      await alertPeriodSummary(summary);
+    } catch (err) {
+      log.error('Hourly summary failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, HOURLY_SUMMARY_MS);
+
+  // --- Daily summary interval ---
+  setInterval(async () => {
+    try {
+      const summary = await getDailySummary();
+      await alertPeriodSummary(summary);
+    } catch (err) {
+      log.error('Daily summary failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, DAILY_SUMMARY_MS);
 
   log.info('System running');
 }
