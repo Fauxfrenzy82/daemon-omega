@@ -1,6 +1,6 @@
 import { env } from './config/env';
 import { initSchema, closePool } from './db/client';
-import { initEnsoClient, getEnsoClient } from './execution/ensoClient';
+import { initEnsoClient } from './execution/ensoClient';
 import { startScanLoop, stopScanLoop } from './scanner/scanLoop';
 import { sweepAllProfitTokens } from './treasury/sweep';
 import { executionWallet } from './treasury/wallets';
@@ -8,10 +8,6 @@ import { alertSystemStarted, isDiscordConfigured, alertPeriodSummary } from './n
 import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
-
-// --- NEW imports for Enso route test ---
-import { ensoRouteSource } from './scanner/sources/ensoRoute';
-import { TOKENS } from './config/tokens';
 
 const log = createLogger('main');
 
@@ -92,64 +88,11 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // --- Enso schema diagnostic (existing) ---
-  log.info('=================================================');
-  log.info('ENSO SCHEMA DIAGNOSTIC STARTING — SEARCH FOR ENSO_DIAGNOSTIC');
-  log.info('=================================================');
-
-  try {
-    const enso = getEnsoClient();
-    const allActions = await (enso as any).getActions();
-    console.log('ENSO_DIAGNOSTIC_ALL_ACTIONS_START');
-    console.log(JSON.stringify(allActions));
-    console.log('ENSO_DIAGNOSTIC_ALL_ACTIONS_END');
-  } catch (err) {
-    console.log('ENSO_DIAGNOSTIC_ALL_ACTIONS_ERROR');
-    console.log(String(err instanceof Error ? err.stack || err.message : err));
-  }
-
-  try {
-    const enso = getEnsoClient();
-    const aaveActions = await (enso as any).getActionsBySlug('aave-v3');
-    console.log('ENSO_DIAGNOSTIC_AAVE_ACTIONS_START');
-    console.log(JSON.stringify(aaveActions));
-    console.log('ENSO_DIAGNOSTIC_AAVE_ACTIONS_END');
-  } catch (err) {
-    console.log('ENSO_DIAGNOSTIC_AAVE_ACTIONS_ERROR');
-    console.log(String(err instanceof Error ? err.stack || err.message : err));
-  }
-
-  log.info('=================================================');
-  log.info('ENSO SCHEMA DIAGNOSTIC COMPLETE');
-  log.info('=================================================');
-
-  // --- NEW: Enso route test (one‑time, isolated) ---
-  log.info('=================================================');
-  log.info('ENSO ROUTE TEST STARTING — SEARCH FOR ENSO_ROUTE_DIAGNOSTIC');
-  log.info('=================================================');
-
-  try {
-    await ensoRouteSource.getQuote({
-      tokenIn: TOKENS.USDC,
-      tokenOut: TOKENS.WBTC,
-      amountIn: '1000000000', // 1000 USDC, matching your current test size
-    });
-  } catch (err) {
-    log.error('Enso route test call failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  log.info('=================================================');
-  log.info('ENSO ROUTE TEST COMPLETE');
-  log.info('=================================================');
-
   startScanLoop();
 
   const nativePrice = await getNativeUsdPriceWithRetry();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await getNativeUsdPriceWithRetry();
@@ -161,7 +104,6 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
-  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -173,7 +115,6 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
-  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
