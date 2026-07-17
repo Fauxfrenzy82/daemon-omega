@@ -9,6 +9,10 @@ import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 
+// --- NEW imports for Enso route test ---
+import { ensoRouteSource } from './scanner/sources/ensoRoute';
+import { TOKENS } from './config/tokens';
+
 const log = createLogger('main');
 
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
@@ -88,7 +92,7 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // ENSO DIAGNOSTIC
+  // --- Enso schema diagnostic (existing) ---
   log.info('=================================================');
   log.info('ENSO SCHEMA DIAGNOSTIC STARTING — SEARCH FOR ENSO_DIAGNOSTIC');
   log.info('=================================================');
@@ -117,6 +121,27 @@ async function bootstrap(): Promise<void> {
 
   log.info('=================================================');
   log.info('ENSO SCHEMA DIAGNOSTIC COMPLETE');
+  log.info('=================================================');
+
+  // --- NEW: Enso route test (one‑time, isolated) ---
+  log.info('=================================================');
+  log.info('ENSO ROUTE TEST STARTING — SEARCH FOR ENSO_ROUTE_DIAGNOSTIC');
+  log.info('=================================================');
+
+  try {
+    await ensoRouteSource.getQuote({
+      tokenIn: TOKENS.USDC,
+      tokenOut: TOKENS.WBTC,
+      amountIn: '1000000000', // 1000 USDC, matching your current test size
+    });
+  } catch (err) {
+    log.error('Enso route test call failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  log.info('=================================================');
+  log.info('ENSO ROUTE TEST COMPLETE');
   log.info('=================================================');
 
   startScanLoop();
