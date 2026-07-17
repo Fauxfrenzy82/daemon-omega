@@ -34,7 +34,7 @@ const AAVE_FLASHLOAN_FEE_BPS = 5;
 // Aave fee (5 bps) plus a reasonable single-hop slippage margin,
 // while still letting genuine 25+ bps spreads through to Enso, where
 // they'll be validated for real.
-const ESTIMATED_SLIPPAGE_BUFFER_BPS = 20;
+const ESTIMATED_SLIPPAGE_BUFFER_BPS = 12;
 
 export interface GasCostEstimate {
   gasPriceGwei: number;
