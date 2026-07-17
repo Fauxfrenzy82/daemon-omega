@@ -7,7 +7,6 @@ import { executionWallet } from './treasury/wallets';
 import { alertSystemStarted, isDiscordConfigured, alertPeriodSummary } from './notifications/notifier';
 import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
-// --- Added imports for summary generation ---
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 
 const log = createLogger('main');
@@ -89,11 +88,7 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // ONE-TIME DIAGNOSTIC — deliberately loud and impossible to miss,
-  // using plain console.log with unique START/END markers so it can
-  // be found via a text search of the deploy log regardless of how
-  // the log viewer paginates or truncates. Prints Enso's own live
-  // action schemas rather than continuing to guess at request shape.
+  // ENSO DIAGNOSTIC
   log.info('=================================================');
   log.info('ENSO SCHEMA DIAGNOSTIC STARTING — SEARCH FOR ENSO_DIAGNOSTIC');
   log.info('=================================================');
@@ -141,7 +136,7 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
-  // --- Hourly summary interval ---
+  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -153,7 +148,7 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
-  // --- Daily summary interval ---
+  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
