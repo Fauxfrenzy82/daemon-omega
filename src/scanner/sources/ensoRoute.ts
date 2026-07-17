@@ -15,7 +15,7 @@ export const ensoRouteSource: PriceSource = {
     try {
       const enso = getEnsoClient();
       const chainId = activeChain.chainId;
-      const fromAddress = executionWallet.address;
+      const fromAddress = executionWallet.address as `0x${string}`;
 
       const routeData = await withRetry(
         () =>
@@ -23,8 +23,8 @@ export const ensoRouteSource: PriceSource = {
             fromAddress,
             chainId,
             amountIn: [req.amountIn],
-            tokenIn: [req.tokenIn.address],
-            tokenOut: [req.tokenOut.address],
+            tokenIn: [req.tokenIn.address as `0x${string}`],
+            tokenOut: [req.tokenOut.address as `0x${string}`],
             slippage: '100',
             routingStrategy: 'router',
           }),
@@ -36,10 +36,7 @@ export const ensoRouteSource: PriceSource = {
       );
 
       // TEMPORARY DIAGNOSTIC — remove once the real field name for the
-      // output amount is confirmed from a live response. Printed via
-      // plain console.log with a unique marker so it's easy to find
-      // and grep in the deploy log, same pattern as the earlier Enso
-      // schema diagnostic that worked well.
+      // output amount is confirmed from a live response.
       console.log('ENSO_ROUTE_DIAGNOSTIC_START');
       console.log(JSON.stringify(routeData));
       console.log('ENSO_ROUTE_DIAGNOSTIC_END');
