@@ -3,7 +3,6 @@ import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { ensoRouteSource } from './sources/ensoRoute';
 import { PriceSource, QuoteResult } from './priceSource';
-import { findBestSpread } from './spreadCalculator';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
 import { processOpportunityBatch } from '../execution/queue';
 import { hasExecutionCapacity } from '../execution/concurrency';
@@ -14,23 +13,6 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-// paraswapV5Source and uniswapV3Source REMOVED, replaced with
-// ensoRouteSource. Root cause: those two sources priced trades using
-// independent systems (Uniswap V3's direct on-chain quoter + Velora/
-// ParaSwap's separate price API) that routinely disagreed with what
-// Enso's own execution engine actually delivered — by 100+ bps in
-// production, on the same pair, same moment (scanner said +67 bps
-// profit, Enso's real execution came back -84 bps short). Since Enso
-// is what actually executes every trade, pricing with Enso's own
-// /shortcuts/route endpoint (same routing engine) closes that gap by
-// construction. This also removes the ParaSwap dependency entirely,
-// which has separately begun hard rate-limiting (429s on every
-// request) as of this session — a second, independent problem this
-// same change resolves.
-//
-// NOTE: findBestSpread() requires at least 2 quotes per pair to
-// compute a spread — with a single source, that comparison no longer
-// applies the same way. See scanPair() below for the adjusted logic.
 const SOURCES: PriceSource[] = [
   ensoRouteSource,
 ];
@@ -42,36 +24,6 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
 }
 
-async function getQuotesForPair(pair: PairConfig): Promise<QuoteResult[]> {
-  const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
-
-  const requests = SOURCES.map((source) =>
-    source.getQuote({
-      tokenIn: pair.quote,
-      tokenOut: pair.base,
-      amountIn: positionRaw,
-    }).catch((err) => {
-      log.debug('Source quote threw', { source: source.name, pairId: pair.id, error: String(err) });
-      return null;
-    })
-  );
-
-  const results = await Promise.all(requests);
-  return results.filter((r): r is QuoteResult => r !== null);
-}
-
-/**
- * With a single price source (Enso route), there is no cross-source
- * spread to compute in the old sense — Enso's quote IS the real,
- * executable price. Instead of comparing two sources' prices against
- * each other, this fetches the buy-leg quote (quote->base) and the
- * sell-leg quote (base->quote) from Enso separately, and treats a
- * round-trip that returns MORE than it started with (accounting for
- * fees) as the opportunity signal — this is the actual, real
- * arbitrage condition (buy low here, sell high there, within Enso's
- * own aggregated liquidity across many DEXs), rather than a
- * synthetic cross-source spread that never matched execution reality.
- */
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
 
@@ -82,6 +34,10 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   });
 
   if (!buyQuote) {
+    log.info(`⛔ ${pair.id}: buy-leg quote failed (quote->base)`, {
+      tokenIn: pair.quote.symbol,
+      tokenOut: pair.base.symbol,
+    });
     return null;
   }
 
@@ -92,17 +48,32 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   });
 
   if (!sellQuote) {
+    log.info(`⛔ ${pair.id}: sell-leg quote failed (base->quote)`, {
+      tokenIn: pair.base.symbol,
+      tokenOut: pair.quote.symbol,
+      buyAmountOut: buyQuote.amountOut,
+    });
     return null;
   }
 
   const startAmount = Number(positionRaw) / 10 ** pair.quote.decimals;
   const endAmount = Number(sellQuote.amountOut) / 10 ** pair.quote.decimals;
+  const spreadBps = ((endAmount - startAmount) / startAmount) * 10000;
 
   if (endAmount <= startAmount) {
-    return null; // round trip loses money before any fee/gas is even considered
+    log.info(`📉 ${pair.id}: round trip unprofitable before fees`, {
+      startAmount: startAmount.toFixed(4),
+      endAmount: endAmount.toFixed(4),
+      spreadBps: spreadBps.toFixed(2),
+    });
+    return null;
   }
 
-  const spreadBps = ((endAmount - startAmount) / startAmount) * 10000;
+  log.info(`📈 ${pair.id}: round trip positive before fees`, {
+    startAmount: startAmount.toFixed(4),
+    endAmount: endAmount.toFixed(4),
+    spreadBps: spreadBps.toFixed(2),
+  });
 
   const spreadOpp = {
     pairId: pair.id,
@@ -162,17 +133,4 @@ export function startScanLoop(): void {
 
   loopHandle = setInterval(() => {
     runScanCycle().catch((err) => {
-      log.error('Scan cycle threw an unhandled error', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-  }, env.SCAN_INTERVAL_MS);
-}
-
-export function stopScanLoop(): void {
-  if (loopHandle) {
-    clearInterval(loopHandle);
-    loopHandle = null;
-    log.info('Scan loop stopped');
-  }
-}
+      log.err
