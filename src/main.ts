@@ -97,29 +97,30 @@ async function bootstrap(): Promise<void> {
   log.info('ENSO PROTOCOL SLUG TEST STARTING — SEARCH FOR ENSO_SLUG_DIAGNOSTIC');
   log.info('=================================================');
 
+  // Already confirmed real from the prior run — not retested here.
+  // CONFIRMED: uniswap-v2, uniswap-v3, sushiswap-v2, sushiswap-v3
+  // CONFIRMED ABSENT: quickswap (clean "Invalid protocol slug" response)
+  //
+  // Everything below hit a 429 last time before getting a real answer —
+  // genuinely untested, not confirmed absent. Retesting with a delay
+  // between each call this time.
   const CANDIDATE_SLUGS = [
-    // Uniswap variants
-    'uniswap-v2', 'uniswap-v3',
-    // QuickSwap variants
-    'quickswap', 'quickswap-v2', 'quickswap-v3',
-    // SushiSwap variants
-    'sushiswap', 'sushiswap-v2', 'sushiswap-v3',
-    // Other Polygon DEXs seen in earlier ParaSwap route dumps
-    'dodo', 'dodo-v2',
-    'balancer', 'balancer-v2',
-    'woofi', 'woofi-v2',
+    'quickswap-v2', 'quickswap-v3', 'quick-swap', 'quickswap-uni-v2', 'quickswap-uni-v3',
+    'dodo', 'dodo-v2', 'dodoex', 'dodo-v3',
+    'balancer', 'balancer-v2', 'balancer-v3',
+    'woofi', 'woofi-v2', 'woo-fi',
     'curve',
     'iron', 'iron-v2', 'ironswap',
-    'kyberswap', 'kyberswap-elastic',
+    'kyberswap', 'kyberswap-elastic', 'kyberswap-classic',
     'ramses', 'ramses-v3',
-    // Flashloan providers already confirmed working, included as a
-    // sanity check that the test itself is functioning correctly
     'aave-v3', 'morpho', 'morpho-markets-v1',
   ];
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
   const confirmedSlugs: string[] = [];
   const emptySlugs: string[] = [];
-  const erroredSlugs: string[] = [];
+  const erroredSlugs: { slug: string; error: string }[] = [];
 
   for (const slug of CANDIDATE_SLUGS) {
     try {
@@ -133,9 +134,13 @@ async function bootstrap(): Promise<void> {
         console.log(`ENSO_SLUG_DIAGNOSTIC_EMPTY: ${slug}`);
       }
     } catch (err) {
-      erroredSlugs.push(slug);
-      console.log(`ENSO_SLUG_DIAGNOSTIC_ERROR: ${slug} -> ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      erroredSlugs.push({ slug, error: message });
+      console.log(`ENSO_SLUG_DIAGNOSTIC_ERROR: ${slug} -> ${message}`);
     }
+
+    // Pace requests to avoid the 429 that swallowed most of the last run.
+    await sleep(600);
   }
 
   console.log('ENSO_SLUG_DIAGNOSTIC_SUMMARY_START');
