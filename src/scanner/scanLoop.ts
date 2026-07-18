@@ -13,14 +13,14 @@ import { recordScanCycle } from '../utils/healthServer';
 
 const log = createLogger('scanLoop');
 
-const SOURCES: PriceSource[] = [
-  ensoRouteSource,
-];
+const SOURCES: PriceSource[] = [ensoRouteSource];
 
 let cachedNativeUsdPrice = 0.5;
 
 function toRawAmount(amountHuman: number, token: TokenInfo): string {
-  if (amountHuman <= 0) return '0';
+  if (amountHuman <= 0) {
+    return '0';
+  }
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
 }
 
@@ -34,7 +34,8 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   });
 
   if (!buyQuote) {
-    log.info(`⛔ ${pair.id}: buy-leg quote failed (quote->base)`, {
+    log.info('SCAN_FAIL buy-leg quote failed', {
+      pairId: pair.id,
       tokenIn: pair.quote.symbol,
       tokenOut: pair.base.symbol,
     });
@@ -48,7 +49,8 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   });
 
   if (!sellQuote) {
-    log.info(`⛔ ${pair.id}: sell-leg quote failed (base->quote)`, {
+    log.info('SCAN_FAIL sell-leg quote failed', {
+      pairId: pair.id,
       tokenIn: pair.base.symbol,
       tokenOut: pair.quote.symbol,
       buyAmountOut: buyQuote.amountOut,
@@ -56,12 +58,13 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  const startAmount = Number(positionRaw) / 10 ** pair.quote.decimals;
-  const endAmount = Number(sellQuote.amountOut) / 10 ** pair.quote.decimals;
+  const startAmount = Number(positionRaw) / (10 ** pair.quote.decimals);
+  const endAmount = Number(sellQuote.amountOut) / (10 ** pair.quote.decimals);
   const spreadBps = ((endAmount - startAmount) / startAmount) * 10000;
 
   if (endAmount <= startAmount) {
-    log.info(`📉 ${pair.id}: round trip unprofitable before fees`, {
+    log.info('SCAN_LOSS round trip unprofitable before fees', {
+      pairId: pair.id,
       startAmount: startAmount.toFixed(4),
       endAmount: endAmount.toFixed(4),
       spreadBps: spreadBps.toFixed(2),
@@ -69,7 +72,8 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  log.info(`📈 ${pair.id}: round trip positive before fees`, {
+  log.info('SCAN_GAIN round trip positive before fees', {
+    pairId: pair.id,
     startAmount: startAmount.toFixed(4),
     endAmount: endAmount.toFixed(4),
     spreadBps: spreadBps.toFixed(2),
@@ -79,9 +83,9 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     pairId: pair.id,
     buySource: 'enso-route',
     sellSource: 'enso-route',
-    buyQuote,
-    sellQuote,
-    spreadBps,
+    buyQuote: buyQuote,
+    sellQuote: sellQuote,
+    spreadBps: spreadBps,
   };
 
   const evaluated = await evaluateOpportunity(pair, spreadOpp, cachedNativeUsdPrice);
@@ -103,19 +107,30 @@ async function runScanCycle(): Promise<void> {
     return;
   }
 
-  log.info('🔄 Scan cycle started');
+  log.info('Scan cycle started');
 
   const pairs = enabledPairs();
-  log.info(`Evaluating ${pairs.length} enabled pairs`);
+  log.info('Evaluating enabled pairs', { count: pairs.length });
 
-  const results = await Promise.all(pairs.map((pair) => scanPair(pair).catch((err) => {
-    log.error('Pair scan failed', { pairId: pair.id, error: err instanceof Error ? err.message : String(err) });
-    return null;
-  })));
+  const results = await Promise.all(
+    pairs.map((pair) => {
+      return scanPair(pair).catch((err) => {
+        log.error('Pair scan failed', {
+          pairId: pair.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      });
+    })
+  );
 
   const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
+  const executableCount = evaluated.filter((e) => e.executable).length;
 
-  log.info(`🔄 Scan cycle complete: ${evaluated.length} evaluated, ${evaluated.filter((e) => e.executable).length} executable`);
+  log.info('Scan cycle complete', {
+    evaluatedCount: evaluated.length,
+    executableCount: executableCount,
+  });
 
   if (evaluated.length === 0) {
     return;
@@ -127,10 +142,25 @@ async function runScanCycle(): Promise<void> {
 let loopHandle: NodeJS.Timeout | null = null;
 
 export function startScanLoop(): void {
-  if (loopHandle) return;
+  if (loopHandle) {
+    return;
+  }
 
   log.info('Starting scan loop', { intervalMs: env.SCAN_INTERVAL_MS });
 
   loopHandle = setInterval(() => {
     runScanCycle().catch((err) => {
-      log.err
+      log.error('Scan cycle threw an unhandled error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, env.SCAN_INTERVAL_MS);
+}
+
+export function stopScanLoop(): void {
+  if (loopHandle) {
+    clearInterval(loopHandle);
+    loopHandle = null;
+    log.info('Scan loop stopped');
+  }
+}
