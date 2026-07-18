@@ -10,16 +10,18 @@ const log = createLogger('ensoRoute-source');
 /**
  * Prices swaps using Enso's own /shortcuts/route endpoint — the SAME
  * routing engine that later builds and executes the actual flashloan
- * bundle. Confirmed field name via live diagnostic: response includes
- * amountOut, gas, priceImpact, minAmountOut, tx, and route.
+ * bundle.
  *
- * This replaces pricing via Uniswap V3 direct + ParaSwap's separate
- * price API, which routinely disagreed with Enso's real execution by
- * 100+ bps in production (e.g. scanner estimated +67 bps profit;
- * Enso's actual execution came back -84 bps short, same pair, same
- * moment). It also removes the ParaSwap dependency entirely, which
- * has begun hard rate-limiting (429s) on every request as of this
- * session — a second, independent problem this same change resolves.
+ * FIX: every official Enso example (docs.enso.build/pages/build/
+ * get-started/route, and the SDK's llms-full.txt) shows getRouteData
+ * called with THREE address fields — fromAddress, receiver, AND
+ * spender — not just fromAddress. The previous version only sent
+ * fromAddress, which very likely caused every single call to fail
+ * silently (caught by the try/catch below, logged at warn level,
+ * returning null) for the entire session — explaining why every scan
+ * cycle showed "0 evaluated, 0 executable" with no visible errors.
+ * For a same-wallet swap (not a delegated/smart-account flow), all
+ * three should be the same execution wallet address.
  */
 export const ensoRouteSource: PriceSource = {
   name: 'enso-route',
@@ -29,12 +31,14 @@ export const ensoRouteSource: PriceSource = {
     try {
       const enso = getEnsoClient();
       const chainId = activeChain.chainId;
-      const fromAddress = executionWallet.address as `0x${string}`;
+      const walletAddress = executionWallet.address as `0x${string}`;
 
       const routeData = await withRetry(
         () =>
           enso.getRouteData({
-            fromAddress,
+            fromAddress: walletAddress,
+            receiver: walletAddress,
+            spender: walletAddress,
             chainId,
             amountIn: [req.amountIn],
             tokenIn: [req.tokenIn.address as `0x${string}`],
@@ -51,9 +55,10 @@ export const ensoRouteSource: PriceSource = {
 
       const amountOut = (routeData as any)?.amountOut;
       if (!amountOut) {
-        log.debug('Enso route returned no amountOut', {
+        log.warn('Enso route returned no amountOut', {
           tokenIn: req.tokenIn.symbol,
           tokenOut: req.tokenOut.symbol,
+          rawResponse: JSON.stringify(routeData),
         });
         return null;
       }
@@ -72,11 +77,15 @@ export const ensoRouteSource: PriceSource = {
         supportsExecution: true,
         raw: routeData,
       };
-    } catch (err) {
-      log.warn('Enso route quote failed', {
+    } catch (err: any) {
+      // Elevated to ERROR (not warn) with full response body, since a
+      // silent failure here is exactly what cost hours of debugging.
+      log.error('Enso route quote failed', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
-        error: err instanceof Error ? err.message : String(err),
+        statusCode: err?.statusCode || err?.response?.status,
+        responseData: err?.responseData || err?.response?.data,
+        errorMessage: err?.message || String(err),
       });
       return null;
     }
