@@ -9,6 +9,11 @@ import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 
+// --- NEW imports for multi-venue test ---
+import { getAllVenueQuotes, findBestVenueSpread } from './scanner/sources/ensoMultiVenue';
+import { TOKENS } from './config/tokens';
+import { ethers } from 'ethers';
+
 const log = createLogger('main');
 
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
@@ -97,13 +102,6 @@ async function bootstrap(): Promise<void> {
   log.info('ENSO PROTOCOL SLUG TEST STARTING — SEARCH FOR ENSO_SLUG_DIAGNOSTIC');
   log.info('=================================================');
 
-  // Already confirmed real from the prior run — not retested here.
-  // CONFIRMED: uniswap-v2, uniswap-v3, sushiswap-v2, sushiswap-v3
-  // CONFIRMED ABSENT: quickswap (clean "Invalid protocol slug" response)
-  //
-  // Everything below hit a 429 last time before getting a real answer —
-  // genuinely untested, not confirmed absent. Retesting with a delay
-  // between each call this time.
   const CANDIDATE_SLUGS = [
     'quickswap-v2', 'quickswap-v3', 'quick-swap', 'quickswap-uni-v2', 'quickswap-uni-v3',
     'dodo', 'dodo-v2', 'dodoex', 'dodo-v3',
@@ -139,7 +137,6 @@ async function bootstrap(): Promise<void> {
       console.log(`ENSO_SLUG_DIAGNOSTIC_ERROR: ${slug} -> ${message}`);
     }
 
-    // Pace requests to avoid the 429 that swallowed most of the last run.
     await sleep(600);
   }
 
@@ -149,6 +146,61 @@ async function bootstrap(): Promise<void> {
 
   log.info('=================================================');
   log.info('ENSO PROTOCOL SLUG TEST COMPLETE');
+  log.info('=================================================');
+
+  // =====================================================
+  // MULTI-VENUE QUOTE TEST — ONE-TIME DIAGNOSTIC
+  // Tests the multi-venue quote fetching logic across all
+  // available DEXs to see which venues provide the best prices.
+  // =====================================================
+  log.info('=================================================');
+  log.info('MULTI-VENUE QUOTE TEST STARTING — SEARCH FOR MULTI_VENUE_DIAGNOSTIC');
+  log.info('=================================================');
+
+  try {
+    const testAmount = ethers.utils.parseUnits('1000', TOKENS.USDC.decimals).toString();
+
+    // Fetch buy quotes: USDC → WETH
+    const buyQuotes = await getAllVenueQuotes(TOKENS.USDC, TOKENS.WETH, testAmount);
+    console.log('MULTI_VENUE_DIAGNOSTIC_BUY_START');
+    console.log(JSON.stringify(buyQuotes.map((q) => ({
+      venue: q.venue,
+      amountOut: q.amountOut,
+      price: q.price,
+    }))));
+    console.log('MULTI_VENUE_DIAGNOSTIC_BUY_END');
+
+    if (buyQuotes.length > 0) {
+      // Find the best buy quote (highest amountOut)
+      const bestBuyAmountOut = buyQuotes.reduce((max, q) =>
+        Number(q.amountOut) > Number(max.amountOut) ? q : max
+      ).amountOut;
+
+      // Fetch sell quotes: WETH → USDC using the best buy amount as input
+      const sellQuotes = await getAllVenueQuotes(TOKENS.WETH, TOKENS.USDC, bestBuyAmountOut);
+      console.log('MULTI_VENUE_DIAGNOSTIC_SELL_START');
+      console.log(JSON.stringify(sellQuotes.map((q) => ({
+        venue: q.venue,
+        amountOut: q.amountOut,
+        price: q.price,
+      }))));
+      console.log('MULTI_VENUE_DIAGNOSTIC_SELL_END');
+
+      // Find the best buy-sell combination (spread)
+      const spread = findBestVenueSpread('WETH-USDC-TEST', buyQuotes, sellQuotes);
+      console.log('MULTI_VENUE_DIAGNOSTIC_SPREAD_START');
+      console.log(JSON.stringify(spread));
+      console.log('MULTI_VENUE_DIAGNOSTIC_SPREAD_END');
+    } else {
+      console.log('MULTI_VENUE_DIAGNOSTIC_NO_BUY_QUOTES');
+    }
+  } catch (err) {
+    console.log('MULTI_VENUE_DIAGNOSTIC_ERROR');
+    console.log(String(err instanceof Error ? err.stack || err.message : err));
+  }
+
+  log.info('=================================================');
+  log.info('MULTI-VENUE QUOTE TEST COMPLETE');
   log.info('=================================================');
 
   startScanLoop();
