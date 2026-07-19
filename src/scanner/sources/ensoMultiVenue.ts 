@@ -7,15 +7,6 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('ensoMultiVenue');
 
-/**
- * Every protocol slug confirmed real via direct diagnostic testing
- * against Enso's own getActionsBySlug — not guessed. Each of these
- * exposes a 'swap' action directly. QuickSwap is deliberately absent:
- * every plausible slug variant returned a clean "Invalid protocol
- * slug" (not a rate limit) — genuinely unsupported as a directly
- * targetable venue, though its liquidity may still appear inside
- * Enso's generic aggregated /route results.
- */
 export const CONFIRMED_VENUES = [
   'uniswap-v2',
   'uniswap-v3',
@@ -37,18 +28,6 @@ export interface VenueQuote {
   price: number;
 }
 
-/**
- * Gets a price quote forced through exactly ONE named venue, by
- * telling Enso's getRouteData to ignore every OTHER confirmed venue
- * via ignoreStandards. This is fundamentally different from the
- * plain /route call used elsewhere in this system: that call lets
- * Enso pick its own best path across everything it knows, which
- * self-optimizes away any real cross-venue arbitrage signal before
- * we ever see it. Pinning to one specific, named protocol gives a
- * genuine, independently-verifiable price from that exact venue,
- * comparable against another venue's equally-pinned price to find
- * real divergence.
- */
 export async function getVenueQuote(
   venue: VenueSlug,
   tokenIn: TokenInfo,
@@ -113,13 +92,6 @@ export async function getVenueQuote(
   }
 }
 
-/**
- * Queries every confirmed venue in parallel for the same swap
- * direction and returns only the ones that returned a real quote.
- * Venues with no pool for this pair (very common — not every DEX
- * lists every token) simply return null and are filtered out, not
- * treated as errors.
- */
 export async function getAllVenueQuotes(
   tokenIn: TokenInfo,
   tokenOut: TokenInfo,
@@ -140,14 +112,6 @@ export interface VenueSpread {
   spreadBps: number;
 }
 
-/**
- * Finds the best genuine cross-venue divergence: buy on whichever
- * confirmed venue gives the most base token per unit of quote token,
- * sell on whichever venue gives the most quote token back per unit
- * of base token — using ACTUAL DIFFERENT, NAMED venues for each leg,
- * not the same self-optimized aggregate route used twice. This is
- * what real cross-DEX arbitrage detection requires.
- */
 export function findBestVenueSpread(
   pairId: string,
   buyQuotes: VenueQuote[],
@@ -161,9 +125,6 @@ export function findBestVenueSpread(
 
   for (const buyQuote of buyQuotes) {
     for (const sellQuote of sellQuotes) {
-      // buyQuote.price = base per quote (buying base with quote)
-      // sellQuote.price = quote per base (selling base for quote)
-      // Round trip: start with quoteAmount, get base, sell base, get quote back
       const baseReceived = Number(buyQuote.amountOut) / 10 ** buyQuote.tokenOut.decimals;
       const quoteReturned = baseReceived * sellQuote.price;
       const quoteStarted = Number(buyQuote.amountIn) / 10 ** buyQuote.tokenIn.decimals;
