@@ -8,11 +8,15 @@ import { alertSystemStarted, isDiscordConfigured, alertPeriodSummary } from './n
 import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
-
-// --- NEW imports for multi-venue test ---
-import { getAllVenueQuotes, findBestVenueSpread } from './scanner/sources/ensoMultiVenue';
 import { TOKENS } from './config/tokens';
 import { ethers } from 'ethers';
+
+// --- Direct venue quote test imports ---
+import {
+  getAllDirectVenueQuotes,
+  VENUE_CANDIDATES,
+  DirectVenueQuote,
+} from './scanner/sources/ensoDirectVenue';
 
 const log = createLogger('main');
 
@@ -70,6 +74,61 @@ async function getNativeUsdPriceWithRetry(attempts: number = 3): Promise<number>
   return 0.08;
 }
 
+// ----------------------------------------------------------------------------
+// Helper to find best buy/sell combo from direct venue quotes
+// ----------------------------------------------------------------------------
+function findBestDirectSpread(
+  buyQuotes: DirectVenueQuote[],
+  sellQuotes: DirectVenueQuote[]
+): {
+  buyVenue: string;
+  sellVenue: string;
+  buyAmountOut: string;
+  sellAmountOut: string;
+  spreadBps: number;
+} | null {
+  if (buyQuotes.length === 0 || sellQuotes.length === 0) return null;
+
+  let bestSpreadBps = -Infinity;
+  let bestCombination: {
+    buyVenue: string;
+    sellVenue: string;
+    buyAmountOut: string;
+    sellAmountOut: string;
+  } | null = null;
+
+  for (const buy of buyQuotes) {
+    for (const sell of sellQuotes) {
+      // net multiplier = (buy price) * (sell price) in human units
+      const netMultiplier = buy.price * sell.price;
+      const spreadBps = (netMultiplier - 1) * 10000;
+
+      if (spreadBps > bestSpreadBps) {
+        bestSpreadBps = spreadBps;
+        bestCombination = {
+          buyVenue: buy.candidateId,
+          sellVenue: sell.candidateId,
+          buyAmountOut: buy.amountOut,
+          sellAmountOut: sell.amountOut,
+        };
+      }
+    }
+  }
+
+  if (!bestCombination) return null;
+
+  return {
+    buyVenue: bestCombination.buyVenue,
+    sellVenue: bestCombination.sellVenue,
+    buyAmountOut: bestCombination.buyAmountOut,
+    sellAmountOut: bestCombination.sellAmountOut,
+    spreadBps: bestSpreadBps,
+  };
+}
+
+// ----------------------------------------------------------------------------
+// Bootstrap
+// ----------------------------------------------------------------------------
 async function bootstrap(): Promise<void> {
   log.info('Starting Chronos/Enso arbitrage system', {
     env: env.NODE_ENV,
@@ -93,11 +152,9 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // =====================================================
-  // ENSO PROTOCOL SLUG TEST — ONE-TIME DIAGNOSTIC
-  // Searches for ENSO_SLUG_DIAGNOSTIC in logs to see which
-  // protocol slugs are available and what actions they return.
-  // =====================================================
+  // ============================================================
+  // 1. ENSO PROTOCOL SLUG TEST (keep existing)
+  // ============================================================
   log.info('=================================================');
   log.info('ENSO PROTOCOL SLUG TEST STARTING — SEARCH FOR ENSO_SLUG_DIAGNOSTIC');
   log.info('=================================================');
@@ -136,7 +193,6 @@ async function bootstrap(): Promise<void> {
       erroredSlugs.push({ slug, error: message });
       console.log(`ENSO_SLUG_DIAGNOSTIC_ERROR: ${slug} -> ${message}`);
     }
-
     await sleep(600);
   }
 
@@ -148,66 +204,93 @@ async function bootstrap(): Promise<void> {
   log.info('ENSO PROTOCOL SLUG TEST COMPLETE');
   log.info('=================================================');
 
-  // =====================================================
-  // MULTI-VENUE QUOTE TEST — ONE-TIME DIAGNOSTIC
-  // Tests the multi-venue quote fetching logic across all
-  // available DEXs to see which venues provide the best prices.
-  // =====================================================
+  // ============================================================
+  // 2. DIRECT VENUE QUOTE TEST (NEW - replaces old multi-venue)
+  // ============================================================
   log.info('=================================================');
-  log.info('MULTI-VENUE QUOTE TEST STARTING — SEARCH FOR MULTI_VENUE_DIAGNOSTIC');
+  log.info('DIRECT VENUE QUOTE TEST STARTING — SEARCH FOR DIRECT_VENUE_DIAGNOSTIC');
   log.info('=================================================');
 
   try {
     const testAmount = ethers.utils.parseUnits('1000', TOKENS.USDC.decimals).toString();
 
-    // Fetch buy quotes: USDC → WETH
-    const buyQuotes = await getAllVenueQuotes(TOKENS.USDC, TOKENS.WETH, testAmount);
-    console.log('MULTI_VENUE_DIAGNOSTIC_BUY_START');
-    console.log(JSON.stringify(buyQuotes.map((q) => ({
-      venue: q.venue,
-      amountOut: q.amountOut,
-      price: q.price,
-    }))));
-    console.log('MULTI_VENUE_DIAGNOSTIC_BUY_END');
+    // Buy quotes: USDC → WETH (all candidates)
+    const buyQuotes = await getAllDirectVenueQuotes(TOKENS.USDC, TOKENS.WETH, testAmount);
+    console.log('DIRECT_VENUE_DIAGNOSTIC_BUY_START');
+    console.log(
+      JSON.stringify(
+        buyQuotes.map((q) => ({
+          candidate: q.candidateId,
+          protocol: q.protocol,
+          primaryAddress: q.primaryAddress,
+          amountOut: q.amountOut,
+          price: q.price,
+        }))
+      )
+    );
+    console.log('DIRECT_VENUE_DIAGNOSTIC_BUY_END');
 
+    // Sell quotes: WETH → USDC using the best buy amount (if any)
     if (buyQuotes.length > 0) {
-      // Find the best buy quote (highest amountOut)
-      const bestBuyAmountOut = buyQuotes.reduce((max, q) =>
-        Number(q.amountOut) > Number(max.amountOut) ? q : max
-      ).amountOut;
+      // Find the best buy quote by amountOut
+      const bestBuy = buyQuotes.reduce((a, b) =>
+        Number(a.amountOut) > Number(b.amountOut) ? a : b
+      );
+      const bestBuyAmountOut = bestBuy.amountOut;
 
-      // Fetch sell quotes: WETH → USDC using the best buy amount as input
-      const sellQuotes = await getAllVenueQuotes(TOKENS.WETH, TOKENS.USDC, bestBuyAmountOut);
-      console.log('MULTI_VENUE_DIAGNOSTIC_SELL_START');
-      console.log(JSON.stringify(sellQuotes.map((q) => ({
-        venue: q.venue,
-        amountOut: q.amountOut,
-        price: q.price,
-      }))));
-      console.log('MULTI_VENUE_DIAGNOSTIC_SELL_END');
+      const sellQuotes = await getAllDirectVenueQuotes(TOKENS.WETH, TOKENS.USDC, bestBuyAmountOut);
+      console.log('DIRECT_VENUE_DIAGNOSTIC_SELL_START');
+      console.log(
+        JSON.stringify(
+          sellQuotes.map((q) => ({
+            candidate: q.candidateId,
+            protocol: q.protocol,
+            primaryAddress: q.primaryAddress,
+            amountOut: q.amountOut,
+            price: q.price,
+          }))
+        )
+      );
+      console.log('DIRECT_VENUE_DIAGNOSTIC_SELL_END');
 
-      // Find the best buy-sell combination (spread)
-      const spread = findBestVenueSpread('WETH-USDC-TEST', buyQuotes, sellQuotes);
-      console.log('MULTI_VENUE_DIAGNOSTIC_SPREAD_START');
-      console.log(JSON.stringify(spread));
-      console.log('MULTI_VENUE_DIAGNOSTIC_SPREAD_END');
+      // Find best buy-sell combination
+      const spread = findBestDirectSpread(buyQuotes, sellQuotes);
+      if (spread) {
+        console.log('DIRECT_VENUE_DIAGNOSTIC_SPREAD_START');
+        console.log(
+          JSON.stringify({
+            buyVenue: spread.buyVenue,
+            sellVenue: spread.sellVenue,
+            buyAmountOut: spread.buyAmountOut,
+            sellAmountOut: spread.sellAmountOut,
+            spreadBps: spread.spreadBps,
+          })
+        );
+        console.log('DIRECT_VENUE_DIAGNOSTIC_SPREAD_END');
+      } else {
+        console.log('DIRECT_VENUE_DIAGNOSTIC_NO_SPREAD');
+      }
     } else {
-      console.log('MULTI_VENUE_DIAGNOSTIC_NO_BUY_QUOTES');
+      console.log('DIRECT_VENUE_DIAGNOSTIC_NO_BUY_QUOTES');
     }
   } catch (err) {
-    console.log('MULTI_VENUE_DIAGNOSTIC_ERROR');
+    console.log('DIRECT_VENUE_DIAGNOSTIC_ERROR');
     console.log(String(err instanceof Error ? err.stack || err.message : err));
   }
 
   log.info('=================================================');
-  log.info('MULTI-VENUE QUOTE TEST COMPLETE');
+  log.info('DIRECT VENUE QUOTE TEST COMPLETE');
   log.info('=================================================');
 
+  // ============================================================
+  // 3. Start the live scan loop
+  // ============================================================
   startScanLoop();
 
   const nativePrice = await getNativeUsdPriceWithRetry();
   log.info('Initial native token price fetched', { nativePrice });
 
+  // Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await getNativeUsdPriceWithRetry();
@@ -219,6 +302,7 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
+  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -230,6 +314,7 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
+  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
