@@ -2,6 +2,10 @@ import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
 import { ensoRouteSource } from './sources/ensoRoute';
+import { getEnsoClient } from '../execution/ensoClient';
+import { activeChain } from '../config/chains';
+import { executionWallet } from '../treasury/wallets';
+import { withRetry, isTransientError } from '../utils/retry';
 import { PriceSource, QuoteResult } from './priceSource';
 import { evaluateOpportunity, EvaluatedOpportunity } from '../profitability/evaluator';
 import { processOpportunityBatch } from '../execution/queue';
@@ -24,6 +28,80 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
 }
 
+/**
+ * Sell-leg quote that excludes whichever protocol the buy leg actually
+ * used. This is a real, narrower arbitrage question genuinely
+ * different from the plain round-trip test: "given I bought via
+ * venue X, is there somewhere ELSE that pays more to sell back,
+ * rather than routing back through the same place." Uses the exact
+ * same getRouteData call shape as ensoRoute.ts (already proven to
+ * execute without error for weeks) plus one extra, already-documented
+ * field (ignoreStandards) — no new, unverified per-protocol
+ * parameters like poolFee/tickSpacing/primaryAddress that have
+ * repeatedly required fresh guessing this session.
+ */
+async function getSellQuoteExcludingVenue(
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  amountIn: string,
+  excludeProtocol: string | undefined
+): Promise<QuoteResult | null> {
+  try {
+    const enso = getEnsoClient();
+    const chainId = activeChain.chainId;
+    const walletAddress = executionWallet.address as `0x${string}`;
+
+    const routeData = await withRetry(
+      () =>
+        enso.getRouteData({
+          fromAddress: walletAddress,
+          receiver: walletAddress,
+          spender: walletAddress,
+          chainId,
+          amountIn: [amountIn],
+          tokenIn: [tokenIn.address as `0x${string}`],
+          tokenOut: [tokenOut.address as `0x${string}`],
+          slippage: '100',
+          routingStrategy: 'router',
+          ignoreStandards: excludeProtocol ? [excludeProtocol] : undefined,
+        } as any),
+      {
+        label: `sellExcl.${tokenIn.symbol}->${tokenOut.symbol}`,
+        shouldRetry: isTransientError,
+        retries: 1,
+      }
+    );
+
+    const amountOut = (routeData as any)?.amountOut;
+    if (!amountOut) {
+      return null;
+    }
+
+    const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
+    const amountOutHuman = Number(amountOut) / 10 ** tokenOut.decimals;
+    const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
+
+    return {
+      source: 'enso-route-excl',
+      tokenIn,
+      tokenOut,
+      amountIn,
+      amountOut: String(amountOut),
+      price,
+      supportsExecution: true,
+      raw: routeData,
+    };
+  } catch (err: any) {
+    log.debug('Sell-excl quote failed', {
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      excludeProtocol,
+      error: err?.message || String(err),
+    });
+    return null;
+  }
+}
+
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
 
@@ -42,18 +120,21 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  const sellQuote = await ensoRouteSource.getQuote({
-    tokenIn: pair.base,
-    tokenOut: pair.quote,
-    amountIn: buyQuote.amountOut,
-  });
+  const buyWinningProtocol = (buyQuote.raw as any)?.route?.[0]?.protocol as string | undefined;
+
+  const sellQuote = await getSellQuoteExcludingVenue(
+    pair.base,
+    pair.quote,
+    buyQuote.amountOut,
+    buyWinningProtocol
+  );
 
   if (!sellQuote) {
-    log.info('SCAN_FAIL sell-leg quote failed', {
+    log.info('SCAN_FAIL sell-leg quote failed (excluding buy venue)', {
       pairId: pair.id,
       tokenIn: pair.base.symbol,
       tokenOut: pair.quote.symbol,
-      buyAmountOut: buyQuote.amountOut,
+      excludedProtocol: buyWinningProtocol,
     });
     return null;
   }
@@ -63,8 +144,9 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   const spreadBps = ((endAmount - startAmount) / startAmount) * 10000;
 
   if (endAmount <= startAmount) {
-    log.info('SCAN_LOSS round trip unprofitable before fees', {
+    log.info('SCAN_LOSS round trip unprofitable (sell excl. buy venue)', {
       pairId: pair.id,
+      excludedProtocol: buyWinningProtocol,
       startAmount: startAmount.toFixed(4),
       endAmount: endAmount.toFixed(4),
       spreadBps: spreadBps.toFixed(2),
@@ -72,8 +154,9 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     return null;
   }
 
-  log.info('SCAN_GAIN round trip positive before fees', {
+  log.info('SCAN_GAIN round trip positive (sell excl. buy venue)', {
     pairId: pair.id,
+    excludedProtocol: buyWinningProtocol,
     startAmount: startAmount.toFixed(4),
     endAmount: endAmount.toFixed(4),
     spreadBps: spreadBps.toFixed(2),
@@ -82,7 +165,7 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
   const spreadOpp = {
     pairId: pair.id,
     buySource: 'enso-route',
-    sellSource: 'enso-route',
+    sellSource: 'enso-route-excl',
     buyQuote: buyQuote,
     sellQuote: sellQuote,
     spreadBps: spreadBps,
