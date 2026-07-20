@@ -24,9 +24,11 @@ export interface DirectDexQuote {
  */
 function getPoolFee(tokenIn: TokenInfo, tokenOut: TokenInfo): string {
   const symbols = [tokenIn.symbol, tokenOut.symbol];
+  // Stablecoin pairs use 0.05% fee tier
   if (symbols.includes('USDC') && symbols.includes('USDT')) return '500';
   if (symbols.includes('DAI') && symbols.includes('USDC')) return '500';
-  // Default for WETH, WBTC, etc.
+  if (symbols.includes('USDC') && symbols.includes('USDCe')) return '500';
+  // Default for WETH, WBTC, etc. — 0.3% fee tier
   return '3000';
 }
 
@@ -80,21 +82,31 @@ export async function getDirectDexQuote(
       }
     );
 
+    // The BundleData type uses `amountsOut` (plural), not `amountOut`
+    // Based on the TypeScript error: "Property 'amountOut' does not exist on type 'BundleData'. Did you mean 'amountsOut'?"[reference:1]
     let amountOut: string | undefined;
-    if (bundleData?.amountOut) {
-      amountOut = bundleData.amountOut;
-    } else if (bundleData?.route && Array.isArray(bundleData.route)) {
+
+    // Try amountsOut first (correct SDK property)
+    if (bundleData?.amountsOut && Array.isArray(bundleData.amountsOut) && bundleData.amountsOut.length > 0) {
+      amountOut = bundleData.amountsOut[0];
+    }
+    // Fallback: check if amountOut exists (some SDK versions)
+    else if ((bundleData as any)?.amountOut) {
+      amountOut = (bundleData as any).amountOut;
+    }
+    // Fallback: check route array
+    else if (bundleData?.route && Array.isArray(bundleData.route)) {
       const lastRoute = bundleData.route[bundleData.route.length - 1];
-      amountOut = lastRoute?.amountOut;
-    } else if (bundleData?.route?.amountOut) {
-      amountOut = bundleData.route.amountOut;
+      amountOut = (lastRoute as any)?.amountOut;
     }
 
     if (!amountOut) {
-      log.debug('No usable amountOut', {
+      log.debug('No usable amountOut in bundle response', {
         candidate: candidate.id,
         tokenIn: tokenIn.symbol,
         tokenOut: tokenOut.symbol,
+        hasAmountsOut: !!bundleData?.amountsOut,
+        responseKeys: bundleData ? Object.keys(bundleData) : null,
       });
       return null;
     }
@@ -139,6 +151,7 @@ export async function getAllDirectDexQuotes(
     if (quote) {
       results.push(quote);
     }
+    // Rate limit: 400ms between calls
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
