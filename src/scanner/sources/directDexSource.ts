@@ -9,14 +9,25 @@ import { DEX_CANDIDATES, DexCandidate } from '../../config/dexCandidates';
 const log = createLogger('directDexSource');
 
 export interface DirectDexQuote {
-  venue: string;           // candidate.id
+  venue: string;
   protocol: string;
   primaryAddress: string;
   tokenIn: TokenInfo;
   tokenOut: TokenInfo;
   amountIn: string;
   amountOut: string;
-  price: number;           // amountOut / amountIn (in human units)
+  price: number;
+}
+
+/**
+ * Determine poolFee based on token pair.
+ */
+function getPoolFee(tokenIn: TokenInfo, tokenOut: TokenInfo): string {
+  const symbols = [tokenIn.symbol, tokenOut.symbol];
+  if (symbols.includes('USDC') && symbols.includes('USDT')) return '500';
+  if (symbols.includes('DAI') && symbols.includes('USDC')) return '500';
+  // Default for WETH, WBTC, etc.
+  return '3000';
 }
 
 /**
@@ -33,7 +44,6 @@ export async function getDirectDexQuote(
     const chainId = activeChain.chainId;
     const walletAddress = executionWallet.address as `0x${string}`;
 
-    // Build the args for the swap action
     const args: any = {
       tokenIn: tokenIn.address as `0x${string}`,
       tokenOut: tokenOut.address as `0x${string}`,
@@ -42,9 +52,9 @@ export async function getDirectDexQuote(
       receiver: walletAddress,
     };
 
-    // Add protocol-specific extra args (e.g., poolFee)
-    if (candidate.extraArgs) {
-      Object.assign(args, candidate.extraArgs);
+    // Add poolFee for V3 protocols
+    if (candidate.protocol.includes('v3') || candidate.id.includes('v3')) {
+      args.poolFee = getPoolFee(tokenIn, tokenOut);
     }
 
     const bundleData = await withRetry(
@@ -70,7 +80,6 @@ export async function getDirectDexQuote(
       }
     );
 
-    // Extract amountOut from response (try several possible paths)
     let amountOut: string | undefined;
     if (bundleData?.amountOut) {
       amountOut = bundleData.amountOut;
@@ -130,7 +139,6 @@ export async function getAllDirectDexQuotes(
     if (quote) {
       results.push(quote);
     }
-    // Rate limit: 400ms between calls
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
