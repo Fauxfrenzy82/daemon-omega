@@ -1,7 +1,6 @@
 import { ethers } from 'ethers';
 import { enabledPairs, PairConfig } from '../config/pairs';
 import { TokenInfo } from '../config/tokens';
-import { ensoRouteSource } from './sources/ensoRoute';
 import { getEnsoClient } from '../execution/ensoClient';
 import { activeChain } from '../config/chains';
 import { executionWallet } from '../treasury/wallets';
@@ -30,30 +29,47 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
 }
 
 /**
- * New scan logic: Get buy quotes from all DEXs, pick best.
- * Then get sell quotes from all DEXs (excluding the buy venue),
- * and pick best. Compute spread.
+ * Convert a DirectDexQuote to a QuoteResult for the evaluator.
  */
-async function scanPairWithDirectDex(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
+function toQuoteResult(quote: DirectDexQuote, source: string): QuoteResult {
+  return {
+    source,
+    tokenIn: quote.tokenIn,
+    tokenOut: quote.tokenOut,
+    amountIn: quote.amountIn,
+    amountOut: quote.amountOut,
+    price: quote.price,
+    supportsExecution: true,
+    raw: {
+      venue: quote.venue,
+      protocol: quote.protocol,
+      primaryAddress: quote.primaryAddress,
+    },
+  };
+}
+
+/**
+ * Scan a single pair using direct DEX quotes (cross-venue).
+ */
+async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
 
-  // 1. Get buy quotes (quote → base) from all DEXs
+  // 1. Buy quotes (quote → base)
   const buyQuotes = await getAllDirectDexQuotes(pair.quote, pair.base, positionRaw);
   const bestBuy = getBestQuote(buyQuotes);
   if (!bestBuy) {
     log.info('SCAN_FAIL no buy quotes from any DEX', { pairId: pair.id });
     return null;
   }
-
   const buyVenue = bestBuy.venue;
 
-  // 2. Get sell quotes (base → quote) from all DEXs, excluding the buy venue
+  // 2. Sell quotes (base → quote), excluding buy venue
   const sellQuotes = await getAllDirectDexQuotes(
     pair.base,
     pair.quote,
     bestBuy.amountOut
   );
-  const sellQuotesExcludingBuy = sellQuotes.filter(q => q.venue !== buyVenue);
+  const sellQuotesExcludingBuy = sellQuotes.filter((q) => q.venue !== buyVenue);
   const bestSell = getBestQuote(sellQuotesExcludingBuy);
   if (!bestSell) {
     log.info('SCAN_FAIL no sell quotes excluding buy venue', {
@@ -64,8 +80,8 @@ async function scanPairWithDirectDex(pair: PairConfig): Promise<EvaluatedOpportu
   }
 
   // 3. Compute spread
-  const startAmount = Number(positionRaw) / (10 ** pair.quote.decimals);
-  const endAmount = Number(bestSell.amountOut) / (10 ** pair.quote.decimals);
+  const startAmount = Number(positionRaw) / 10 ** pair.quote.decimals;
+  const endAmount = Number(bestSell.amountOut) / 10 ** pair.quote.decimals;
   const spreadBps = ((endAmount - startAmount) / startAmount) * 10000;
 
   if (endAmount <= startAmount) {
@@ -89,73 +105,102 @@ async function scanPairWithDirectDex(pair: PairConfig): Promise<EvaluatedOpportu
     spreadBps: spreadBps.toFixed(2),
   });
 
-  // 4. Build an opportunity object for the evaluator
-  // We need to create QuoteResult objects from the DirectDexQuote objects.
-  // Convert them to the expected format (or modify evaluator to accept DirectDexQuote).
-  // For simplicity, we'll use ensoRouteSource to get the actual route data (since
-  // the evaluator expects route data for execution). But we already have the venue
-  // and amountOut; we can build a fake QuoteResult for evaluation.
-  // A better approach: add a new function to evaluator that accepts DirectDexQuote.
-  // But to keep it simple, we'll pass the bestBuy and bestSell as they are,
-  // and modify evaluator to accept them later.
-
-  // For now, we'll create a spreadOpp object that contains the quotes.
-  // We'll need to adapt evaluateOpportunity to handle our new quote type.
-  // Since we don't have the evaluator code, we'll assume it can handle the
-  // spreadOpp with buyQuote and sellQuote fields.
+  // 4. Build SpreadOpportunity for evaluator
+  const buyQuoteResult = toQuoteResult(bestBuy, `direct-${bestBuy.venue}`);
+  const sellQuoteResult = toQuoteResult(bestSell, `direct-${bestSell.venue}`);
 
   const spreadOpp = {
     pairId: pair.id,
-    buySource: 'direct-dex',
-    sellSource: 'direct-dex',
-    buyQuote: bestBuy,
-    sellQuote: bestSell,
-    spreadBps: spreadBps,
+    buySource: buyQuoteResult.source,
+    sellSource: sellQuoteResult.source,
+    buyQuote: buyQuoteResult,
+    sellQuote: sellQuoteResult,
+    spreadBps,
   };
 
-  // We'll need to update evaluateOpportunity to accept our custom quote objects.
-  // For now, we'll just log the opportunity and return null if evaluator can't handle it.
-  // But we can create a wrapper that converts DirectDexQuote to QuoteResult.
+  // 5. Evaluate
+  const evaluated = await evaluateOpportunity(
+    pair,
+    spreadOpp,
+    cachedNativeUsdPrice,
+    {
+      buyRequiresRequote: false,
+      sellRequiresRequote: false,
+    }
+  );
 
-  // Since we don't have the exact interface of QuoteResult, we'll create a minimal one.
-  const buyQuoteResult: QuoteResult = {
-    source: `direct-${bestBuy.venue}`,
-    tokenIn: bestBuy.tokenIn,
-    tokenOut: bestBuy.tokenOut,
-    amountIn: bestBuy.amountIn,
-    amountOut: bestBuy.amountOut,
-    price: bestBuy.price,
-    supportsExecution: true,
-    raw: { venue: bestBuy.venue, protocol: bestBuy.protocol },
-  };
-
-  const sellQuoteResult: QuoteResult = {
-    source: `direct-${bestSell.venue}`,
-    tokenIn: bestSell.tokenIn,
-    tokenOut: bestSell.tokenOut,
-    amountIn: bestSell.amountIn,
-    amountOut: bestSell.amountOut,
-    price: bestSell.price,
-    supportsExecution: true,
-    raw: { venue: bestSell.venue, protocol: bestSell.protocol },
-  };
-
-  const evaluated = await evaluateOpportunity(pair, { buyQuote: buyQuoteResult, sellQuote: sellQuoteResult, spreadBps }, cachedNativeUsdPrice);
   return evaluated;
 }
 
-/**
- * Original scan function using ensoRouteSource (aggregator) – kept as fallback.
- */
-async function scanPairWithAggregator(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
-  // ... (original code from before, or we can simply not use it)
-  // We'll replace the main scan function with the direct DEX one.
-  // For now, we'll keep both but use the direct one first.
+async function runScanCycle(): Promise<void> {
+  recordScanCycle();
+
+  await evaluateCircuitBreaker();
+
+  if (isBreakerTripped()) {
+    log.warn('Circuit breaker active, skipping scan cycle execution phase');
+    return;
+  }
+
+  if (!hasExecutionCapacity()) {
+    log.debug('At execution capacity, skipping this cycle');
+    return;
+  }
+
+  log.info('Scan cycle started');
+
+  const pairs = enabledPairs();
+  log.info('Evaluating enabled pairs', { count: pairs.length });
+
+  const results = await Promise.all(
+    pairs.map((pair) => {
+      return scanPair(pair).catch((err) => {
+        log.error('Pair scan failed', {
+          pairId: pair.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return null;
+      });
+    })
+  );
+
+  const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
+  const executableCount = evaluated.filter((e) => e.executable).length;
+
+  log.info('Scan cycle complete', {
+    evaluatedCount: evaluated.length,
+    executableCount: executableCount,
+  });
+
+  if (evaluated.length === 0) {
+    return;
+  }
+
+  await processOpportunityBatch(evaluated);
 }
 
-async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
-  // Try direct DEX scan first.
-  return scanPairWithDirectDex(pair);
+let loopHandle: NodeJS.Timeout | null = null;
+
+export function startScanLoop(): void {
+  if (loopHandle) {
+    return;
+  }
+
+  log.info('Starting scan loop', { intervalMs: env.SCAN_INTERVAL_MS });
+
+  loopHandle = setInterval(() => {
+    runScanCycle().catch((err) => {
+      log.error('Scan cycle threw an unhandled error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, env.SCAN_INTERVAL_MS);
 }
 
-// The rest of the file (runScanCycle, startScanLoop, stopScanLoop) remains the same.
+export function stopScanLoop(): void {
+  if (loopHandle) {
+    clearInterval(loopHandle);
+    loopHandle = null;
+    log.info('Scan loop stopped');
+  }
+}
