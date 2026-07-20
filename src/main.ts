@@ -123,4 +123,34 @@ async function bootstrap(): Promise<void> {
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
-      await alert
+      await alertPeriodSummary(summary);
+    } catch (err) {
+      log.error('Daily summary failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, DAILY_SUMMARY_MS);
+
+  log.info('System running');
+}
+
+async function shutdown(signal: string): Promise<void> {
+  log.info('Shutdown signal received', { signal });
+  stopScanLoop();
+  await closePool();
+  process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled promise rejection', { reason: String(reason) });
+});
+
+bootstrap().catch((err) => {
+  log.error('Fatal bootstrap error', {
+    error: err instanceof Error ? err.message : String(err),
+  });
+  process.exit(1);
+});
