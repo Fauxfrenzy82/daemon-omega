@@ -88,14 +88,12 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // Start the live scan loop – this now uses the new logic that excludes
-  // the buy venue when fetching the sell quote.
+  // Start the live scan loop (now using direct DEX quotes)
   startScanLoop();
 
   const nativePrice = await getNativeUsdPriceWithRetry();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await getNativeUsdPriceWithRetry();
@@ -107,7 +105,6 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
-  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -119,7 +116,6 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
-  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
