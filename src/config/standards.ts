@@ -1,83 +1,32 @@
-import { getEnsoClient } from '../execution/ensoClient';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('standards');
 
-let cachedStandards: string[] | null = null;
+/**
+ * Hardcoded list of DEX protocol slugs that are known to work
+ * with Enso's `getRouteData` and `ignoreStandards`.
+ * These were verified in previous tests (slug test).
+ */
+const HARDCODED_DEX_SLUGS = [
+  'uniswap-v3',
+  'sushiswap-v2',
+  'sushiswap-v3',
+  'balancer-v2',
+  'balancer-v3',
+  'kyberswap',
+  'ramses-v3',
+  'dodo-v2',
+  'woofi-v2',
+  'curve',
+];
 
 /**
- * Fetch the complete list of protocol standards from Enso.
- * Extracts string slugs/names from the raw response.
+ * Returns the hardcoded list of DEX slugs.
+ * No API call is made – this is reliable and fast.
  */
 export async function getAllStandards(): Promise<string[]> {
-  if (cachedStandards) return cachedStandards;
-
-  try {
-    const enso = getEnsoClient();
-    let raw: any;
-
-    if (typeof (enso as any).getStandards === 'function') {
-      raw = await (enso as any).getStandards();
-    } else if (typeof (enso as any).getProtocols === 'function') {
-      raw = await (enso as any).getProtocols();
-    } else {
-      throw new Error('No method to get standards/protocols');
-    }
-
-    let standards: string[] = [];
-
-    if (Array.isArray(raw)) {
-      if (raw.length === 0) {
-        throw new Error('Empty standards array');
-      }
-      // Check the type of the first element
-      const first = raw[0];
-      if (typeof first === 'string') {
-        standards = raw as string[];
-      } else if (typeof first === 'object' && first !== null) {
-        // Try to extract a string property: slug, name, id, or label
-        if (first.slug) {
-          standards = raw.map((item: any) => item.slug);
-        } else if (first.name) {
-          standards = raw.map((item: any) => item.name);
-        } else if (first.id) {
-          standards = raw.map((item: any) => item.id);
-        } else if (first.protocol) {
-          standards = raw.map((item: any) => item.protocol);
-        } else {
-          // If no obvious property, fallback to using the first string-ifiable value
-          // This is a fallback; we log a warning.
-          log.warn('Standards objects have no known string property, using String()', {
-            sample: JSON.stringify(first),
-          });
-          standards = raw.map((item: any) => String(item));
-        }
-      } else {
-        // Unexpected type
-        throw new Error(`Unexpected standards element type: ${typeof first}`);
-      }
-    } else {
-      throw new Error('Standards response is not an array');
-    }
-
-    if (standards.length > 0) {
-      cachedStandards = standards;
-      log.info('Loaded standards', { count: standards.length });
-      return standards;
-    }
-    throw new Error('No valid standards extracted');
-  } catch (err) {
-    log.warn('Failed to fetch standards, using fallback list', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    // Verified working DEX slugs from previous tests
-    const fallback = [
-      'uniswap-v3', 'sushiswap-v2', 'sushiswap-v3',
-      'balancer-v2', 'kyberswap', 'ramses-v3',
-    ];
-    cachedStandards = fallback;
-    return fallback;
-  }
+  log.info('Using hardcoded DEX standards list', { count: HARDCODED_DEX_SLUGS.length });
+  return HARDCODED_DEX_SLUGS;
 }
 
 /**
