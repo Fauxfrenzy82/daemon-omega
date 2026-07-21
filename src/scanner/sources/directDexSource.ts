@@ -7,21 +7,17 @@ import { TokenInfo } from '../../config/tokens';
 
 const log = createLogger('directDexSource');
 
-// Polygon router addresses – verified from official docs and Etherscan
+// Only use DEXs that are confirmed to work with Enso's Bundle API.
+// Router addresses verified from official docs and Etherscan.
 const ROUTERS: Record<string, { protocol: string; primaryAddress: string; extraArgs?: Record<string, string> }> = {
   'uniswap-v3': {
     protocol: 'uniswap-v3',
     primaryAddress: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
-    extraArgs: { poolFee: '3000' }, // filled dynamically
+    extraArgs: { poolFee: '3000' }, // will be overwritten dynamically
   },
   'sushiswap-v2': {
     protocol: 'sushiswap-v2',
     primaryAddress: '0x1b02dA8Cb0d097eB8D57A175b88c7D8b47997506',
-  },
-  'sushiswap-v3': {
-    protocol: 'sushiswap-v3',
-    primaryAddress: '0x00f23572b16c5e9e58e7b965def51ff8ff546e34',
-    extraArgs: { poolFee: '3000' },
   },
   'quickswap-v2': {
     protocol: 'uniswap-v2', // QuickSwap is a Uniswap V2 fork
@@ -35,7 +31,7 @@ function getPoolFee(tokenIn: TokenInfo, tokenOut: TokenInfo): string {
   if (symbols.includes('USDC') && symbols.includes('USDT')) return '500';
   if (symbols.includes('DAI') && symbols.includes('USDC')) return '500';
   if (symbols.includes('USDC') && symbols.includes('USDC.e')) return '500';
-  return '3000'; // default for WETH, WBTC
+  return '3000'; // default for WETH, WBTC, etc.
 }
 
 export interface DirectDexQuote {
