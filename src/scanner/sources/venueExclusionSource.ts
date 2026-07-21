@@ -4,9 +4,21 @@ import { executionWallet } from '../../treasury/wallets';
 import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
 import { TokenInfo } from '../../config/tokens';
-import { getAllStandards, excludeStandards } from '../../config/standards';
 
 const log = createLogger('venueExclusionSource');
+
+// Hardcoded DEX slugs that we know work with Enso's `protocol` parameter.
+const DEX_SLUGS = [
+  'uniswap-v3',
+  'sushiswap-v2',
+  'sushiswap-v3',
+  'balancer-v2',
+  'kyberswap',
+  'ramses-v3',
+  'dodo-v2',
+  'woofi-v2',
+  'curve',
+];
 
 export interface VenueQuote {
   venue: string;
@@ -19,7 +31,8 @@ export interface VenueQuote {
 }
 
 /**
- * Get a quote from a specific venue by excluding all other protocols.
+ * Get a quote from a specific protocol using the `protocol` parameter.
+ * This forces Enso to use ONLY that protocol – no aggregation.
  */
 export async function getQuoteFromVenue(
   venue: string,
@@ -31,10 +44,6 @@ export async function getQuoteFromVenue(
     const enso = getEnsoClient();
     const chainId = activeChain.chainId;
     const walletAddress = executionWallet.address as `0x${string}`;
-
-    // Fetch all standards and exclude all except the target venue.
-    const allStandards = await getAllStandards();
-    const ignoreStandards = allStandards.filter((s) => s !== venue);
 
     const routeData = await withRetry(
       () =>
@@ -48,10 +57,10 @@ export async function getQuoteFromVenue(
           tokenOut: [tokenOut.address as `0x${string}`],
           slippage: '100',
           routingStrategy: 'router',
-          ignoreStandards: ignoreStandards.length > 0 ? ignoreStandards : undefined,
+          protocol: venue, // ✅ FORCES the route to use ONLY this protocol
         } as any),
       {
-        label: `venueExcl.${venue}.${tokenIn.symbol}->${tokenOut.symbol}`,
+        label: `venue.${venue}.${tokenIn.symbol}->${tokenOut.symbol}`,
         shouldRetry: isTransientError,
         retries: 2,
       }
@@ -61,6 +70,16 @@ export async function getQuoteFromVenue(
     if (!amountOut) {
       log.debug('No amountOut from venue', { venue });
       return null;
+    }
+
+    // Verify that the actual route only used the requested protocol.
+    const actualProtocols = (routeData as any)?.route?.map((step: any) => step.protocol) || [];
+    if (!actualProtocols.every((p: string) => p === venue)) {
+      log.warn('Route used multiple protocols despite protocol param', {
+        venue,
+        actualProtocols,
+      });
+      // Still return the quote; the user can decide.
     }
 
     const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
@@ -86,8 +105,7 @@ export async function getQuoteFromVenue(
 }
 
 /**
- * Get quotes from all DEX venues by iterating over known slugs.
- * Filters out aggregators and lending protocols.
+ * Get quotes from all DEX venues by iterating over hardcoded slugs.
  */
 export async function getAllVenueQuotes(
   tokenIn: TokenInfo,
@@ -95,16 +113,7 @@ export async function getAllVenueQuotes(
   amountIn: string,
   excludeVenues: string[] = []
 ): Promise<VenueQuote[]> {
-  const allStandards = await getAllStandards();
-  // Keep only known DEXs – exclude aggregators and flash loan providers.
-  const dexSlugs = allStandards.filter(
-    (s) =>
-      !['paraswap', '1inch', '0x', 'aave-v3', 'morpho-markets-v1'].includes(s) &&
-      !s.includes('flashloan') &&
-      !s.includes('borrow')
-  );
-
-  const venues = dexSlugs.filter((s) => !excludeVenues.includes(s));
+  const venues = DEX_SLUGS.filter((s) => !excludeVenues.includes(s));
   const results: VenueQuote[] = [];
 
   for (const venue of venues) {
@@ -113,7 +122,7 @@ export async function getAllVenueQuotes(
       results.push(quote);
     }
     // Rate limit to avoid 429
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
   return results;
