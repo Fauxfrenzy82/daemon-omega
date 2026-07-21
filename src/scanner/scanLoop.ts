@@ -14,10 +14,10 @@ import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { recordScanCycle } from '../utils/healthServer';
 import {
-  getAllVenueQuotes,
-  getBestVenueQuote,
-  VenueQuote,
-} from './sources/venueExclusionSource';
+  getAllDirectDexQuotes,
+  getBestQuote,
+  DirectDexQuote,
+} from './sources/directDexSource';
 
 const log = createLogger('scanLoop');
 
@@ -28,7 +28,10 @@ function toRawAmount(amountHuman: number, token: TokenInfo): string {
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
 }
 
-function toQuoteResult(quote: VenueQuote, source: string): QuoteResult {
+/**
+ * Convert a DirectDexQuote to a QuoteResult for the evaluator.
+ */
+function toQuoteResult(quote: DirectDexQuote, source: string): QuoteResult {
   return {
     source,
     tokenIn: quote.tokenIn,
@@ -41,26 +44,29 @@ function toQuoteResult(quote: VenueQuote, source: string): QuoteResult {
   };
 }
 
+/**
+ * Scan a single pair using direct DEX quotes (true venue-specific).
+ */
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
 
-  // 1. Buy quotes from all venues
-  const buyQuotes = await getAllVenueQuotes(pair.quote, pair.base, positionRaw);
-  const bestBuy = getBestVenueQuote(buyQuotes);
+  // 1. Get buy quotes from all DEXs (quote → base)
+  const buyQuotes = await getAllDirectDexQuotes(pair.quote, pair.base, positionRaw);
+  const bestBuy = getBestQuote(buyQuotes);
   if (!bestBuy) {
-    log.info('SCAN_FAIL no buy quotes from any venue', { pairId: pair.id });
+    log.info('SCAN_FAIL no buy quotes from any DEX', { pairId: pair.id });
     return null;
   }
   const buyVenue = bestBuy.venue;
 
-  // 2. Sell quotes excluding the buy venue
-  const sellQuotes = await getAllVenueQuotes(
+  // 2. Get sell quotes (base → quote) from all DEXs, excluding the buy venue
+  const sellQuotes = await getAllDirectDexQuotes(
     pair.base,
     pair.quote,
     bestBuy.amountOut,
-    [buyVenue]
+    [buyVenue] // exclude the buy venue
   );
-  const bestSell = getBestVenueQuote(sellQuotes);
+  const bestSell = getBestQuote(sellQuotes);
   if (!bestSell) {
     log.info('SCAN_FAIL no sell quotes excluding buy venue', {
       pairId: pair.id,
@@ -95,8 +101,9 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     spreadBps: spreadBps.toFixed(2),
   });
 
-  const buyQuoteResult = toQuoteResult(bestBuy, `venue-${bestBuy.venue}`);
-  const sellQuoteResult = toQuoteResult(bestSell, `venue-${bestSell.venue}`);
+  // 4. Build SpreadOpportunity for evaluator
+  const buyQuoteResult = toQuoteResult(bestBuy, `direct-${bestBuy.venue}`);
+  const sellQuoteResult = toQuoteResult(bestSell, `direct-${bestSell.venue}`);
 
   const spreadOpp = {
     pairId: pair.id,
@@ -107,6 +114,7 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     spreadBps,
   };
 
+  // 5. Evaluate
   const evaluated = await evaluateOpportunity(
     pair,
     spreadOpp,
