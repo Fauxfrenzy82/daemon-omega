@@ -15,7 +15,6 @@ import { createLogger } from '../utils/logger';
 import { recordScanCycle } from '../utils/healthServer';
 import {
   getAllDirectDexQuotes,
-  getBestQuote,
   DirectDexQuote,
 } from './sources/directDexSource';
 
@@ -44,46 +43,91 @@ function toQuoteResult(quote: DirectDexQuote, source: string): QuoteResult {
   };
 }
 
+interface RoundTrip {
+  buyQuote: DirectDexQuote;
+  sellQuote: DirectDexQuote;
+  endAmount: number;
+}
+
+/**
+ * Given every venue's buy-leg quote and every venue's sell-leg quote
+ * (fetched independently, not sequentially), find the combination
+ * with buyVenue !== sellVenue that yields the highest endAmount.
+ *
+ * This is a genuine best-path search: a venue that offers the best
+ * buy quote alone isn't necessarily part of the best round trip once
+ * you factor in which venues are even available to sell into after.
+ */
+function findBestRoundTrip(
+  buyQuotes: DirectDexQuote[],
+  sellQuotesByBuyVenue: Map<string, DirectDexQuote[]>,
+  quoteDecimals: number
+): RoundTrip | null {
+  let best: RoundTrip | null = null;
+
+  for (const buyQuote of buyQuotes) {
+    const sellQuotes = sellQuotesByBuyVenue.get(buyQuote.venue) ?? [];
+    for (const sellQuote of sellQuotes) {
+      if (sellQuote.venue === buyQuote.venue) continue; // no same-venue round trips
+
+      const endAmount = Number(sellQuote.amountOut) / 10 ** quoteDecimals;
+      if (!best || endAmount > best.endAmount) {
+        best = { buyQuote, sellQuote, endAmount };
+      }
+    }
+  }
+
+  return best;
+}
+
 /**
  * Scan a single pair using direct DEX quotes (true venue-specific).
+ * Evaluates every valid (buyVenue, sellVenue) combination rather than
+ * greedily locking in the best buy quote before knowing the sell side.
  */
 async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> {
   const positionRaw = toRawAmount(pair.maxPositionUsd, pair.quote);
 
-  // 1. Get buy quotes from all DEXs (quote → base)
+  // 1. Get buy quotes from every venue (quote → base). Venues that fail the
+  //    liquidity filter or fail to quote are already excluded by getAllDirectDexQuotes.
   const buyQuotes = await getAllDirectDexQuotes(pair.quote, pair.base, positionRaw);
-  const bestBuy = getBestQuote(buyQuotes);
-  if (!bestBuy) {
+  if (buyQuotes.length === 0) {
     log.info('SCAN_FAIL no buy quotes from any DEX', { pairId: pair.id });
     return null;
   }
-  const buyVenue = bestBuy.venue;
 
-  // 2. Get sell quotes (base → quote) from all DEXs, excluding the buy venue
-  const sellQuotes = await getAllDirectDexQuotes(
-    pair.base,
-    pair.quote,
-    bestBuy.amountOut,
-    [buyVenue] // exclude the buy venue
-  );
-  const bestSell = getBestQuote(sellQuotes);
-  if (!bestSell) {
-    log.info('SCAN_FAIL no sell quotes excluding buy venue', {
-      pairId: pair.id,
-      buyVenue,
-    });
+  // 2. For each buy venue's resulting base-token amount, fetch sell quotes
+  //    from every OTHER venue. Each buy venue can produce a slightly different
+  //    amountOut, so sell quotes are fetched per buy-venue amount, not once globally.
+  const sellQuotesByBuyVenue = new Map<string, DirectDexQuote[]>();
+  for (const buyQuote of buyQuotes) {
+    const sellQuotes = await getAllDirectDexQuotes(
+      pair.base,
+      pair.quote,
+      buyQuote.amountOut,
+      [buyQuote.venue] // exclude only this buy venue for this leg
+    );
+    sellQuotesByBuyVenue.set(buyQuote.venue, sellQuotes);
+  }
+
+  // 3. Search every valid (buyVenue, sellVenue) combination for the best round trip.
+  const bestTrip = findBestRoundTrip(buyQuotes, sellQuotesByBuyVenue, pair.quote.decimals);
+  if (!bestTrip) {
+    log.info('SCAN_FAIL no valid cross-venue sell quotes', { pairId: pair.id });
     return null;
   }
 
-  // 3. Compute spread
+  const { buyQuote: bestBuy, sellQuote: bestSell } = bestTrip;
+
+  // 4. Compute spread
   const startAmount = Number(positionRaw) / 10 ** pair.quote.decimals;
-  const endAmount = Number(bestSell.amountOut) / 10 ** pair.quote.decimals;
+  const endAmount = bestTrip.endAmount;
   const spreadBps = ((endAmount - startAmount) / startAmount) * 10000;
 
   if (endAmount <= startAmount) {
     log.info('SCAN_LOSS cross-venue (buy: %s, sell: %s)', {
       pairId: pair.id,
-      buyVenue,
+      buyVenue: bestBuy.venue,
       sellVenue: bestSell.venue,
       startAmount: startAmount.toFixed(4),
       endAmount: endAmount.toFixed(4),
@@ -94,14 +138,14 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
 
   log.info('SCAN_GAIN cross-venue (buy: %s, sell: %s)', {
     pairId: pair.id,
-    buyVenue,
+    buyVenue: bestBuy.venue,
     sellVenue: bestSell.venue,
     startAmount: startAmount.toFixed(4),
     endAmount: endAmount.toFixed(4),
     spreadBps: spreadBps.toFixed(2),
   });
 
-  // 4. Build SpreadOpportunity for evaluator
+  // 5. Build SpreadOpportunity for evaluator
   const buyQuoteResult = toQuoteResult(bestBuy, `direct-${bestBuy.venue}`);
   const sellQuoteResult = toQuoteResult(bestSell, `direct-${bestSell.venue}`);
 
@@ -114,7 +158,7 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
     spreadBps,
   };
 
-  // 5. Evaluate
+  // 6. Evaluate
   const evaluated = await evaluateOpportunity(
     pair,
     spreadOpp,
