@@ -10,6 +10,16 @@ const log = createLogger('directDexSource');
 
 // Only use DEXs that are confirmed to work with Enso's Bundle API.
 // Router addresses verified from official docs and Etherscan.
+//
+// BALANCER: deliberately NOT included. Enso's Bundle API rejected balancer-v2
+// swap requests with "Could not build Bundle shortcut on network 137" —
+// Enso's own blog confirms their native Balancer integration is v3, not v2.
+// V3 uses a different Vault architecture and different pool IDs than the
+// v2 pool we tried. We could not find a verified V3 Vault address or pool ID
+// for Polygon from primary sources (Balancer's own deployment-addresses page
+// is JS-rendered and didn't return real data via fetch). Do not re-add
+// Balancer with a guessed address — verify a real V3 Polygon Vault address
+// and pool ID first, e.g. via PolygonScan or Balancer's app directly.
 const ROUTERS: Record<string, { protocol: string; primaryAddress: string; extraArgs?: Record<string, string> }> = {
   'uniswap-v3': {
     protocol: 'uniswap-v3',
@@ -24,20 +34,6 @@ const ROUTERS: Record<string, { protocol: string; primaryAddress: string; extraA
     protocol: 'uniswap-v2', // QuickSwap is a Uniswap V2 fork
     primaryAddress: '0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff',
   },
-};
-
-// Balancer V2 is architecturally different: swaps route through a single
-// shared Vault contract (verified: 0xBA12222222228d8Ba445958a75a0704d566BF2C8,
-// identical address across all EVM chains including Polygon, "Balancer: Vault"
-// on PolygonScan/Etherscan, $52M+ balance across chains) using a poolId,
-// not per-DEX router addresses. Pools are added ONE AT A TIME, only once a
-// specific poolId has been found with real TVL confirmation.
-const BALANCER_V2_VAULT = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
-
-// Confirmed via farm.army TVL tracker (~$2.8M TVL at time of lookup):
-// WMATIC/USDC/WETH/BAL "Polygon Base Pool" on Balancer V2.
-const BALANCER_V2_POOL_IDS: Record<string, string> = {
-  'WMATIC-USDC': '0x0297e37f1873d2dab4487aa67cd56b58e2f27875000100000000000000000002',
 };
 
 // Fee tier mapping based on token pair
@@ -214,115 +210,6 @@ export async function getDirectDexQuote(
   }
 }
 
-async function getBalancerV2Quote(
-  pairId: string,
-  tokenIn: TokenInfo,
-  tokenOut: TokenInfo,
-  amountIn: string
-): Promise<DirectDexQuote | null> {
-  const poolId = BALANCER_V2_POOL_IDS[pairId];
-  if (!poolId) {
-    return null;
-  }
-
-  const venue = 'balancer-v2';
-
-  try {
-    const enso = getEnsoClient();
-    const chainId = activeChain.chainId;
-    const walletAddress = executionWallet.address as `0x${string}`;
-
-    const args: any = {
-      tokenIn: tokenIn.address as `0x${string}`,
-      tokenOut: tokenOut.address as `0x${string}`,
-      amountIn,
-      primaryAddress: BALANCER_V2_VAULT as `0x${string}`,
-      poolId,
-      receiver: walletAddress,
-    };
-
-    log.info('Requesting direct DEX quote', {
-      venue,
-      protocol: 'balancer-v2',
-      tokenIn: tokenIn.symbol,
-      tokenOut: tokenOut.symbol,
-      amountIn,
-      poolId,
-    });
-
-    const bundleData = await withRetry(
-      () =>
-        enso.getBundleData(
-          {
-            chainId,
-            fromAddress: walletAddress,
-            routingStrategy: 'router',
-          } as any,
-          [
-            {
-              protocol: 'balancer-v2',
-              action: 'swap',
-              args,
-            } as any,
-          ]
-        ),
-      {
-        label: `directDex.${venue}.${tokenIn.symbol}->${tokenOut.symbol}`,
-        shouldRetry: isTransientError,
-        retries: 2,
-      }
-    );
-
-    const amountOut = extractAmountOut(bundleData, tokenOut.address);
-
-    if (!amountOut) {
-      log.warn('No amountOut in bundle response', {
-        venue,
-        expectedTokenOut: tokenOut.address,
-        poolId,
-        amountsOutKeys: bundleData?.amountsOut ? Object.keys(bundleData.amountsOut) : null,
-        keys: bundleData ? Object.keys(bundleData) : null,
-      });
-      return null;
-    }
-
-    const priceImpactBps = typeof bundleData?.priceImpact === 'number' ? bundleData.priceImpact : null;
-
-    if (priceImpactBps !== null && priceImpactBps > MAX_PRICE_IMPACT_BPS) {
-      log.info('Venue discarded, price impact above threshold', {
-        venue,
-        tokenIn: tokenIn.symbol,
-        tokenOut: tokenOut.symbol,
-        priceImpactBps,
-        maxAllowedBps: MAX_PRICE_IMPACT_BPS,
-      });
-      return null;
-    }
-
-    const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
-    const amountOutHuman = Number(amountOut) / 10 ** tokenOut.decimals;
-    const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
-
-    return {
-      venue,
-      tokenIn,
-      tokenOut,
-      amountIn,
-      amountOut: String(amountOut),
-      price,
-      priceImpactBps,
-      raw: bundleData,
-    };
-  } catch (err: any) {
-    log.error('Direct DEX quote failed', {
-      venue,
-      poolId,
-      ...describeError(err),
-    });
-    return null;
-  }
-}
-
 export async function getAllDirectDexQuotes(
   tokenIn: TokenInfo,
   tokenOut: TokenInfo,
@@ -341,13 +228,10 @@ export async function getAllDirectDexQuotes(
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
 
-  if (pairId && !excludeVenues.includes('balancer-v2')) {
-    const balancerQuote = await getBalancerV2Quote(pairId, tokenIn, tokenOut, amountIn);
-    if (balancerQuote) {
-      results.push(balancerQuote);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }
+  // pairId is accepted for forward-compat with scanLoop.ts's call signature,
+  // but currently unused — no venue depends on it until Balancer (or another
+  // pool-ID-based venue) is re-added with verified data.
+  void pairId;
 
   return results;
 }
