@@ -1,6 +1,6 @@
 import { SpreadOpportunity } from '../scanner/spreadCalculator';
 import { PairConfig } from '../config/pairs';
-import { estimateFullCost } from './feeModel';
+import { estimateFullCost, resolveRoundTripGasUnits } from './feeModel';
 import { checkThresholds, ThresholdCheck } from './thresholds';
 import { meetsLiquidityFloor } from '../scanner/liquidityCheck';
 import { env } from '../config/env';
@@ -71,7 +71,18 @@ export async function evaluateOpportunity(
     };
   }
 
-  const cost = await estimateFullCost(positionSizeUsd, nativeUsdPrice);
+  // Use REAL gas units from both legs' quotes when available (Enso's
+  // bundleData.gas), instead of a flat constant that doesn't scale with
+  // route complexity. A multi-hop routeMulti trade costs meaningfully
+  // more gas than a simple single-hop swap, and pricing it at a flat
+  // 200k units was letting some trades pass this pre-filter as
+  // profitable when real on-chain gas ate the margin.
+  const { gasUnits, source: gasUnitsSource } = resolveRoundTripGasUnits(
+    spreadOpp.buyQuote.raw,
+    spreadOpp.sellQuote.raw
+  );
+
+  const cost = await estimateFullCost(positionSizeUsd, nativeUsdPrice, gasUnits, gasUnitsSource);
   const netProfitUsd = grossProfitUsd - cost.totalCostUsd;
 
   const thresholdCheck = checkThresholds(pair, spreadOpp.spreadBps, netProfitUsd);
@@ -108,6 +119,8 @@ export async function evaluateOpportunity(
       grossProfitUsd: grossProfitUsd.toFixed(4),
       netProfitUsd: netProfitUsd.toFixed(4),
       gasCostUsd: cost.gasCostUsd.toFixed(4),
+      gasUnitsUsed: cost.gasUnitsUsed,
+      gasUnitsSource: cost.gasUnitsSource,
       protocolFeeUsd: cost.protocolFeeUsd.toFixed(4),
       slippageBufferUsd: cost.slippageBufferUsd?.toFixed(4),
       buySource: spreadOpp.buySource,
@@ -121,6 +134,8 @@ export async function evaluateOpportunity(
       spreadBps: spreadOpp.spreadBps,
       netProfitUsd: netProfitUsd.toFixed(4),
       positionSizeUsd,
+      gasUnitsUsed: cost.gasUnitsUsed,
+      gasUnitsSource: cost.gasUnitsSource,
       buySource: spreadOpp.buySource,
       sellSource: spreadOpp.sellSource,
       buyRequiresRequote: options?.buyRequiresRequote || false,
