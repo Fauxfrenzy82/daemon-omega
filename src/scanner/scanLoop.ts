@@ -22,6 +22,16 @@ const log = createLogger('scanLoop');
 
 let cachedNativeUsdPrice = 0.5;
 
+// Small pause between pairs within a cycle, so N pairs don't all fire
+// their Enso calls back-to-back and trigger a 429 wave. Each pair
+// already internally paces its own venue calls at 400ms via
+// getAllDirectDexQuotes; this adds pacing between pairs on top of that.
+const INTER_PAIR_DELAY_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function toRawAmount(amountHuman: number, token: TokenInfo): string {
   if (amountHuman <= 0) return '0';
   return ethers.utils.parseUnits(amountHuman.toString(), token.decimals).toString();
@@ -192,19 +202,25 @@ async function runScanCycle(): Promise<void> {
   const pairs = enabledPairs();
   log.info('Evaluating enabled pairs', { count: pairs.length });
 
-  const results = await Promise.all(
-    pairs.map((pair) => {
-      return scanPair(pair).catch((err) => {
-        log.error('Pair scan failed', {
-          pairId: pair.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return null;
+  // Pairs are scanned SEQUENTIALLY, not in parallel, to avoid firing every
+  // pair's Enso calls at once and triggering a 429 wave. Each pair already
+  // paces its own venue calls internally; this adds pacing between pairs.
+  const evaluated: EvaluatedOpportunity[] = [];
+  for (const pair of pairs) {
+    try {
+      const result = await scanPair(pair);
+      if (result) {
+        evaluated.push(result);
+      }
+    } catch (err) {
+      log.error('Pair scan failed', {
+        pairId: pair.id,
+        error: err instanceof Error ? err.message : String(err),
       });
-    })
-  );
+    }
+    await sleep(INTER_PAIR_DELAY_MS);
+  }
 
-  const evaluated = results.filter((r): r is EvaluatedOpportunity => r !== null);
   const executableCount = evaluated.filter((e) => e.executable).length;
 
   log.info('Scan cycle complete', {
