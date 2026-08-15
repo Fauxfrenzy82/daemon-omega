@@ -65,6 +65,41 @@ function describeError(err: any): Record<string, unknown> {
   };
 }
 
+/**
+ * Enso's Bundle API returns amountsOut as an OBJECT keyed by token
+ * address (lowercase), not an array: { "0xabc...": "12345" }.
+ * Do a case-insensitive lookup by the expected tokenOut address.
+ */
+function extractAmountOut(bundleData: any, tokenOutAddress: string): string | undefined {
+  const target = tokenOutAddress.toLowerCase();
+
+  if (bundleData?.amountsOut && typeof bundleData.amountsOut === 'object' && !Array.isArray(bundleData.amountsOut)) {
+    for (const [addr, value] of Object.entries(bundleData.amountsOut)) {
+      if (addr.toLowerCase() === target) {
+        return value as string;
+      }
+    }
+    // Fallback: single-entry object, just take the only value present
+    const values = Object.values(bundleData.amountsOut);
+    if (values.length === 1) {
+      return values[0] as string;
+    }
+  }
+
+  // Legacy/alternate shapes, kept as fallbacks
+  if (typeof bundleData?.amountOut === 'string') {
+    return bundleData.amountOut;
+  }
+  if (bundleData?.route && Array.isArray(bundleData.route)) {
+    const lastRoute = bundleData.route[bundleData.route.length - 1];
+    if (typeof lastRoute?.amountOut === 'string') {
+      return lastRoute.amountOut;
+    }
+  }
+
+  return undefined;
+}
+
 export async function getDirectDexQuote(
   venue: string,
   tokenIn: TokenInfo,
@@ -131,22 +166,14 @@ export async function getDirectDexQuote(
       }
     );
 
-    // Extract amountOut – use amountsOut array (plural) from BundleData
-    let amountOut: string | undefined;
-    if (bundleData?.amountsOut && Array.isArray(bundleData.amountsOut) && bundleData.amountsOut.length > 0) {
-      amountOut = bundleData.amountsOut[0];
-    } else if ((bundleData as any)?.amountOut) {
-      amountOut = (bundleData as any).amountOut;
-    } else if (bundleData?.route && Array.isArray(bundleData.route)) {
-      const lastRoute = bundleData.route[bundleData.route.length - 1];
-      amountOut = (lastRoute as any)?.amountOut;
-    }
+    const amountOut = extractAmountOut(bundleData, tokenOut.address);
 
     if (!amountOut) {
       log.warn('No amountOut in bundle response', {
         venue,
+        expectedTokenOut: tokenOut.address,
+        amountsOutKeys: bundleData?.amountsOut ? Object.keys(bundleData.amountsOut) : null,
         keys: bundleData ? Object.keys(bundleData) : null,
-        bundleData: bundleData ? JSON.stringify(bundleData) : undefined,
       });
       return null;
     }
