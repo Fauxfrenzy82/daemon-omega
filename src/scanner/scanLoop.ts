@@ -100,7 +100,9 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
 
   // 1. Get buy quotes from every venue (quote → base). Venues that fail the
   //    liquidity filter or fail to quote are already excluded by getAllDirectDexQuotes.
-  const buyQuotes = await getAllDirectDexQuotes(pair.quote, pair.base, positionRaw);
+  //    pair.id is passed so Balancer V2 can look up a verified poolId for this
+  //    specific pair — pairs without one simply get no Balancer quote.
+  const buyQuotes = await getAllDirectDexQuotes(pair.quote, pair.base, positionRaw, [], pair.id);
   if (buyQuotes.length === 0) {
     log.info('SCAN_FAIL no buy quotes from any DEX', { pairId: pair.id });
     return null;
@@ -115,7 +117,8 @@ async function scanPair(pair: PairConfig): Promise<EvaluatedOpportunity | null> 
       pair.base,
       pair.quote,
       buyQuote.amountOut,
-      [buyQuote.venue] // exclude only this buy venue for this leg
+      [buyQuote.venue], // exclude only this buy venue for this leg
+      pair.id
     );
     sellQuotesByBuyVenue.set(buyQuote.venue, sellQuotes);
   }
