@@ -44,6 +44,27 @@ export interface DirectDexQuote {
   raw: any;
 }
 
+/**
+ * Pull every useful field off an unknown thrown error so we never
+ * lose the real cause. Axios errors, fetch errors, and plain Errors
+ * all get something meaningful out of this.
+ */
+function describeError(err: any): Record<string, unknown> {
+  return {
+    message: err?.message || String(err),
+    name: err?.name,
+    // axios-style
+    statusCode: err?.statusCode || err?.response?.status,
+    responseData: err?.response?.data ? JSON.stringify(err.response.data) : undefined,
+    // fetch-style (some SDKs throw a Response or a wrapped error with .status/.body)
+    status: err?.status,
+    body: err?.body ? JSON.stringify(err.body) : undefined,
+    // Enso SDK sometimes wraps validation errors
+    cause: err?.cause ? String(err.cause) : undefined,
+    stack: err?.stack,
+  };
+}
+
 export async function getDirectDexQuote(
   venue: string,
   tokenIn: TokenInfo,
@@ -52,7 +73,7 @@ export async function getDirectDexQuote(
 ): Promise<DirectDexQuote | null> {
   const config = ROUTERS[venue];
   if (!config) {
-    log.debug('No router config for venue', { venue });
+    log.warn('No router config for venue', { venue });
     return null;
   }
 
@@ -78,6 +99,14 @@ export async function getDirectDexQuote(
       // Merge other extra args
       Object.assign(args, config.extraArgs);
     }
+
+    log.info('Requesting direct DEX quote', {
+      venue,
+      protocol: config.protocol,
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      amountIn,
+    });
 
     const bundleData = await withRetry(
       () =>
@@ -114,7 +143,11 @@ export async function getDirectDexQuote(
     }
 
     if (!amountOut) {
-      log.debug('No amountOut in bundle response', { venue, keys: bundleData ? Object.keys(bundleData) : null });
+      log.warn('No amountOut in bundle response', {
+        venue,
+        keys: bundleData ? Object.keys(bundleData) : null,
+        bundleData: bundleData ? JSON.stringify(bundleData) : undefined,
+      });
       return null;
     }
 
@@ -132,10 +165,9 @@ export async function getDirectDexQuote(
       raw: bundleData,
     };
   } catch (err: any) {
-    log.debug('Direct DEX quote failed', {
+    log.error('Direct DEX quote failed', {
       venue,
-      error: err?.message || String(err),
-      statusCode: err?.statusCode || err?.response?.status,
+      ...describeError(err),
     });
     return null;
   }
