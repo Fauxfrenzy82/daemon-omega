@@ -26,6 +26,20 @@ const ROUTERS: Record<string, { protocol: string; primaryAddress: string; extraA
   },
 };
 
+// Balancer V2 is architecturally different: swaps route through a single
+// shared Vault contract (verified: 0xBA12222222228d8Ba445958a75a0704d566BF2C8,
+// identical address across all EVM chains including Polygon, "Balancer: Vault"
+// on PolygonScan/Etherscan, $52M+ balance across chains) using a poolId,
+// not per-DEX router addresses. Pools are added ONE AT A TIME, only once a
+// specific poolId has been found with real TVL confirmation.
+const BALANCER_V2_VAULT = '0xBA12222222228d8Ba445958a75a0704d566BF2C8';
+
+// Confirmed via farm.army TVL tracker (~$2.8M TVL at time of lookup):
+// WMATIC/USDC/WETH/BAL "Polygon Base Pool" on Balancer V2.
+const BALANCER_V2_POOL_IDS: Record<string, string> = {
+  'WMATIC-USDC': '0x0297e37f1873d2dab4487aa67cd56b58e2f27875000100000000000000000002',
+};
+
 // Fee tier mapping based on token pair
 function getPoolFee(tokenIn: TokenInfo, tokenOut: TokenInfo): string {
   const symbols = [tokenIn.symbol, tokenOut.symbol];
@@ -42,36 +56,23 @@ export interface DirectDexQuote {
   amountIn: string;
   amountOut: string;
   price: number;
-  priceImpactBps: number | null; // basis points, per Enso's bundleData.priceImpact
+  priceImpactBps: number | null;
   raw: any;
 }
 
-/**
- * Pull every useful field off an unknown thrown error so we never
- * lose the real cause. Axios errors, fetch errors, and plain Errors
- * all get something meaningful out of this.
- */
 function describeError(err: any): Record<string, unknown> {
   return {
     message: err?.message || String(err),
     name: err?.name,
-    // axios-style
     statusCode: err?.statusCode || err?.response?.status,
     responseData: err?.response?.data ? JSON.stringify(err.response.data) : undefined,
-    // fetch-style (some SDKs throw a Response or a wrapped error with .status/.body)
     status: err?.status,
     body: err?.body ? JSON.stringify(err.body) : undefined,
-    // Enso SDK sometimes wraps validation errors
     cause: err?.cause ? String(err.cause) : undefined,
     stack: err?.stack,
   };
 }
 
-/**
- * Enso's Bundle API returns amountsOut as an OBJECT keyed by token
- * address (lowercase), not an array: { "0xabc...": "12345" }.
- * Do a case-insensitive lookup by the expected tokenOut address.
- */
 function extractAmountOut(bundleData: any, tokenOutAddress: string): string | undefined {
   const target = tokenOutAddress.toLowerCase();
 
@@ -81,14 +82,12 @@ function extractAmountOut(bundleData: any, tokenOutAddress: string): string | un
         return value as string;
       }
     }
-    // Fallback: single-entry object, just take the only value present
     const values = Object.values(bundleData.amountsOut);
     if (values.length === 1) {
       return values[0] as string;
     }
   }
 
-  // Legacy/alternate shapes, kept as fallbacks
   if (typeof bundleData?.amountOut === 'string') {
     return bundleData.amountOut;
   }
@@ -102,11 +101,6 @@ function extractAmountOut(bundleData: any, tokenOutAddress: string): string | un
   return undefined;
 }
 
-/**
- * Default max acceptable price impact, in basis points, before a
- * venue is discarded as too illiquid to bother comparing.
- * 300 bps = 3%. Override via MAX_PRICE_IMPACT_BPS in env.
- */
 const MAX_PRICE_IMPACT_BPS = env.MAX_PRICE_IMPACT_BPS ?? 300;
 
 export async function getDirectDexQuote(
@@ -134,13 +128,10 @@ export async function getDirectDexQuote(
       receiver: walletAddress,
     };
 
-    // Add protocol-specific extra args
     if (config.extraArgs) {
-      // Handle dynamic poolFee
       if (config.extraArgs.poolFee) {
         args.poolFee = getPoolFee(tokenIn, tokenOut);
       }
-      // Merge other extra args
       Object.assign(args, config.extraArgs);
     }
 
@@ -223,11 +214,121 @@ export async function getDirectDexQuote(
   }
 }
 
+async function getBalancerV2Quote(
+  pairId: string,
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  amountIn: string
+): Promise<DirectDexQuote | null> {
+  const poolId = BALANCER_V2_POOL_IDS[pairId];
+  if (!poolId) {
+    return null;
+  }
+
+  const venue = 'balancer-v2';
+
+  try {
+    const enso = getEnsoClient();
+    const chainId = activeChain.chainId;
+    const walletAddress = executionWallet.address as `0x${string}`;
+
+    const args: any = {
+      tokenIn: tokenIn.address as `0x${string}`,
+      tokenOut: tokenOut.address as `0x${string}`,
+      amountIn,
+      primaryAddress: BALANCER_V2_VAULT as `0x${string}`,
+      poolId,
+      receiver: walletAddress,
+    };
+
+    log.info('Requesting direct DEX quote', {
+      venue,
+      protocol: 'balancer-v2',
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      amountIn,
+      poolId,
+    });
+
+    const bundleData = await withRetry(
+      () =>
+        enso.getBundleData(
+          {
+            chainId,
+            fromAddress: walletAddress,
+            routingStrategy: 'router',
+          } as any,
+          [
+            {
+              protocol: 'balancer-v2',
+              action: 'swap',
+              args,
+            } as any,
+          ]
+        ),
+      {
+        label: `directDex.${venue}.${tokenIn.symbol}->${tokenOut.symbol}`,
+        shouldRetry: isTransientError,
+        retries: 2,
+      }
+    );
+
+    const amountOut = extractAmountOut(bundleData, tokenOut.address);
+
+    if (!amountOut) {
+      log.warn('No amountOut in bundle response', {
+        venue,
+        expectedTokenOut: tokenOut.address,
+        poolId,
+        amountsOutKeys: bundleData?.amountsOut ? Object.keys(bundleData.amountsOut) : null,
+        keys: bundleData ? Object.keys(bundleData) : null,
+      });
+      return null;
+    }
+
+    const priceImpactBps = typeof bundleData?.priceImpact === 'number' ? bundleData.priceImpact : null;
+
+    if (priceImpactBps !== null && priceImpactBps > MAX_PRICE_IMPACT_BPS) {
+      log.info('Venue discarded, price impact above threshold', {
+        venue,
+        tokenIn: tokenIn.symbol,
+        tokenOut: tokenOut.symbol,
+        priceImpactBps,
+        maxAllowedBps: MAX_PRICE_IMPACT_BPS,
+      });
+      return null;
+    }
+
+    const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
+    const amountOutHuman = Number(amountOut) / 10 ** tokenOut.decimals;
+    const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
+
+    return {
+      venue,
+      tokenIn,
+      tokenOut,
+      amountIn,
+      amountOut: String(amountOut),
+      price,
+      priceImpactBps,
+      raw: bundleData,
+    };
+  } catch (err: any) {
+    log.error('Direct DEX quote failed', {
+      venue,
+      poolId,
+      ...describeError(err),
+    });
+    return null;
+  }
+}
+
 export async function getAllDirectDexQuotes(
   tokenIn: TokenInfo,
   tokenOut: TokenInfo,
   amountIn: string,
-  excludeVenues: string[] = []
+  excludeVenues: string[] = [],
+  pairId?: string
 ): Promise<DirectDexQuote[]> {
   const venues = Object.keys(ROUTERS).filter((v) => !excludeVenues.includes(v));
   const results: DirectDexQuote[] = [];
@@ -236,6 +337,14 @@ export async function getAllDirectDexQuotes(
     const quote = await getDirectDexQuote(venue, tokenIn, tokenOut, amountIn);
     if (quote) {
       results.push(quote);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+
+  if (pairId && !excludeVenues.includes('balancer-v2')) {
+    const balancerQuote = await getBalancerV2Quote(pairId, tokenIn, tokenOut, amountIn);
+    if (balancerQuote) {
+      results.push(balancerQuote);
     }
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
