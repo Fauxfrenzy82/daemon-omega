@@ -4,6 +4,7 @@ import { executionWallet } from '../../treasury/wallets';
 import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
 import { TokenInfo } from '../../config/tokens';
+import { env } from '../../config/env';
 
 const log = createLogger('directDexSource');
 
@@ -41,6 +42,7 @@ export interface DirectDexQuote {
   amountIn: string;
   amountOut: string;
   price: number;
+  priceImpactBps: number | null; // basis points, per Enso's bundleData.priceImpact
   raw: any;
 }
 
@@ -99,6 +101,13 @@ function extractAmountOut(bundleData: any, tokenOutAddress: string): string | un
 
   return undefined;
 }
+
+/**
+ * Default max acceptable price impact, in basis points, before a
+ * venue is discarded as too illiquid to bother comparing.
+ * 300 bps = 3%. Override via MAX_PRICE_IMPACT_BPS in env.
+ */
+const MAX_PRICE_IMPACT_BPS = env.MAX_PRICE_IMPACT_BPS ?? 300;
 
 export async function getDirectDexQuote(
   venue: string,
@@ -178,6 +187,19 @@ export async function getDirectDexQuote(
       return null;
     }
 
+    const priceImpactBps = typeof bundleData?.priceImpact === 'number' ? bundleData.priceImpact : null;
+
+    if (priceImpactBps !== null && priceImpactBps > MAX_PRICE_IMPACT_BPS) {
+      log.info('Venue discarded, price impact above threshold', {
+        venue,
+        tokenIn: tokenIn.symbol,
+        tokenOut: tokenOut.symbol,
+        priceImpactBps,
+        maxAllowedBps: MAX_PRICE_IMPACT_BPS,
+      });
+      return null;
+    }
+
     const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
     const amountOutHuman = Number(amountOut) / 10 ** tokenOut.decimals;
     const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
@@ -189,6 +211,7 @@ export async function getDirectDexQuote(
       amountIn,
       amountOut: String(amountOut),
       price,
+      priceImpactBps,
       raw: bundleData,
     };
   } catch (err: any) {
