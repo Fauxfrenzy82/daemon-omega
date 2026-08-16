@@ -23,7 +23,7 @@ export const PAIRS: PairConfig[] = [
   },
   {
     id: 'WBTC-USDC',
-    base: getToken('WBTC'),   // ✅ Correct – deployed version must have this
+    base: getToken('WBTC'),
     quote: getToken('USDC'),
     minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
     minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
@@ -51,6 +51,27 @@ export const PAIRS: PairConfig[] = [
   {
     id: 'DAI-USDC',
     base: getToken('DAI'),
+    quote: getToken('USDC'),
+    minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
+    minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
+    maxPositionUsd: env.MAX_POSITION_SIZE_USD,
+    enabled: true,
+  },
+  // New: LINK and AAVE addresses independently verified via PolygonScan
+  // token pages this session (see tokens.ts comments) before being added
+  // here — not carried over from any unverified list.
+  {
+    id: 'LINK-USDC',
+    base: getToken('LINK'),
+    quote: getToken('USDC'),
+    minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
+    minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
+    maxPositionUsd: env.MAX_POSITION_SIZE_USD,
+    enabled: true,
+  },
+  {
+    id: 'AAVE-USDC',
+    base: getToken('AAVE'),
     quote: getToken('USDC'),
     minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
     minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
