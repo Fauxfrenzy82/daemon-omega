@@ -56,6 +56,26 @@ export const TOKENS: Record<string, TokenInfo> = {
     symbol: 'WBTC',
     name: 'Wrapped Bitcoin',
   },
+  // Verified via PolygonScan token page (constructor args confirm name/
+  // symbol/decimals; high holder count / market cap distinguishes from a
+  // same-named scam duplicate found at 0xb0897686c545045aFc77CF20eC7A532E3120E0F1,
+  // which has far fewer holders and is NOT this token).
+  LINK: {
+    chainId: 137,
+    address: '0x53E0bca35eC356BD5dDDFebbD1Fc0fD03FaBad39',
+    decimals: 18,
+    symbol: 'LINK',
+    name: 'ChainLink Token',
+  },
+  // Verified via PolygonScan token page ("Token Rep: OK", 269k+ holders,
+  // real market cap).
+  AAVE: {
+    chainId: 137,
+    address: '0xD6DF932A45C0f255f85145f286eA0b292B21C90B',
+    decimals: 18,
+    symbol: 'AAVE',
+    name: 'Aave Token',
+  },
 };
 
 export function getToken(symbol: string): TokenInfo {
