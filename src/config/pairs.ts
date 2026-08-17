@@ -57,9 +57,6 @@ export const PAIRS: PairConfig[] = [
     maxPositionUsd: env.MAX_POSITION_SIZE_USD,
     enabled: true,
   },
-  // New: LINK and AAVE addresses independently verified via PolygonScan
-  // token pages this session (see tokens.ts comments) before being added
-  // here — not carried over from any unverified list.
   {
     id: 'LINK-USDC',
     base: getToken('LINK'),
@@ -76,6 +73,27 @@ export const PAIRS: PairConfig[] = [
     minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
     minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
     maxPositionUsd: env.MAX_POSITION_SIZE_USD,
+    enabled: true,
+  },
+  // New: thinner-liquidity pairs, deliberately smaller position size
+  // ($50 vs the $500 used above) since these pools are expected to be
+  // far shallower — this is the "test thinner pairs" experiment.
+  {
+    id: 'GHST-USDC',
+    base: getToken('GHST'),
+    quote: getToken('USDC'),
+    minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
+    minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
+    maxPositionUsd: 50,
+    enabled: true,
+  },
+  {
+    id: 'QUICK-USDC',
+    base: getToken('QUICK'),
+    quote: getToken('USDC'),
+    minProfitUsd: env.DEFAULT_MIN_PROFIT_USD,
+    minSpreadBps: env.DEFAULT_MIN_SPREAD_BPS,
+    maxPositionUsd: 50,
     enabled: true,
   },
 ];
