@@ -56,10 +56,6 @@ export const TOKENS: Record<string, TokenInfo> = {
     symbol: 'WBTC',
     name: 'Wrapped Bitcoin',
   },
-  // Verified via PolygonScan token page (constructor args confirm name/
-  // symbol/decimals; high holder count / market cap distinguishes from a
-  // same-named scam duplicate found at 0xb0897686c545045aFc77CF20eC7A532E3120E0F1,
-  // which has far fewer holders and is NOT this token).
   LINK: {
     chainId: 137,
     address: '0x53E0bca35eC356BD5dDDFebbD1Fc0fD03FaBad39',
@@ -67,14 +63,32 @@ export const TOKENS: Record<string, TokenInfo> = {
     symbol: 'LINK',
     name: 'ChainLink Token',
   },
-  // Verified via PolygonScan token page ("Token Rep: OK", 269k+ holders,
-  // real market cap).
   AAVE: {
     chainId: 137,
     address: '0xD6DF932A45C0f255f85145f286eA0b292B21C90B',
     decimals: 18,
     symbol: 'AAVE',
     name: 'Aave Token',
+  },
+  // Verified via GHST's own dedicated PolygonScan token page (established
+  // Aavegotchi game ecosystem token, not a wallet-holding artifact).
+  GHST: {
+    chainId: 137,
+    address: '0x385Eeac5cB85A38A9a07A70c73e0a3271CfB54A7',
+    decimals: 18,
+    symbol: 'GHST',
+    name: 'Aavegotchi GHST Token',
+  },
+  // Verified via PolygonScan's own migration banner + independent MEXC
+  // exchange announcements (multiple sources agree). QUICK migrated
+  // contracts in 2023 with a 1:1000 redenomination — the old address
+  // (0x831753dd...) is explicitly deprecated; this is the current one.
+  QUICK: {
+    chainId: 137,
+    address: '0xB5C064F955D8e7F38fE0460C556a72987494eE17',
+    decimals: 18,
+    symbol: 'QUICK',
+    name: 'QuickSwap',
   },
 };
 
