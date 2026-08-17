@@ -7,22 +7,6 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('ensoRoute-source');
 
-/**
- * Prices swaps using Enso's own /shortcuts/route endpoint — the SAME
- * routing engine that later builds and executes the actual flashloan
- * bundle.
- *
- * FIX: every official Enso example (docs.enso.build/pages/build/
- * get-started/route, and the SDK's llms-full.txt) shows getRouteData
- * called with THREE address fields — fromAddress, receiver, AND
- * spender — not just fromAddress. The previous version only sent
- * fromAddress, which very likely caused every single call to fail
- * silently (caught by the try/catch below, logged at warn level,
- * returning null) for the entire session — explaining why every scan
- * cycle showed "0 evaluated, 0 executable" with no visible errors.
- * For a same-wallet swap (not a delegated/smart-account flow), all
- * three should be the same execution wallet address.
- */
 export const ensoRouteSource: PriceSource = {
   name: 'enso-route',
   supportsExecution: true,
@@ -63,6 +47,19 @@ export const ensoRouteSource: PriceSource = {
         return null;
       }
 
+      // Full visibility into what Enso's router actually did internally —
+      // which protocols/pools it used, gas estimate, price impact if
+      // present, route hops — logged in full so quote quality can be
+      // judged after the fact rather than guessed at. Deliberately
+      // unfiltered since the SDK's exact response shape isn't available
+      // to inspect locally (node_modules not present in this checkout).
+      log.info('Enso route quote detail', {
+        tokenIn: req.tokenIn.symbol,
+        tokenOut: req.tokenOut.symbol,
+        amountOut,
+        fullRouteData: JSON.stringify(routeData),
+      });
+
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
       const amountOutHuman = Number(amountOut) / 10 ** req.tokenOut.decimals;
       const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
@@ -78,8 +75,6 @@ export const ensoRouteSource: PriceSource = {
         raw: routeData,
       };
     } catch (err: any) {
-      // Elevated to ERROR (not warn) with full response body, since a
-      // silent failure here is exactly what cost hours of debugging.
       log.error('Enso route quote failed', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
