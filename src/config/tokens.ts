@@ -1,4 +1,4 @@
-export interface TokenInfo {
+yexport interface TokenInfo {
   chainId: number;
   address: string;
   decimals: number;
