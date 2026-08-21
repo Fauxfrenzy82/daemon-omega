@@ -4,6 +4,7 @@ import { getEnsoClient } from '../../execution/ensoClient';
 import { executionWallet } from '../../treasury/wallets';
 import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
+import { env } from '../../config/env';
 
 const log = createLogger('ensoRoute-source');
 
@@ -47,16 +48,27 @@ export const ensoRouteSource: PriceSource = {
         return null;
       }
 
-      // Full visibility into what Enso's router actually did internally —
-      // which protocols/pools it used, gas estimate, price impact if
-      // present, route hops — logged in full so quote quality can be
-      // judged after the fact rather than guessed at. Deliberately
-      // unfiltered since the SDK's exact response shape isn't available
-      // to inspect locally (node_modules not present in this checkout).
+      // Extract price impact if available
+      const priceImpactBps = (routeData as any)?.priceImpact;
+      if (priceImpactBps !== undefined && priceImpactBps !== null) {
+        const maxImpact = env.MAX_PRICE_IMPACT_BPS ?? 300;
+        if (priceImpactBps > maxImpact) {
+          log.debug('Enso route rejected: price impact too high', {
+            tokenIn: req.tokenIn.symbol,
+            tokenOut: req.tokenOut.symbol,
+            priceImpactBps,
+            maxAllowed: maxImpact,
+          });
+          return null;
+        }
+      }
+
+      // Full visibility into what Enso's router actually did internally
       log.info('Enso route quote detail', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
         amountOut,
+        priceImpactBps,
         fullRouteData: JSON.stringify(routeData),
       });
 
