@@ -5,6 +5,7 @@ import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 import { getEnsoClient } from './ensoClient';
+import { ActionPlan, ActionStep } from '../strategies/common/opportunityCandidate';
 
 const log = createLogger('ensoBuilder');
 
@@ -27,36 +28,84 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
-export async function buildArbitrageBundle(
-  opp: EvaluatedOpportunity,
-  flashLoanToken: TokenInfo,
-  flashLoanAmountRaw: string,
-  provider: FlashLoanProvider,
-  options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
-): Promise<BuiltBundle> {
+function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
+  switch (step.type) {
+    case 'flashloan':
+      return {
+        protocol: step.protocol,
+        action: 'flashloan',
+        args: {
+          flashloanToken: step.token,
+          flashloanAmount: step.amount,
+          tokenOut: [step.token],
+          callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
+        },
+      };
+    case 'swap':
+      return {
+        protocol: 'enso',
+        action: 'route',
+        args: {
+          tokenIn: step.tokenIn,
+          tokenOut: step.tokenOut,
+          amountIn: typeof step.amountIn === 'string' ? step.amountIn : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
+          slippage: step.slippage,
+          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+          ...(step.poolFee !== undefined ? { poolFee: step.poolFee } : {}),
+        },
+      };
+    case 'deposit':
+      return {
+        protocol: step.protocol,
+        action: 'deposit',
+        args: {
+          token: step.token,
+          amount: typeof step.amount === 'string' ? step.amount : { useOutputOfCallAt: step.amount.useOutputOfCallAt },
+          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+        },
+      };
+    case 'withdraw':
+      return {
+        protocol: step.protocol,
+        action: 'withdraw',
+        args: {
+          token: step.token,
+          amount: typeof step.amount === 'string' ? step.amount : { useOutputOfCallAt: step.amount.useOutputOfCallAt },
+          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+        },
+      };
+    case 'harvest':
+      return {
+        protocol: 'enso',
+        action: 'harvest',
+        args: {
+          positionAddress: step.positionAddress,
+          ...(step.token ? { token: step.token } : {}),
+        },
+      };
+    case 'call':
+      return {
+        protocol: 'custom',
+        action: 'call',
+        args: {
+          target: step.target,
+          data: step.data,
+          value: step.value || '0',
+          useOutput: step.useOutput || false,
+        },
+      };
+    default:
+      throw new Error(`Unsupported action step type: ${(step as any).type}`);
+  }
+}
+
+export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle> {
+  const enso = getEnsoClient();
   const chainId = activeChain.chainId;
   const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
 
-  const humanAmount = Number(flashLoanAmountRaw) / 10 ** flashLoanToken.decimals;
-
-  const cacheKey = `${provider.protocol}:${flashLoanToken.address}:${flashLoanAmountRaw}`;
-  const cached = bundleCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    log.info(`✅ Using cached bundle for ${provider.name} / ${flashLoanToken.symbol}`);
-    return {
-      bundleData: cached.data,
-      flashLoanAmount: flashLoanAmountRaw,
-      flashLoanToken,
-    };
-  }
-
-  log.info('💡 Building Enso flash‑loan bundle (via SDK)', {
-    pair: opp.pair.id,
-    flashLoanToken: flashLoanToken.symbol,
-    provider: provider.name,
-    amount: humanAmount.toFixed(flashLoanToken.decimals > 6 ? 4 : 2),
-    chainId,
-  });
+  // Build actions array from plan steps
+  const actions = plan.steps.map(step => convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount }));
 
   const bundleParams = {
     fromAddress,
@@ -64,85 +113,33 @@ export async function buildArbitrageBundle(
     routingStrategy: 'router' as const,
   };
 
-  // FIX: callback steps form their OWN independent index sequence,
-  // separate from the outer bundle's top-level actions. Confirmed via
-  // Enso's live getActions()/getActionsBySlug() schema: "callback"
-  // takes ActionToBundle[], and useOutputOfCallAt indexes into
-  // whichever action-list context it's evaluated in.
-  //
-  // The first callback step (buy swap) has NO prior callback action
-  // to reference — it must use the literal flashloanAmount directly,
-  // not { useOutputOfCallAt: 0 }, since index 0 IS this step itself.
-  // "No previous call found with index 0" was Enso correctly
-  // reporting exactly that: nothing exists yet at that point to
-  // reference.
-  //
-  // Only the SECOND callback step (sell swap) correctly uses
-  // { useOutputOfCallAt: 0 } — meaning "the output of callback step
-  // at index 0", which by then is the completed first swap.
-  const actions = [
-    {
-      protocol: provider.protocol,
-      action: 'flashloan' as const,
-      args: {
-        flashloanToken: flashLoanToken.address as `0x${string}`,
-        flashloanAmount: flashLoanAmountRaw,
-        tokenOut: [flashLoanToken.address as `0x${string}`],
-        callback: [
-          {
-            protocol: 'enso',
-            action: 'route',
-            args: {
-              tokenIn: flashLoanToken.address as `0x${string}`,
-              tokenOut: opp.pair.base.address as `0x${string}`,
-              amountIn: flashLoanAmountRaw, // literal amount — this IS index 0, nothing to reference yet
-              slippage: '100',
-            },
-          },
-          {
-            protocol: 'enso',
-            action: 'route',
-            args: {
-              tokenIn: opp.pair.base.address as `0x${string}`,
-              tokenOut: flashLoanToken.address as `0x${string}`,
-              amountIn: { useOutputOfCallAt: 0 }, // output of callback step 0 (the buy swap above)
-              slippage: '100',
-            },
-          },
-        ],
-      },
-    },
-  ];
-
-  log.debug('📦 Enso bundle params + actions', {
-    bundleParams: JSON.stringify(bundleParams, null, 2),
-    actions: JSON.stringify(actions, null, 2),
-  });
+  const cacheKey = `${JSON.stringify(actions)}`;
+  const cached = bundleCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    log.info(`✅ Using cached bundle for plan`);
+    return {
+      bundleData: cached.data,
+      flashLoanAmount: plan.flashLoanAmount,
+      flashLoanToken: plan.flashLoanToken,
+    };
+  }
 
   try {
-    const enso = getEnsoClient();
     const bundleData = await enso.getBundleData(bundleParams, actions as any);
-
     bundleCache.set(cacheKey, { data: bundleData, timestamp: Date.now() });
-
-    log.info('✅ Enso bundle created (via SDK)', {
-      provider: provider.name,
-      actionsCount: actions.length,
-      hasTx: !!(bundleData as any)?.tx,
-    });
-
+    log.info('✅ Enso bundle created from plan');
     return {
       bundleData,
-      flashLoanAmount: flashLoanAmountRaw,
-      flashLoanToken,
+      flashLoanAmount: plan.flashLoanAmount,
+      flashLoanToken: plan.flashLoanToken,
     };
   } catch (error: any) {
     const isEnsoApiError = error?.constructor?.name === 'EnsoApiError';
     if (error?.statusCode === 429 || error?.response?.status === 429) {
-      log.warn(`⏳ Rate limited for ${provider.name} / ${flashLoanToken.symbol}, caching failure for ${CACHE_TTL_MS}ms`);
+      log.warn(`⏳ Rate limited, caching failure for ${CACHE_TTL_MS}ms`);
       bundleCache.set(cacheKey, { data: null, timestamp: Date.now() });
     } else {
-      log.error(`❌ Enso API error for ${provider.name} / ${flashLoanToken.symbol}`, {
+      log.error(`❌ Enso API error building bundle`, {
         isEnsoApiError,
         statusCode: error?.statusCode || error?.response?.status,
         responseData: error?.responseData || error?.response?.data,
@@ -151,4 +148,18 @@ export async function buildArbitrageBundle(
     }
     throw error;
   }
+}
+
+// Legacy function kept for backward compatibility, but deprecated
+export async function buildArbitrageBundle(
+  opp: EvaluatedOpportunity,
+  flashLoanToken: TokenInfo,
+  flashLoanAmountRaw: string,
+  provider: FlashLoanProvider,
+  options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
+): Promise<BuiltBundle> {
+  // This is now deprecated; use buildBundleFromPlan with ActionPlan
+  log.warn('buildArbitrageBundle is deprecated, use buildBundleFromPlan with ActionPlan');
+  // We'll just throw to force migration
+  throw new Error('Deprecated: use buildBundleFromPlan with ActionPlan');
 }
