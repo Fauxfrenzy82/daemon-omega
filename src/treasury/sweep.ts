@@ -2,14 +2,13 @@ import { ethers } from 'ethers';
 import * as api from '@protocolink/api';
 import { TOKENS, getToken, TokenInfo } from '../config/tokens';
 import { activeChain } from '../config/chains';
-import { executionWallet } from './wallets';
+import { executionWallet, provider } from './wallets';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
+import { fetchNativePriceUsd } from '../config/priceFeeds';
 
 const log = createLogger('sweep');
-
-const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
 async function getTokenBalance(token: TokenInfo): Promise<bigint> {
   if (token.address === '0x0000000000000000000000000000000000000000') {
@@ -31,11 +30,23 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
     return;
   }
 
-  const chainId = activeChain.chainId;
   const treasuryAddress = env.TREASURY_ADDRESS;
   const targetSymbol = env.SWEEP_TARGET_SYMBOL;
   const targetToken = getToken(targetSymbol);
   const keepGasUsd = env.SWEEP_KEEP_GAS_RESERVE_USD;
+
+  // FIX: Check native POL balance for gas reserve, not WMATIC
+  const nativeBalance = await provider.getBalance(executionWallet.address);
+  const nativeBalancePol = Number(ethers.utils.formatEther(nativeBalance));
+  const nativeBalanceUsd = nativeBalancePol * nativePriceUsd;
+
+  if (nativeBalanceUsd < keepGasUsd) {
+    log.warn('Native POL balance below gas reserve, skipping sweep', {
+      nativeBalanceUsd,
+      keepGasUsd,
+    });
+    return;
+  }
 
   const allTokens = Object.values(TOKENS);
   const balances: { token: TokenInfo; balance: bigint; usdValue: number }[] = [];
@@ -68,15 +79,6 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
     return;
   }
 
-  // Keep gas reserve in POL (WMATIC)
-  const polToken = getToken('WMATIC');
-  const polBalance = await getTokenBalance(polToken);
-  const polUsd = (Number(polBalance) / 10 ** 18) * nativePriceUsd;
-  if (polUsd < keepGasUsd) {
-    log.warn('POL balance below gas reserve, skipping sweep', { polUsd, keepGasUsd });
-    return;
-  }
-
   for (const item of sweepable) {
     if (item.token.symbol === targetSymbol) continue;
 
@@ -88,7 +90,7 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
 
       const quote = await withRetry(
         () =>
-          api.protocols.paraswapv5.getSwapTokenQuotation(chainId, {
+          api.protocols.paraswapv5.getSwapTokenQuotation(activeChain.chainId, {
             input: { token: item.token, amount: item.balance.toString() },
             tokenOut: targetToken,
             slippage: 300,
@@ -105,7 +107,7 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
 
       const logic = api.protocols.paraswapv5.newSwapTokenLogic(quote);
       const estimatePayload = {
-        chainId,
+        chainId: activeChain.chainId,
         account: executionWallet.address,
         logics: [logic],
       };
@@ -114,7 +116,7 @@ export async function sweepAllProfitTokens(nativePriceUsd: number): Promise<void
       const safeEstimate = estimateResult || {};
 
       const routerData = await api.buildRouterTransactionRequest({
-        chainId,
+        chainId: activeChain.chainId,
         account: executionWallet.address,
         logics: [logic],
         ...safeEstimate,
