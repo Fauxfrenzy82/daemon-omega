@@ -8,6 +8,7 @@ import { alertSystemStarted, isDiscordConfigured, alertPeriodSummary } from './n
 import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
+import { fetchNativePriceUsd } from './config/priceFeeds';
 
 const log = createLogger('main');
 
@@ -15,58 +16,8 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const HOURLY_SUMMARY_MS = 60 * 60 * 1000;
 const DAILY_SUMMARY_MS = 24 * 60 * 60 * 1000;
 
-async function getPolUsdPrice(): Promise<number> {
-  try {
-    const response = await fetch(
-      'https://api.coingecko.com/api/v3/simple/price?ids=matic-network&vs_currencies=usd',
-      {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(5000),
-      }
-    );
-
-    if (!response.ok) {
-      log.warn('CoinGecko API returned non-200 status', { status: response.status });
-      return 0.08;
-    }
-
-    const data: any = await response.json();
-    const price = data['matic-network']?.usd;
-
-    if (price && typeof price === 'number' && price > 0) {
-      return price;
-    }
-
-    log.warn('CoinGecko response missing price data, using fallback', { fallback: 0.08 });
-    return 0.08;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warn('Failed to fetch POL/USD price, using fallback', {
-      error: message,
-      fallback: 0.08,
-    });
-    return 0.08;
-  }
-}
-
-async function getNativeUsdPriceWithRetry(attempts: number = 3): Promise<number> {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const price = await getPolUsdPrice();
-      if (price > 0) return price;
-    } catch (err) {
-      log.warn(`Price fetch attempt ${i + 1} failed`, {
-        error: err instanceof Error ? err.message : String(err),
-        retryIn: (i + 1) * 1000,
-      });
-      await new Promise((resolve) => setTimeout(resolve, (i + 1) * 1000));
-    }
-  }
-  return 0.08;
-}
-
 async function bootstrap(): Promise<void> {
-  log.info('Starting Chronos/Enso arbitrage system', {
+  log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v2)', {
     env: env.NODE_ENV,
     executionWallet: executionWallet.address,
     discordAlerts: isDiscordConfigured() ? 'enabled' : 'disabled',
@@ -88,15 +39,17 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // Start the live scan loop (now using direct DEX quotes)
+  // Start the new scan loop (dispatcher to multiple strategies)
   startScanLoop();
 
-  const nativePrice = await getNativeUsdPriceWithRetry();
+  // Fetch initial native price
+  const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
+  // Sweep interval
   setInterval(async () => {
     try {
-      const currentPrice = await getNativeUsdPriceWithRetry();
+      const currentPrice = await fetchNativePriceUsd();
       await sweepAllProfitTokens(currentPrice);
     } catch (err) {
       log.error('Sweep cycle failed', {
@@ -105,6 +58,7 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
+  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -116,6 +70,7 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
+  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
