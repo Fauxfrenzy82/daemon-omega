@@ -1,16 +1,14 @@
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
+import { FlashLoanProvider } from '../../execution/ensoBuilder';
 
-export async function buildActionPlan(candidate: OpportunityCandidate): Promise<ActionPlan> {
+export async function buildActionPlan(
+  candidate: OpportunityCandidate,
+  options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
+): Promise<ActionPlan> {
   const { underlying, stataAddress, testAmount } = candidate.params;
 
-  const flashLoanToken = underlying;
+  const flashLoanToken = options?.flashLoanToken || underlying;
   const flashLoanAmount = testAmount;
-
-  // Steps:
-  // 1. Flashloan underlying
-  // 2. Deposit underlying into StataToken (receives shares)
-  // 3. Redeem shares back to underlying
-  // Flashloan auto-repays
 
   const depositStep: ActionStep = {
     type: 'deposit',
@@ -24,13 +22,13 @@ export async function buildActionPlan(candidate: OpportunityCandidate): Promise<
     type: 'withdraw',
     protocol: 'stata',
     token: underlying.address,
-    amount: { useOutputOfCallAt: 0 }, // Use shares from deposit output
+    amount: { useOutputOfCallAt: 0 },
     primaryAddress: stataAddress,
   };
 
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: 'aave-v3',
+    protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback: [depositStep, redeemStep],
