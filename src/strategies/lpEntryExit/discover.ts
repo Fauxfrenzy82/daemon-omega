@@ -42,9 +42,12 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
 
     // Build candidate from the optimal quote
     const quote = result.quote;
-    if (!quote) continue;
+    if (!quote) {
+      log.debug(`No quote returned for ${pair.id} at optimal size`);
+      continue;
+    }
 
-    // We need to build buy and sell quotes. The optimizer gave us a quote for the round-trip? Actually findOptimalTradeSize gives a quote for buying base with quote.
+    // We need to build buy and sell legs. The optimizer gave us a quote for buying base with quote.
     // We need a sell leg for the same size. We'll fetch a sell quote using the amountOut from the buy leg.
     const buyAmountOut = quote.amountOut; // raw
     let sellQuote = null;
