@@ -43,7 +43,8 @@ export const ensoRouteSource: PriceSource = {
         log.warn('Enso route returned no amountOut', {
           tokenIn: req.tokenIn.symbol,
           tokenOut: req.tokenOut.symbol,
-          rawResponse: JSON.stringify(routeData),
+          // still log a snippet of the response to help debug (but not the full blob)
+          responseKeys: routeData ? Object.keys(routeData) : null,
         });
         return null;
       }
@@ -63,13 +64,14 @@ export const ensoRouteSource: PriceSource = {
         }
       }
 
-      // Full visibility into what Enso's router actually did internally
+      // Log only essential fields – no fullRouteData to avoid log bloat
       log.info('Enso route quote detail', {
         tokenIn: req.tokenIn.symbol,
         tokenOut: req.tokenOut.symbol,
         amountOut,
         priceImpactBps,
-        fullRouteData: JSON.stringify(routeData),
+        gas: (routeData as any)?.gas,
+        // do NOT log fullRouteData
       });
 
       const amountInHuman = Number(req.amountIn) / 10 ** req.tokenIn.decimals;
@@ -84,7 +86,7 @@ export const ensoRouteSource: PriceSource = {
         amountOut: String(amountOut),
         price,
         supportsExecution: true,
-        raw: routeData,
+        raw: routeData, // kept for execution, not logged
       };
     } catch (err: any) {
       log.error('Enso route quote failed', {
