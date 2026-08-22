@@ -13,6 +13,21 @@ export interface LiquidatableUser {
 }
 
 /**
+ * Subgraph response shape for users query.
+ */
+interface SubgraphResponse {
+  data?: {
+    users?: Array<{
+      id: string;
+      healthFactor: string;
+      totalCollateralUSD: string;
+      totalDebtUSD: string;
+    }>;
+  };
+  errors?: Array<{ message: string }>;
+}
+
+/**
  * Fetch users with health factor < 1 from the Aave V3 Polygon subgraph.
  * Returns an array of user addresses (ids).
  */
@@ -40,14 +55,15 @@ export async function fetchLiquidatableUsers(limit: number = 100): Promise<strin
       throw new Error(`Subgraph request failed: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as SubgraphResponse;
+
     if (data.errors) {
       throw new Error(`Subgraph errors: ${JSON.stringify(data.errors)}`);
     }
 
     const users = data.data?.users || [];
     log.debug(`Fetched ${users.length} liquidatable users from Aave subgraph`);
-    return users.map((u: any) => u.id);
+    return users.map((u) => u.id);
   } catch (err) {
     log.error('Failed to fetch liquidatable users from Aave subgraph', {
       error: err instanceof Error ? err.message : String(err),
@@ -83,7 +99,8 @@ export async function fetchLiquidatableUsersDetailed(limit: number = 100): Promi
       throw new Error(`Subgraph request failed: ${response.status}`);
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as SubgraphResponse;
+
     if (data.errors) {
       throw new Error(`Subgraph errors: ${JSON.stringify(data.errors)}`);
     }
