@@ -49,13 +49,18 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
 
     // We need to build buy and sell legs. The optimizer gave us a quote for buying base with quote.
     // We need a sell leg for the same size. We'll fetch a sell quote using the amountOut from the buy leg.
-    const buyAmountOut = quote.amountOut; // raw
+    // Use type assertion to avoid TypeScript 'never' error.
+    const buyAmountOut = (quote as any).amountOut;
+    if (!buyAmountOut) {
+      log.debug(`Buy quote missing amountOut for ${pair.id}`);
+      continue;
+    }
+
     let sellQuote = null;
     if (useEnso) {
       sellQuote = await getEnsoRouteQuote(pair.base, pair.quote, buyAmountOut);
     } else {
       // Direct: get best sell quote from other venues
-      // Since we don't know buy venue, we'll just get best sell from all venues.
       const { getDirectDexQuote } = await import('../../scanner/sources/directDexSource');
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'];
       const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, pair.base, pair.quote, buyAmountOut)));
