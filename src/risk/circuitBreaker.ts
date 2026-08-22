@@ -26,13 +26,11 @@ export async function evaluateCircuitBreaker(): Promise<void> {
     return;
   }
 
-  // Only consider trades from the last N minutes
   const lookbackMinutes = env.CIRCUIT_BREAKER_LOOKBACK_MINUTES || 5;
   const since = new Date(Date.now() - lookbackMinutes * 60 * 1000);
 
   const recent = await getRecentTradeOutcomes(env.MAX_CONSECUTIVE_LOSSES, since);
 
-  // If there aren't enough trades in the lookback window, don't trip
   if (recent.length < env.MAX_CONSECUTIVE_LOSSES) {
     return;
   }
