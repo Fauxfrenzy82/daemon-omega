@@ -10,9 +10,9 @@ import { env } from '../../config/env';
 
 const log = createLogger('vaultArb');
 
-// StataToken Factory on Polygon – this address may not exist on Polygon mainnet.
-// If it reverts, we log and return empty.
-const STATATOKEN_FACTORY = '0xb65308a8f4ce57a72f13312cecbaaf47601a574a';
+// Correct StataToken Factory on Polygon (from aave-address-book)
+// Aave StataToken is deployed on Polygon at this address.
+const STATATOKEN_FACTORY = '0xCA2E1E33E5BCF4978E2d683656E1f5610f8C4A7E';
 
 // Aave V3 aToken addresses on Polygon (known assets)
 const ATOKEN_MAP: Record<string, string> = {
@@ -54,7 +54,6 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
   const candidates: OpportunityCandidate[] = [];
   const factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
 
-  // Log that we are attempting vault discovery
   log.debug('Vault Arbitrage discovery started');
 
   for (const [symbol, aTokenAddress] of Object.entries(ATOKEN_MAP)) {
@@ -65,7 +64,6 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         continue;
       }
 
-      // Try to get StataToken address from factory
       const stataAddress = (await withRetry(
         () => factory.getStataToken(underlying.address),
         { label: `vaultArb.getStata.${symbol}`, shouldRetry: isTransientError, retries: 2 }
@@ -139,9 +137,7 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         log.debug(`No profitable gross profit for ${symbol}`, { grossProfitUsd: grossProfitUsd.toFixed(6) });
       }
     } catch (err) {
-      // Log the error but continue to next asset
       const errorMsg = err instanceof Error ? err.message : String(err);
-      // If it's a revert, it's likely the factory doesn't exist on Polygon
       if (errorMsg.includes('revert') || errorMsg.includes('CALL_EXCEPTION')) {
         log.debug(`StataToken factory revert for ${symbol} – likely not deployed on Polygon`, {
           error: errorMsg
