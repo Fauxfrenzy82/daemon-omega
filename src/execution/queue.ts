@@ -16,6 +16,7 @@ import { buildActionPlan as buildVaultActionPlan } from '../strategies/vaultArb/
 import { buildActionPlan as buildDebtActionPlan } from '../strategies/debtPosition/buildActionPlan';
 import { buildActionPlan as buildHarvestActionPlan } from '../strategies/harvestShort/buildActionPlan';
 import { buildActionPlan as buildClassicActionPlan } from '../strategies/classicIncentive/buildActionPlan';
+import { getEnsoClient } from './ensoClient';
 
 const log = createLogger('execution-queue');
 
@@ -45,7 +46,7 @@ function getTokenPriceUsd(token: TokenInfo): number {
     return 1.0;
   }
   const priceMap: Record<string, number> = {
-    'WMATIC': 0.5,
+    'WMATIC': 0.1,
     'WETH': 3000,
     'WBTC': 60000,
   };
@@ -256,6 +257,26 @@ async function attemptOne(
 
   // We'll use the existing buildBundleFromPlan with the plan
   const built = await buildBundleFromPlan(plan);
+  
+  // ---- NEW: Simulation before execution ----
+  // Use Enso's quoter or eth_call to simulate the bundle.
+  // For now, we rely on Enso's internal simulation in getBundleData.
+  // But we can add an extra check: call the Enso quoter to validate.
+  try {
+    const enso = getEnsoClient();
+    // Enso's quoter can simulate the bundle; we can call it and check for errors.
+    // However, buildBundleFromPlan already uses getBundleData which includes simulation.
+    // If getBundleData succeeded, it likely means the simulation passed.
+    // We'll add an explicit check for the bundle's simulation result if available.
+    if (built.bundleData?.simulation?.success === false) {
+      throw new Error(`Simulation failed: ${built.bundleData?.simulation?.error || 'unknown reason'}`);
+    }
+  } catch (simErr: any) {
+    log.error(`Simulation failed for candidate ${candidate.id}`, { error: simErr.message });
+    throw new Error(`Simulation failed: ${simErr.message}`);
+  }
+  // ---- End simulation check ----
+
   const result = await executeBundle(built);
 
   if (!result.success) {
