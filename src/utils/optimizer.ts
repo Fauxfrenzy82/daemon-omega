@@ -5,6 +5,7 @@ import { getDirectDexQuote, DirectDexQuote } from '../scanner/sources/directDexS
 import { createLogger } from './logger';
 import { env } from '../config/env';
 import { getLiveTokenPriceUsd } from './priceUtils';
+import { provider } from '../treasury/wallets';
 
 const log = createLogger('optimizer');
 
@@ -98,7 +99,6 @@ export async function findOptimalTradeSize(
     // Estimate gas cost from actual gas price (use provider)
     const gasPrice = await provider.getGasPrice();
     const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-    // Rough gas units: we can use a fixed estimate or extract from quote if available
     const gasUnits = 200000; // placeholder, should come from real estimation
     const gasCostNative = (gasPriceGwei * gasUnits) / 1e9;
     const gasCostUsd = gasCostNative * nativePriceUsd;
@@ -129,7 +129,9 @@ export async function findOptimalTradeSize(
   let bestNetProfit = -Infinity;
   let bestQuote = null;
 
-  for (let i = 0; i < 20; i++) {
+  // Use fewer iterations to reduce time per pair
+  const iterations = env.OPTIMIZER_ITERATIONS ?? 10;
+  for (let i = 0; i < iterations; i++) {
     const m1 = left + (right - left) / 3;
     const m2 = right - (right - left) / 3;
 
@@ -153,6 +155,7 @@ export async function findOptimalTradeSize(
     }
   }
 
+  // Check boundaries
   const boundaries = [minSizeUsd, maxSizeUsd, (minSizeUsd + maxSizeUsd) / 2];
   for (const size of boundaries) {
     const res = await objective(size);
@@ -169,6 +172,3 @@ export async function findOptimalTradeSize(
 
   return { optimalSizeUsd: bestSize, bestNetProfitUsd: bestNetProfit, quote: bestQuote };
 }
-
-// Import provider for gas price
-import { provider } from '../treasury/wallets';
