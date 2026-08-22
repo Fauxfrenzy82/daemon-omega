@@ -52,11 +52,7 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       sellQuote = await getEnsoRouteQuote(pair.base, pair.quote, buyAmountOut);
     } else {
       // Direct: get best sell quote from other venues
-      // We'll skip the venue used for buy if we know it; but we don't have venue info from Enso route.
-      // For simplicity, we'll use Enso route for sell as well, or direct fallback.
-      // We'll use the same approach as before: get direct quotes from venues excluding the buy venue.
       // Since we don't know buy venue, we'll just get best sell from all venues.
-      // This is not ideal but acceptable for v1.
       const { getDirectDexQuote } = await import('../../scanner/sources/directDexSource');
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'];
       const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, pair.base, pair.quote, buyAmountOut)));
@@ -72,27 +68,10 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     }
 
     // Compute gross and net profit from the two legs
-    const buyAmountInHuman = Number(quote.amountIn) / 10 ** pair.quote.decimals;
-    const buyAmountOutHuman = Number(quote.amountOut) / 10 ** pair.base.decimals;
-    const sellAmountInHuman = Number(sellQuote.amountIn) / 10 ** pair.base.decimals;
-    const sellAmountOutHuman = Number(sellQuote.amountOut) / 10 ** pair.quote.decimals;
-
-    // Round-trip: start with quote, buy base, sell base back to quote
-    const startAmount = buyAmountInHuman;
-    const endAmount = (buyAmountOutHuman / sellAmountInHuman) * sellAmountOutHuman; // actually sellAmountOutHuman is the quote received
-    // More directly: endAmount = (buyAmountOutHuman / sellAmountInHuman) * sellAmountOutHuman is not correct; we need:
-    // We buy base with quote, get buyAmountOutHuman of base.
-    // Then we sell that base to get quote: we get (buyAmountOutHuman * (sellAmountOutHuman / sellAmountInHuman)) quote.
-    // Since sellAmountInHuman is the amount of base we put in, and sellAmountOutHuman is quote we get.
-    // So endAmount = (buyAmountOutHuman / sellAmountInHuman) * sellAmountOutHuman? That's incorrect.
-    // Actually: we have buyAmountOutHuman of base. We sell it: the quote we get is (buyAmountOutHuman * (sellAmountOutHuman / sellAmountInHuman)).
-    // But sellAmountInHuman is the amount of base we input to the sell swap. To sell the exact amount we bought, we need to adjust.
-    // The sell quote was for amountIn = buyAmountOut (raw). So sellAmountInHuman = buyAmountOutHuman.
-    // So endAmount = sellAmountOutHuman.
-    // So endAmount is simply the amount of quote we get from selling the entire buy output.
+    const startAmountHuman = Number(quote.amountIn) / 10 ** pair.quote.decimals;
     const endAmountHuman = Number(sellQuote.amountOut) / 10 ** pair.quote.decimals;
 
-    const grossProfitHuman = endAmountHuman - startAmount;
+    const grossProfitHuman = endAmountHuman - startAmountHuman;
     const grossProfitUsd = grossProfitHuman * getTokenPriceUsd(pair.quote);
 
     // Costs already accounted in optimizer? We'll compute net again.
@@ -109,7 +88,7 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     const candidate: OpportunityCandidate = {
       id: `lp-${pair.id}-${Date.now()}`,
       strategy: 'lpEntryExit',
-      protocol: 'enso-route', // or 'direct' if not using Enso
+      protocol: useEnso ? 'enso-route' : 'direct',
       params: {
         pairId: pair.id,
         buyQuote: quote,
