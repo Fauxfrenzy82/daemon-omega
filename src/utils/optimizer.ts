@@ -4,19 +4,17 @@ import { getEnsoRouteQuote } from '../scanner/sources/ensoRoute';
 import { getDirectDexQuote, DirectDexQuote } from '../scanner/sources/directDexSource';
 import { createLogger } from './logger';
 import { env } from '../config/env';
+import { getLiveTokenPriceUsd } from './priceUtils';
 
 const log = createLogger('optimizer');
 
 /**
  * Compute price impact from a quote by comparing effective price to a reference price.
- * This is a heuristic; for V2 we can compute from reserves but we rely on Enso's reported impact if available.
  */
 function estimatePriceImpact(quote: { price: number; tokenIn: TokenInfo; tokenOut: TokenInfo; amountIn: string }, referencePrice: number): number {
-  // If quote has raw priceImpact from Enso, use it
   if ((quote as any).raw?.priceImpact !== undefined) {
     return (quote as any).raw.priceImpact;
   }
-  // Fallback: compare to reference price (could be from a small quote)
   if (referencePrice > 0 && quote.price > 0) {
     return Math.abs((quote.price - referencePrice) / referencePrice) * 10000;
   }
@@ -24,17 +22,7 @@ function estimatePriceImpact(quote: { price: number; tokenIn: TokenInfo; tokenOu
 }
 
 /**
- * Bounded search (ternary) to find trade size that maximizes net profit for a given pair and venue.
- * Uses Enso route as primary, falls back to direct quote if needed.
- * @param tokenIn - token to sell
- * @param tokenOut - token to buy
- * @param minSizeUsd - minimum trade size in USD (e.g., 10)
- * @param maxSizeUsd - maximum trade size in USD (e.g., 10000)
- * @param nativePriceUsd - native token price for gas estimation
- * @param useEnso - whether to use Enso route or direct venue quotes
- * @param excludeVenues - venues to exclude (for direct mode)
- * @param pairId - for logging
- * @returns optimal trade size in USD (or 0 if none profitable)
+ * Bounded search to find optimal trade size.
  */
 export async function findOptimalTradeSize(
   tokenIn: TokenInfo,
@@ -46,10 +34,17 @@ export async function findOptimalTradeSize(
   excludeVenues: string[] = [],
   pairId: string = 'unknown'
 ): Promise<{ optimalSizeUsd: number; bestNetProfitUsd: number; quote: any }> {
-  // Convert USD sizes to raw token amounts using a reference price (we'll use the price from a small quote)
-  // First get a reference price from a very small amount (e.g., $1)
-  const referenceAmountRaw = ethers.utils.parseUnits(
-    (1 / getTokenPriceUsd(tokenIn)).toString(),
+  // Get live token prices
+  const priceIn = await getLiveTokenPriceUsd(tokenIn);
+  const priceOut = await getLiveTokenPriceUsd(tokenOut);
+  if (priceIn <= 0 || priceOut <= 0) {
+    log.warn(`Invalid prices for ${pairId}: in=${priceIn}, out=${priceOut}`);
+    return { optimalSizeUsd: 0, bestNetProfitUsd: 0, quote: null };
+  }
+
+  // Reference quote for price impact estimation
+  const refAmountRaw = ethers.utils.parseUnits(
+    (1 / priceIn).toString(),
     tokenIn.decimals
   ).toString();
 
@@ -57,15 +52,14 @@ export async function findOptimalTradeSize(
   let referenceQuote: any = null;
 
   if (useEnso) {
-    const ref = await getEnsoRouteQuote(tokenIn, tokenOut, referenceAmountRaw);
+    const ref = await getEnsoRouteQuote(tokenIn, tokenOut, refAmountRaw);
     if (ref) {
       referencePrice = ref.price;
       referenceQuote = ref;
     }
   } else {
-    // Use direct venue; pick the best among supported venues
     const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'].filter(v => !excludeVenues.includes(v));
-    const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, tokenIn, tokenOut, referenceAmountRaw)));
+    const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, tokenIn, tokenOut, refAmountRaw)));
     const valid = quotes.filter((q): q is DirectDexQuote => q !== null);
     if (valid.length > 0) {
       const best = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
@@ -79,17 +73,14 @@ export async function findOptimalTradeSize(
     return { optimalSizeUsd: 0, bestNetProfitUsd: 0, quote: null };
   }
 
-  // Now perform ternary search over USD sizes
   const objective = async (sizeUsd: number): Promise<{ netProfit: number; quote: any }> => {
-    // Convert size to raw amount
-    const amountInHuman = sizeUsd / getTokenPriceUsd(tokenIn);
+    const amountInHuman = sizeUsd / priceIn;
     const amountInRaw = ethers.utils.parseUnits(amountInHuman.toFixed(tokenIn.decimals), tokenIn.decimals).toString();
 
     let quote: any = null;
     if (useEnso) {
       quote = await getEnsoRouteQuote(tokenIn, tokenOut, amountInRaw);
     } else {
-      // Direct: get best among venues
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'].filter(v => !excludeVenues.includes(v));
       const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, tokenIn, tokenOut, amountInRaw)));
       const valid = quotes.filter((q): q is DirectDexQuote => q !== null);
@@ -99,20 +90,31 @@ export async function findOptimalTradeSize(
 
     if (!quote) return { netProfit: -Infinity, quote: null };
 
-    // Compute gross profit (in USD) from quote
     const amountOutHuman = Number(quote.amountOut) / 10 ** tokenOut.decimals;
     const amountInHumanQuote = Number(quote.amountIn) / 10 ** tokenIn.decimals;
-    // If we are selling tokenIn to get tokenOut, gross profit = (amountOut * priceOutUsd) - (amountIn * priceInUsd)
-    const priceOutUsd = getTokenPriceUsd(tokenOut);
-    const priceInUsd = getTokenPriceUsd(tokenIn);
-    const grossProfitUsd = (amountOutHuman * priceOutUsd) - (amountInHumanQuote * priceInUsd);
 
-    // Estimate costs: gas + protocol fees (simplified)
-    const gasEstimateUsd = 0.05 * nativePriceUsd; // rough
-    const protocolFeeUsd = grossProfitUsd * 0.0005; // 0.05% Aave fee
-    const netProfit = grossProfitUsd - gasEstimateUsd - protocolFeeUsd;
+    const grossProfitUsd = (amountOutHuman * priceOut) - (amountInHumanQuote * priceIn);
 
-    // Also check price impact: if impact exceeds MAX_PRICE_IMPACT_BPS, penalize heavily
+    // Estimate gas cost from actual gas price (use provider)
+    const gasPrice = await provider.getGasPrice();
+    const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
+    // Rough gas units: we can use a fixed estimate or extract from quote if available
+    const gasUnits = 200000; // placeholder, should come from real estimation
+    const gasCostNative = (gasPriceGwei * gasUnits) / 1e9;
+    const gasCostUsd = gasCostNative * nativePriceUsd;
+
+    // Protocol fee (e.g., DEX fee) as percentage of trade size (not profit)
+    const dexFeeBps = 30; // 0.3% typical for V2, adjust per venue
+    const protocolFeeUsd = (sizeUsd * dexFeeBps) / 10000;
+
+    // Slippage cost: price impact already captured, but we'll add a small buffer
+    const slippageBufferBps = 12; // per spec
+    const slippageCostUsd = (sizeUsd * slippageBufferBps) / 10000;
+
+    const totalCost = gasCostUsd + protocolFeeUsd + slippageCostUsd;
+    const netProfit = grossProfitUsd - totalCost;
+
+    // Price impact check
     const impact = estimatePriceImpact(quote, referencePrice);
     if (impact > env.MAX_PRICE_IMPACT_BPS) {
       return { netProfit: -Infinity, quote };
@@ -121,7 +123,6 @@ export async function findOptimalTradeSize(
     return { netProfit, quote };
   };
 
-  // Ternary search over [minSizeUsd, maxSizeUsd] with 20 iterations
   let left = minSizeUsd;
   let right = maxSizeUsd;
   let bestSize = 0;
@@ -152,7 +153,6 @@ export async function findOptimalTradeSize(
     }
   }
 
-  // Also check boundaries
   const boundaries = [minSizeUsd, maxSizeUsd, (minSizeUsd + maxSizeUsd) / 2];
   for (const size of boundaries) {
     const res = await objective(size);
@@ -170,19 +170,5 @@ export async function findOptimalTradeSize(
   return { optimalSizeUsd: bestSize, bestNetProfitUsd: bestNetProfit, quote: bestQuote };
 }
 
-// Helper to get token price in USD (simplified, should be improved)
-function getTokenPriceUsd(token: TokenInfo): number {
-  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
-    return 1.0;
-  }
-  const priceMap: Record<string, number> = {
-    'WMATIC': 0.1, // approximate, will be overridden by actual quotes
-    'WETH': 3000,
-    'WBTC': 60000,
-    'LINK': 15,
-    'AAVE': 150,
-    'GHST': 1.5,
-    'QUICK': 0.05,
-  };
-  return priceMap[token.symbol] || 0.01;
-}
+// Import provider for gas price
+import { provider } from '../treasury/wallets';
