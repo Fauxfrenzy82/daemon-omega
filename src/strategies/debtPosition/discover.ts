@@ -28,16 +28,16 @@ interface AccountData {
 }
 
 // Known at-risk borrowers would come from event monitoring or subgraph.
-// For v1, we use a placeholder list; in production, this would be populated.
-const AT_RISK_BORROWERS: string[] = [
-  // Example: '0x...'
-];
+// For v1, this is empty – you need to populate this list.
+// This is intentionally left empty because we don't have a real-time subgraph integration yet.
+const AT_RISK_BORROWERS: string[] = [];
 
 export async function discoverDebtPosition(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
 
   if (AT_RISK_BORROWERS.length === 0) {
-    log.debug('No at-risk borrowers configured, skipping debt position discovery');
+    log.info('📭 Debt Position strategy: No at-risk borrowers configured. Skipping.');
+    log.info('💡 To enable this strategy, populate AT_RISK_BORROWERS with real wallet addresses or integrate with Aave subgraph.');
     return [];
   }
 
@@ -53,6 +53,7 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
       const healthFactor = Number(accountData.healthFactor) / 1e18;
 
       if (healthFactor >= 1) {
+        log.debug(`Borrower ${borrower} has health factor ${healthFactor}, not liquidatable`);
         continue;
       }
 
@@ -98,6 +99,12 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
           healthFactor,
           grossProfitUsd: grossProfitUsd.toFixed(4),
           netProfitUsd: netProfitUsd.toFixed(4),
+        });
+      } else {
+        log.debug(`Debt position for ${borrower} below profit threshold`, {
+          healthFactor,
+          netProfitUsd: netProfitUsd.toFixed(6),
+          threshold: env.DEFAULT_MIN_PROFIT_USD
         });
       }
     } catch (err) {
