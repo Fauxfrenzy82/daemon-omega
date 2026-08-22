@@ -8,6 +8,15 @@ const log = createLogger('priceFeeds');
 // Chainlink POL/USD feed on Polygon
 const CHAINLINK_POL_USD = '0xAB594600376Ec9fD91F8e885dADF0CE036862dE0';
 
+// Type for Chainlink latestRoundData response
+interface ChainlinkRoundData {
+  roundId: ethers.BigNumber;
+  answer: ethers.BigNumber;
+  startedAt: ethers.BigNumber;
+  updatedAt: ethers.BigNumber;
+  answeredInRound: ethers.BigNumber;
+}
+
 const POL_USD_ABI = [
   'function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
   'function decimals() external view returns (uint8)',
@@ -25,10 +34,11 @@ export async function fetchNativePriceUsd(): Promise<number> {
 
   try {
     const feed = new ethers.Contract(CHAINLINK_POL_USD, POL_USD_ABI, provider);
-    const roundData = await withRetry(
+    const roundData = (await withRetry(
       () => feed.latestRoundData(),
       { label: 'priceFeeds.polUsd', shouldRetry: isTransientError, retries: 2 }
-    );
+    )) as ChainlinkRoundData;
+
     const decimals = await feed.decimals();
     const price = Number(roundData.answer) / 10 ** decimals;
 
