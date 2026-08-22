@@ -1,4 +1,4 @@
-import { query } from './client';
+import { query, withTransaction } from './client';
 import { createLogger } from '../utils/logger';
 
 const log = createLogger('db-logger');
@@ -71,62 +71,101 @@ export interface TradeRecord {
 }
 
 export async function logTrade(rec: TradeRecord): Promise<number> {
-  const result = await query<{ id: number }>(
-    `INSERT INTO trades
-     (opportunity_id, pair_id, status, tx_hash, position_size_usd,
-      expected_profit_usd, actual_profit_usd, gas_used, gas_cost_usd,
-      protocol_fee_usd, error_message, submitted_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
-             CASE WHEN $3 IN ('submitted','confirmed','failed','reverted') THEN now() ELSE NULL END)
-     RETURNING id`,
-    [
-      rec.opportunityId ?? null,
-      rec.pairId,
-      rec.status,
-      rec.txHash ?? null,
-      rec.positionSizeUsd,
-      rec.expectedProfitUsd,
-      rec.actualProfitUsd ?? null,
-      rec.gasUsed ?? null,
-      rec.gasCostUsd ?? null,
-      rec.protocolFeeUsd ?? null,
-      rec.errorMessage ?? null,
-    ]
-  );
-  return result.rows[0].id;
+  try {
+    const result = await query<{ id: number }>(
+      `INSERT INTO trades
+       (opportunity_id, pair_id, status, tx_hash, position_size_usd,
+        expected_profit_usd, actual_profit_usd, gas_used, gas_cost_usd,
+        protocol_fee_usd, error_message, submitted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+               CASE WHEN $3 IN ('submitted','confirmed','failed','reverted') THEN now() ELSE NULL END)
+       RETURNING id`,
+      [
+        rec.opportunityId ?? null,
+        rec.pairId,
+        rec.status,
+        rec.txHash ?? null,
+        rec.positionSizeUsd,
+        rec.expectedProfitUsd,
+        rec.actualProfitUsd ?? null,
+        rec.gasUsed ?? null,
+        rec.gasCostUsd ?? null,
+        rec.protocolFeeUsd ?? null,
+        rec.errorMessage ?? null,
+      ]
+    );
+    return result.rows[0].id;
+  } catch (err) {
+    log.error('Failed to log trade', { error: err instanceof Error ? err.message : String(err) });
+    return -1;
+  }
 }
 
-export async function updateTradeStatus(
-  tradeId: number,
-  status: TradeRecord['status'],
-  updates: Partial<{
-    txHash: string;
-    actualProfitUsd: number;
-    gasUsed: number;
-    gasCostUsd: number;
-    errorMessage: string;
-  }> = {}
-): Promise<void> {
-  await query(
-    `UPDATE trades SET
-       status = $2,
-       tx_hash = COALESCE($3, tx_hash),
-       actual_profit_usd = COALESCE($4, actual_profit_usd),
-       gas_used = COALESCE($5, gas_used),
-       gas_cost_usd = COALESCE($6, gas_cost_usd),
-       error_message = COALESCE($7, error_message),
-       confirmed_at = CASE WHEN $2 IN ('confirmed','failed','reverted') THEN now() ELSE confirmed_at END
-     WHERE id = $1`,
-    [
-      tradeId,
-      status,
-      updates.txHash ?? null,
-      updates.actualProfitUsd ?? null,
-      updates.gasUsed ?? null,
-      updates.gasCostUsd ?? null,
-      updates.errorMessage ?? null,
-    ]
-  );
+/**
+ * Combined insert of opportunity and trade in a single transaction.
+ * This guarantees the opportunity row is committed before the trade references it.
+ */
+export async function logOpportunityAndTrade(
+  oppRec: OpportunityRecord,
+  tradeRec: Omit<TradeRecord, 'opportunityId'>
+): Promise<{ opportunityId: number; tradeId: number }> {
+  return await withTransaction(async (client) => {
+    // 1. Insert opportunity
+    const oppResult = await client.query<{ id: number }>(
+      `INSERT INTO opportunities
+       (pair_id, base_symbol, quote_symbol, source_buy, source_sell,
+        price_buy, price_sell, spread_bps, est_liquidity_usd,
+        est_gas_cost_usd, est_protocol_fee_usd, est_net_profit_usd, meets_threshold,
+        strategy, strategy_metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       RETURNING id`,
+      [
+        oppRec.pairId,
+        oppRec.baseSymbol,
+        oppRec.quoteSymbol,
+        oppRec.sourceBuy,
+        oppRec.sourceSell,
+        oppRec.priceBuy,
+        oppRec.priceSell,
+        oppRec.spreadBps,
+        oppRec.estLiquidityUsd ?? null,
+        oppRec.estGasCostUsd ?? null,
+        oppRec.estProtocolFeeUsd ?? null,
+        oppRec.estNetProfitUsd,
+        oppRec.meetsThreshold,
+        oppRec.strategy ?? null,
+        oppRec.strategyMetadata ? JSON.stringify(oppRec.strategyMetadata) : null,
+      ]
+    );
+    const opportunityId = oppResult.rows[0].id;
+
+    // 2. Insert trade referencing the opportunity
+    const tradeResult = await client.query<{ id: number }>(
+      `INSERT INTO trades
+       (opportunity_id, pair_id, status, tx_hash, position_size_usd,
+        expected_profit_usd, actual_profit_usd, gas_used, gas_cost_usd,
+        protocol_fee_usd, error_message, submitted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+               CASE WHEN $3 IN ('submitted','confirmed','failed','reverted') THEN now() ELSE NULL END)
+       RETURNING id`,
+      [
+        opportunityId,
+        tradeRec.pairId,
+        tradeRec.status,
+        tradeRec.txHash ?? null,
+        tradeRec.positionSizeUsd,
+        tradeRec.expectedProfitUsd,
+        tradeRec.actualProfitUsd ?? null,
+        tradeRec.gasUsed ?? null,
+        tradeRec.gasCostUsd ?? null,
+        tradeRec.protocolFeeUsd ?? null,
+        tradeRec.errorMessage ?? null,
+      ]
+    );
+    const tradeId = tradeResult.rows[0].id;
+
+    return { opportunityId, tradeId };
+  });
 }
 
 export interface SweepRecord {
