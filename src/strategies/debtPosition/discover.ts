@@ -17,6 +17,16 @@ const POOL_ABI = [
   'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
 ];
 
+// Type for getUserAccountData return
+interface AccountData {
+  totalCollateralBase: ethers.BigNumber;
+  totalDebtBase: ethers.BigNumber;
+  availableBorrowsBase: ethers.BigNumber;
+  currentLiquidationThreshold: ethers.BigNumber;
+  ltv: ethers.BigNumber;
+  healthFactor: ethers.BigNumber;
+}
+
 // Known at-risk borrowers would come from event monitoring or subgraph.
 // For v1, we use a placeholder list; in production, this would be populated.
 const AT_RISK_BORROWERS: string[] = [
@@ -35,10 +45,10 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
 
   for (const borrower of AT_RISK_BORROWERS) {
     try {
-      const accountData = await withRetry(
+      const accountData = (await withRetry(
         () => pool.getUserAccountData(borrower),
         { label: `debtPosition.accountData.${borrower}`, shouldRetry: isTransientError, retries: 2 }
-      );
+      )) as AccountData;
 
       const healthFactor = Number(accountData.healthFactor) / 1e18;
 
