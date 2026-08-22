@@ -168,6 +168,43 @@ export async function logOpportunityAndTrade(
   });
 }
 
+/**
+ * Update the status of an existing trade.
+ * This function is exported for use by queue.ts and other modules.
+ */
+export async function updateTradeStatus(
+  tradeId: number,
+  status: TradeRecord['status'],
+  updates: Partial<{
+    txHash: string;
+    actualProfitUsd: number;
+    gasUsed: number;
+    gasCostUsd: number;
+    errorMessage: string;
+  }> = {}
+): Promise<void> {
+  await query(
+    `UPDATE trades SET
+       status = $2,
+       tx_hash = COALESCE($3, tx_hash),
+       actual_profit_usd = COALESCE($4, actual_profit_usd),
+       gas_used = COALESCE($5, gas_used),
+       gas_cost_usd = COALESCE($6, gas_cost_usd),
+       error_message = COALESCE($7, error_message),
+       confirmed_at = CASE WHEN $2 IN ('confirmed','failed','reverted') THEN now() ELSE confirmed_at END
+     WHERE id = $1`,
+    [
+      tradeId,
+      status,
+      updates.txHash ?? null,
+      updates.actualProfitUsd ?? null,
+      updates.gasUsed ?? null,
+      updates.gasCostUsd ?? null,
+      updates.errorMessage ?? null,
+    ]
+  );
+}
+
 export interface SweepRecord {
   tokenSymbol: string;
   amount: number;
