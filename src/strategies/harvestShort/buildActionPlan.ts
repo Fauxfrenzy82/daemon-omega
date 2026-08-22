@@ -1,17 +1,14 @@
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
+import { FlashLoanProvider } from '../../execution/ensoBuilder';
 
-export async function buildActionPlan(candidate: OpportunityCandidate): Promise<ActionPlan> {
+export async function buildActionPlan(
+  candidate: OpportunityCandidate,
+  options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
+): Promise<ActionPlan> {
   const { positionAddress, rewardToken, entryToken, rewardAmount, sellQuote } = candidate.params;
 
-  // Use entry token as flashloan (minimal amount, just to enable the bundle)
-  const flashLoanToken = entryToken;
-  const flashLoanAmount = '1'; // minimal wei (or 0? but Enso needs positive)
-
-  // Steps:
-  // 1. Flashloan entry token (minimal)
-  // 2. Harvest reward
-  // 3. Sell reward token -> entry token
-  // 4. Repay flashloan (auto)
+  const flashLoanToken = options?.flashLoanToken || entryToken;
+  const flashLoanAmount = '1'; // minimal amount
 
   const harvestStep: ActionStep = {
     type: 'harvest',
@@ -25,7 +22,7 @@ export async function buildActionPlan(candidate: OpportunityCandidate): Promise<
     protocol: 'enso',
     tokenIn: rewardToken.address,
     tokenOut: entryToken.address,
-    amountIn: { useOutputOfCallAt: 0 }, // Use harvest output
+    amountIn: { useOutputOfCallAt: 0 },
     slippage: '100',
     primaryAddress: sellQuote?.raw?.primaryAddress || undefined,
     poolFee: sellQuote?.raw?.poolFee,
@@ -33,7 +30,7 @@ export async function buildActionPlan(candidate: OpportunityCandidate): Promise<
 
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: 'aave-v3',
+    protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback: [harvestStep, sellStep],
