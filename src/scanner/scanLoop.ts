@@ -14,117 +14,137 @@ import { pushCandidate } from '../execution/queue';
 
 const log = createLogger('scanLoop');
 
-let loopHandle: NodeJS.Timeout | null = null;
+let loopTimer: NodeJS.Timeout | null = null;
+let isScanning = false;
 let cachedNativePrice = 0.5;
 
 // List of strategy discover functions with enabled flags
 const discoverers = [
-  { 
-    name: 'LP Entry/Exit', 
-    fn: discoverLPEntryExit, 
+  {
+    name: 'LP Entry/Exit',
+    fn: discoverLPEntryExit,
     enabled: env.STRATEGY_LP_ENABLED ?? true,
     description: 'DEX round‑trip arbitrage'
   },
-  { 
-    name: 'Vault Arbitrage', 
-    fn: discoverVaultArb, 
+  {
+    name: 'Vault Arbitrage',
+    fn: discoverVaultArb,
     enabled: env.STRATEGY_VAULT_ENABLED ?? true,
     description: 'ERC‑4626 StataToken wrapper arbitrage'
   },
-  { 
-    name: 'Debt Position', 
-    fn: discoverDebtPosition, 
+  {
+    name: 'Debt Position',
+    fn: discoverDebtPosition,
     enabled: env.STRATEGY_DEBT_ENABLED ?? false,
     description: 'Aave V3 liquidation arbitrage'
   },
-  { 
-    name: 'Harvest + Spot Sell', 
-    fn: discoverHarvestShort, 
+  {
+    name: 'Harvest + Spot Sell',
+    fn: discoverHarvestShort,
     enabled: env.STRATEGY_HARVEST_ENABLED ?? true,
     description: 'Claim rewards and sell immediately'
   },
-  { 
-    name: 'Classic Incentive', 
-    fn: discoverClassicIncentive, 
+  {
+    name: 'Classic Incentive',
+    fn: discoverClassicIncentive,
     enabled: env.STRATEGY_CLASSIC_ENABLED ?? false,
     description: 'Instant‑claim incentive programs'
   },
 ];
 
 async function runScanCycle(): Promise<void> {
-  recordScanCycle();
+  // Prevent overlapping cycles
+  if (isScanning) {
+    log.warn('Scan cycle already running, skipping this tick');
+    return;
+  }
+  isScanning = true;
 
-  // Update native price at start of each cycle
   try {
-    cachedNativePrice = await fetchNativePriceUsd();
-  } catch (err) {
-    log.warn('Using cached native price', { price: cachedNativePrice });
-  }
+    recordScanCycle();
 
-  await evaluateCircuitBreaker();
-  if (isBreakerTripped()) {
-    log.warn('Circuit breaker active, skipping scan');
-    return;
-  }
-
-  if (!hasExecutionCapacity()) {
-    log.debug('At execution capacity, skipping scan');
-    return;
-  }
-
-  log.info('🔍 Scan cycle started', { nativePrice: cachedNativePrice });
-
-  const active = discoverers.filter(d => d.enabled);
-  const strategyResults: Record<string, { candidates: number, status: string, note?: string }> = {};
-
-  for (const discoverer of active) {
-    const start = Date.now();
-    let candidates: OpportunityCandidate[] = [];
-    let status = 'success';
-    let note = '';
-
+    // Update native price at start of each cycle
     try {
-      candidates = await discoverer.fn(cachedNativePrice);
-      // Push each candidate to queue immediately
-      for (const candidate of candidates) {
-        pushCandidate(candidate);
-      }
-      log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates, pushed to queue`);
+      cachedNativePrice = await fetchNativePriceUsd();
     } catch (err) {
-      status = 'error';
-      note = err instanceof Error ? err.message : String(err);
-      log.error(`Strategy ${discoverer.name} failed`, { error: note });
+      log.warn('Using cached native price', { price: cachedNativePrice });
     }
 
-    strategyResults[discoverer.name] = {
-      candidates: candidates.length,
-      status,
-      note: note || (candidates.length === 0 ? 'No candidates found' : ''),
-    };
-  }
+    await evaluateCircuitBreaker();
+    if (isBreakerTripped()) {
+      log.warn('Circuit breaker active, skipping scan');
+      return;
+    }
 
-  log.info('📊 Scan cycle summary', {
-    nativePrice: cachedNativePrice,
-    totalCandidates: Object.values(strategyResults).reduce((sum, s) => sum + s.candidates, 0),
-    strategies: strategyResults,
-  });
+    if (!hasExecutionCapacity()) {
+      log.debug('At execution capacity, skipping scan');
+      return;
+    }
+
+    log.info('🔍 Scan cycle started', { nativePrice: cachedNativePrice });
+
+    const active = discoverers.filter(d => d.enabled);
+    const strategyResults: Record<string, { candidates: number, status: string, note?: string }> = {};
+
+    for (const discoverer of active) {
+      let candidates: OpportunityCandidate[] = [];
+      let status = 'success';
+      let note = '';
+
+      try {
+        candidates = await discoverer.fn(cachedNativePrice);
+        // Push each candidate to queue immediately
+        for (const candidate of candidates) {
+          pushCandidate(candidate);
+        }
+        log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates, pushed to queue`);
+      } catch (err) {
+        status = 'error';
+        note = err instanceof Error ? err.message : String(err);
+        log.error(`Strategy ${discoverer.name} failed`, { error: note });
+      }
+
+      strategyResults[discoverer.name] = {
+        candidates: candidates.length,
+        status,
+        note: note || (candidates.length === 0 ? 'No candidates found' : ''),
+      };
+    }
+
+    log.info('📊 Scan cycle summary', {
+      nativePrice: cachedNativePrice,
+      totalCandidates: Object.values(strategyResults).reduce((sum, s) => sum + s.candidates, 0),
+      strategies: strategyResults,
+    });
+  } finally {
+    isScanning = false;
+    // Schedule next cycle after the interval
+    if (loopTimer) {
+      clearTimeout(loopTimer);
+      loopTimer = null;
+    }
+    loopTimer = setTimeout(() => {
+      runScanCycle().catch((err) => {
+        log.error('Scan cycle error', { error: err instanceof Error ? err.message : String(err) });
+      });
+    }, env.SCAN_INTERVAL_MS);
+  }
 }
 
 export function startScanLoop(): void {
-  if (loopHandle) return;
+  if (loopTimer) return;
   const interval = env.SCAN_INTERVAL_MS ?? 15000;
   log.info('Starting scan loop', { intervalMs: interval });
-  loopHandle = setInterval(() => {
-    runScanCycle().catch((err) => {
-      log.error('Scan cycle error', { error: err instanceof Error ? err.message : String(err) });
-    });
-  }, interval);
+  // Start first cycle immediately
+  runScanCycle().catch((err) => {
+    log.error('Scan cycle error', { error: err instanceof Error ? err.message : String(err) });
+  });
 }
 
 export function stopScanLoop(): void {
-  if (loopHandle) {
-    clearInterval(loopHandle);
-    loopHandle = null;
+  if (loopTimer) {
+    clearTimeout(loopTimer);
+    loopTimer = null;
     log.info('Scan loop stopped');
   }
 }
