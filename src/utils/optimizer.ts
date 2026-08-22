@@ -4,7 +4,6 @@ import { getEnsoRouteQuote } from '../scanner/sources/ensoRoute';
 import { getDirectDexQuote, DirectDexQuote } from '../scanner/sources/directDexSource';
 import { createLogger } from './logger';
 import { env } from '../config/env';
-import { getLiveTokenPriceUsd } from './priceUtils';
 import { provider } from '../treasury/wallets';
 
 const log = createLogger('optimizer');
@@ -20,26 +19,18 @@ function estimatePriceImpact(quote: { price: number; tokenIn: TokenInfo; tokenOu
 }
 
 export async function findOptimalTradeSize(
-  tokenIn: TokenInfo,
-  tokenOut: TokenInfo,
+  tokenIn: TokenInfo,      // quote token (e.g., USDC)
+  tokenOut: TokenInfo,     // base token (e.g., GHST)
   minSizeUsd: number,
   maxSizeUsd: number,
   nativePriceUsd: number,
   useEnso: boolean = true,
   excludeVenues: string[] = [],
   pairId: string = 'unknown'
-): Promise<{ optimalSizeUsd: number; bestNetProfitUsd: number; quote: any }> {
-  // Get live token prices
-  const priceIn = await getLiveTokenPriceUsd(tokenIn);
-  const priceOut = await getLiveTokenPriceUsd(tokenOut);
-  if (priceIn <= 0 || priceOut <= 0) {
-    log.warn(`Invalid prices for ${pairId}: in=${priceIn}, out=${priceOut}`);
-    return { optimalSizeUsd: 0, bestNetProfitUsd: 0, quote: null };
-  }
-
-  // Reference price for impact estimation
+): Promise<{ optimalSizeUsd: number; bestNetProfitUsd: number; estimatedCostUsd: number; buyQuote: any; sellQuote: any }> {
+  // Reference price for impact estimation (using a tiny amount)
   const refAmountRaw = ethers.utils.parseUnits(
-    (1 / priceIn).toString(),
+    (1 / (await getStablePrice(tokenIn))).toString(),
     tokenIn.decimals
   ).toString();
 
@@ -65,7 +56,7 @@ export async function findOptimalTradeSize(
 
   if (!referenceQuote || referencePrice <= 0) {
     log.warn(`Could not get reference price for ${pairId}, skipping optimization`);
-    return { optimalSizeUsd: 0, bestNetProfitUsd: 0, quote: null };
+    return { optimalSizeUsd: 0, bestNetProfitUsd: 0, estimatedCostUsd: 0, buyQuote: null, sellQuote: null };
   }
 
   // Fixed number of samples (5-10), configurable via env
@@ -79,36 +70,60 @@ export async function findOptimalTradeSize(
 
   let bestSize = 0;
   let bestNetProfit = -Infinity;
-  let bestQuote = null;
+  let bestBuyQuote = null;
+  let bestSellQuote = null;
+  let bestEstimatedCost = 0;
+
+  // Token price for converting profit to USD (assume USDC = 1)
+  const quoteTokenPrice = await getStablePrice(tokenIn);
 
   for (const sizeUsd of sampleSizes) {
-    const amountInHuman = sizeUsd / priceIn;
+    // Convert size to raw amount of quote token
+    const amountInHuman = sizeUsd / quoteTokenPrice;
     const amountInRaw = ethers.utils.parseUnits(
       amountInHuman.toFixed(tokenIn.decimals),
       tokenIn.decimals
     ).toString();
 
-    let quote: any = null;
+    // 1. Get buy quote: tokenIn -> tokenOut
+    let buyQuote: any = null;
     if (useEnso) {
-      quote = await getEnsoRouteQuote(tokenIn, tokenOut, amountInRaw);
+      buyQuote = await getEnsoRouteQuote(tokenIn, tokenOut, amountInRaw);
     } else {
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'].filter(v => !excludeVenues.includes(v));
       const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, tokenIn, tokenOut, amountInRaw)));
       const valid = quotes.filter((q): q is DirectDexQuote => q !== null);
-      if (valid.length === 0) continue;
-      quote = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
+      if (valid.length > 0) {
+        buyQuote = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
+      }
     }
+    if (!buyQuote) continue;
 
-    if (!quote) continue;
+    const buyAmountOut = buyQuote.amountOut; // raw amount of tokenOut
 
-    const amountOutHuman = Number(quote.amountOut) / 10 ** tokenOut.decimals;
-    const amountInHumanQuote = Number(quote.amountIn) / 10 ** tokenIn.decimals;
-    const grossProfitUsd = (amountOutHuman * priceOut) - (amountInHumanQuote * priceIn);
+    // 2. Get sell quote: tokenOut -> tokenIn, using the exact amountOut from buy
+    let sellQuote: any = null;
+    if (useEnso) {
+      sellQuote = await getEnsoRouteQuote(tokenOut, tokenIn, buyAmountOut);
+    } else {
+      const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'].filter(v => !excludeVenues.includes(v));
+      const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, tokenOut, tokenIn, buyAmountOut)));
+      const valid = quotes.filter((q): q is DirectDexQuote => q !== null);
+      if (valid.length > 0) {
+        sellQuote = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
+      }
+    }
+    if (!sellQuote) continue;
 
-    // Estimate gas cost
+    // 3. Compute round-trip profit in terms of tokenIn (USDC)
+    const buyAmountInHuman = Number(amountInRaw) / 10 ** tokenIn.decimals;
+    const sellAmountOutHuman = Number(sellQuote.amountOut) / 10 ** tokenIn.decimals;
+    const grossProfitUsd = (sellAmountOutHuman - buyAmountInHuman) * quoteTokenPrice;
+
+    // Estimate costs (gas, fees, slippage)
     const gasPrice = await provider.getGasPrice();
     const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-    const gasUnits = 200000; // placeholder, can be refined
+    const gasUnits = 200000; // placeholder
     const gasCostNative = (gasPriceGwei * gasUnits) / 1e9;
     const gasCostUsd = gasCostNative * nativePriceUsd;
 
@@ -123,20 +138,37 @@ export async function findOptimalTradeSize(
     const totalCost = gasCostUsd + protocolFeeUsd + slippageCostUsd;
     const netProfit = grossProfitUsd - totalCost;
 
-    const impact = estimatePriceImpact(quote, referencePrice);
+    // Apply price impact filter
+    const impact = estimatePriceImpact(buyQuote, referencePrice);
     if (impact > env.MAX_PRICE_IMPACT_BPS) continue;
 
     if (netProfit > bestNetProfit) {
       bestNetProfit = netProfit;
       bestSize = sizeUsd;
-      bestQuote = quote;
+      bestBuyQuote = buyQuote;
+      bestSellQuote = sellQuote;
+      bestEstimatedCost = totalCost;
     }
   }
 
   if (bestNetProfit <= 0) {
-    return { optimalSizeUsd: 0, bestNetProfitUsd: 0, quote: null };
+    return { optimalSizeUsd: 0, bestNetProfitUsd: 0, estimatedCostUsd: 0, buyQuote: null, sellQuote: null };
   }
 
   log.debug(`Optimizer for ${pairId}: best size $${bestSize.toFixed(2)}, net profit $${bestNetProfit.toFixed(4)}`);
-  return { optimalSizeUsd: bestSize, bestNetProfitUsd: bestNetProfit, quote: bestQuote };
+  return {
+    optimalSizeUsd: bestSize,
+    bestNetProfitUsd: bestNetProfit,
+    estimatedCostUsd: bestEstimatedCost,
+    buyQuote: bestBuyQuote,
+    sellQuote: bestSellQuote
+  };
+}
+
+// Helper to get price of stablecoin (assume 1)
+async function getStablePrice(token: TokenInfo): Promise<number> {
+  if (token.symbol === 'USDC' || token.symbol === 'USDT' || token.symbol === 'DAI' || token.symbol === 'USDC.e') {
+    return 1.0;
+  }
+  return 1.0;
 }
