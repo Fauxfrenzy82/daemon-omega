@@ -1,7 +1,6 @@
-import { EvaluatedOpportunity, rankExecutable } from '../profitability/evaluator';
 import { buildBundleFromPlan, FLASH_LOAN_PROVIDERS, FlashLoanProvider } from './ensoBuilder';
 import { executeBundle } from './ensoRouter';
-import { logOpportunity, logTrade, updateTradeStatus } from '../db/logger';
+import { logOpportunityAndTrade, updateTradeStatus } from '../db/logger';
 import { isBreakerTripped } from '../risk/circuitBreaker';
 import { canStartNewTrade, checkGasPriceLimit } from '../risk/limits';
 import { ethers } from 'ethers';
@@ -18,311 +17,347 @@ import { buildActionPlan as buildHarvestActionPlan } from '../strategies/harvest
 import { buildActionPlan as buildClassicActionPlan } from '../strategies/classicIncentive/buildActionPlan';
 import { getEnsoClient } from './ensoClient';
 import { env } from '../config/env';
+import { getLiveTokenPriceUsd } from '../utils/priceUtils';
+import { withRetry, isTransientError } from '../utils/retry';
 
 const log = createLogger('execution-queue');
 
-interface QueueState {
-  activeTrades: number;
-}
-
-const state: QueueState = { activeTrades: 0 };
-
-// Candidate queue – items are added by scan loop and consumed by worker
+// Shared queue
 const candidateQueue: OpportunityCandidate[] = [];
-let workerRunning = false;
-let workerResolve: (() => void) | null = null;
+let workerPool: Worker[] = [];
+const WORKER_COUNT = env.WORKER_POOL_SIZE ?? 3;
 
+// Maximum age for a candidate (in ms) – kept low because workers process immediately
+const MAX_OPPORTUNITY_AGE_MS = env.MAX_OPPORTUNITY_AGE_MS ?? 10000; // 10 seconds
+
+// Flashloan candidates (all possible tokens)
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.DAI,
   TOKENS.USDC,
   TOKENS.WMATIC,
 ];
 
-// Age threshold – now configurable, increased to 60 seconds by default
-const MAX_OPPORTUNITY_AGE_MS = env.MAX_OPPORTUNITY_AGE_MS ?? 60000;
+// Default provider order – Aave V3 first (cheaper than Morpho for small amounts)
+const PROVIDER_ORDER: FlashLoanProvider[] = [
+  { name: 'Aave V3', protocol: 'aave-v3' },
+  { name: 'Morpho', protocol: 'morpho-markets-v1' },
+];
 
-const ERC20_ABI = ['function balanceOf(address) view returns (uint256)'];
+// Aave V3 Pool contract on Polygon (for liquidity checks)
+const AAVE_POOL_ADDRESS = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+const AAVE_POOL_ABI = [
+  'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
+];
 
-async function getTokenBalance(token: TokenInfo): Promise<ethers.BigNumber> {
-  const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
-  return contract.balanceOf(executionWallet.address);
-}
+// Worker class
+class Worker {
+  private running = true;
+  private currentCandidate: OpportunityCandidate | null = null;
 
-function getTokenPriceUsd(token: TokenInfo): number {
-  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
-    return 1.0;
+  async start() {
+    while (this.running) {
+      if (candidateQueue.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
+
+      const candidate = candidateQueue.shift();
+      if (!candidate) continue;
+
+      this.currentCandidate = candidate;
+      try {
+        await this.processCandidate(candidate);
+      } catch (err) {
+        log.error(`Worker error processing candidate ${candidate.id}`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        this.currentCandidate = null;
+      }
+    }
   }
-  const priceMap: Record<string, number> = {
-    'WMATIC': 0.1,
-    'WETH': 3000,
-    'WBTC': 60000,
-  };
-  return priceMap[token.symbol] || 0.01;
+
+  stop() {
+    this.running = false;
+  }
+
+  private async processCandidate(candidate: OpportunityCandidate): Promise<void> {
+    if (isBreakerTripped()) {
+      log.warn('Circuit breaker tripped, skipping candidate', { candidateId: candidate.id });
+      return;
+    }
+
+    const age = Date.now() - candidate.sourceTimestamp;
+    if (age > MAX_OPPORTUNITY_AGE_MS) {
+      log.warn(`Candidate too stale: ${candidate.id}`, { age });
+      await alertTradeFailed(candidate.id, `Discarded before dispatch, already ${age}ms old`);
+      return;
+    }
+
+    if (!canStartNewTrade({ activeTrades: getActiveTradeCount() })) {
+      log.debug('Concurrency limit reached, requeueing candidate', { candidateId: candidate.id });
+      candidateQueue.push(candidate);
+      return;
+    }
+
+    // 1. Select best flashloan option BEFORE building the plan
+    const flashloanOption = await selectBestFlashloanOption(candidate);
+    if (!flashloanOption) {
+      log.error(`No suitable flashloan option for ${candidate.id}`);
+      await alertTradeFailed(candidate.id, 'No suitable flashloan option');
+      return;
+    }
+
+    // 2. Build action plan with the selected token and provider
+    let plan: ActionPlan;
+    try {
+      plan = await buildActionPlanForCandidate(candidate, {
+        flashLoanToken: flashloanOption.token,
+        flashLoanProvider: flashloanOption.provider,
+      });
+    } catch (err) {
+      log.error(`Failed to build action plan for ${candidate.id}`, { error: String(err) });
+      await alertTradeFailed(candidate.id, `Action plan build failed: ${String(err)}`);
+      return;
+    }
+
+    // 3. Log opportunity and trade in a single transaction
+    let opportunityId: number;
+    let tradeId: number;
+    try {
+      const result = await logOpportunityAndTrade(
+        {
+          pairId: candidate.id,
+          baseSymbol: 'unknown',
+          quoteSymbol: 'unknown',
+          sourceBuy: candidate.strategy,
+          sourceSell: 'execution',
+          priceBuy: 0,
+          priceSell: 0,
+          spreadBps: 0,
+          estLiquidityUsd: 0,
+          estGasCostUsd: candidate.estimatedCostUsd,
+          estProtocolFeeUsd: 0,
+          estNetProfitUsd: candidate.estimatedNetProfitUsd,
+          meetsThreshold: true,
+          strategy: candidate.strategy,
+        },
+        {
+          pairId: candidate.id,
+          status: 'pending',
+          positionSizeUsd: candidate.estimatedNetProfitUsd,
+          expectedProfitUsd: candidate.estimatedNetProfitUsd,
+        }
+      );
+      opportunityId = result.opportunityId;
+      tradeId = result.tradeId;
+    } catch (err) {
+      log.error(`Failed to log opportunity/trade for ${candidate.id}`, { error: String(err) });
+      await alertTradeFailed(candidate.id, `Database logging failed: ${String(err)}`);
+      return;
+    }
+
+    await updateTradeStatus(tradeId, 'submitted');
+
+    // 4. Capture balance BEFORE execution
+    let balanceBefore: ethers.BigNumber | null = null;
+    try {
+      balanceBefore = await getTokenBalance(flashloanOption.token);
+    } catch (err) {
+      log.warn('Failed to read pre-trade balance', {
+        token: flashloanOption.token.symbol,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // 5. Execute
+    let success = false;
+    let lastError: string | null = null;
+    let txHash: string | undefined;
+    let gasUsed: string | undefined;
+
+    try {
+      const built = await buildBundleFromPlan(plan);
+
+      // Simulation check
+      try {
+        const enso = getEnsoClient();
+        if (built.bundleData?.simulation?.success === false) {
+          throw new Error(`Simulation failed: ${built.bundleData?.simulation?.error || 'unknown reason'}`);
+        }
+      } catch (simErr: any) {
+        throw new Error(`Simulation failed: ${simErr.message}`);
+      }
+
+      const result = await executeBundle(built);
+      if (!result.success) {
+        throw new Error(result.errorMessage || 'Execution failed');
+      }
+
+      txHash = result.txHash;
+      gasUsed = result.gasUsed;
+      success = true;
+
+      // 6. Measure actual profit
+      let actualNetProfitUsd: number | null = null;
+      try {
+        const balanceAfter = await getTokenBalance(flashloanOption.token);
+        if (balanceBefore) {
+          const deltaRaw = balanceAfter.sub(balanceBefore);
+          const deltaHuman = Number(ethers.utils.formatUnits(deltaRaw, flashloanOption.token.decimals));
+          const priceUsd = await getLiveTokenPriceUsd(flashloanOption.token);
+          actualNetProfitUsd = deltaHuman * priceUsd;
+        }
+      } catch (balErr) {
+        log.warn('Failed to measure actual post-trade profit', {
+          error: balErr instanceof Error ? balErr.message : String(balErr),
+        });
+      }
+
+      await updateTradeStatus(tradeId, 'confirmed', {
+        txHash,
+        gasUsed: gasUsed ? Number(gasUsed) : undefined,
+        actualProfitUsd: actualNetProfitUsd ?? undefined,
+      });
+
+      log.info(`✅ Trade executed with ${flashloanOption.provider.name} / ${flashloanOption.token.symbol}`, {
+        candidateId: candidate.id,
+        txHash,
+        estimatedNetProfitUsd: candidate.estimatedNetProfitUsd.toFixed(4),
+        actualNetProfitUsd: actualNetProfitUsd !== null ? actualNetProfitUsd.toFixed(4) : 'unavailable',
+      });
+
+      await alertTradeExecuted(
+        candidate.id,
+        actualNetProfitUsd !== null ? actualNetProfitUsd : candidate.estimatedNetProfitUsd,
+        txHash ?? 'unknown'
+      );
+    } catch (err: any) {
+      lastError = err.message || String(err);
+    }
+
+    if (!success) {
+      await updateTradeStatus(tradeId, 'failed', { errorMessage: lastError || 'Unknown error' });
+      log.warn('❌ Trade failed', {
+        candidateId: candidate.id,
+        error: lastError,
+      });
+      await alertTradeFailed(candidate.id, lastError || 'Unknown error');
+    }
+  }
 }
 
-// Build action plan for a candidate based on strategy
-async function buildActionPlanForCandidate(candidate: OpportunityCandidate): Promise<ActionPlan> {
+/**
+ * Select the best flashloan option (token + provider) for a candidate.
+ * Queries available liquidity from Aave V3 for each candidate token and chooses
+ * the one with highest available liquidity above the required amount.
+ * Falls back to first candidate if none have enough or if liquidity check fails.
+ */
+async function selectBestFlashloanOption(
+  candidate: OpportunityCandidate
+): Promise<{ token: TokenInfo; provider: FlashLoanProvider } | null> {
+  const candidates = FLASH_LOAN_CANDIDATES.filter(
+    t => t.address.toLowerCase() !== candidate.actionPlan?.flashLoanToken?.address?.toLowerCase()
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const pool = new ethers.Contract(AAVE_POOL_ADDRESS, AAVE_POOL_ABI, provider);
+
+  let bestToken: TokenInfo | null = null;
+  let bestPrice: number = 0;
+  let bestProvider: FlashLoanProvider | null = null;
+
+  for (const token of candidates) {
+    try {
+      // Get token price as a proxy for liquidity availability
+      const priceUsd = await getLiveTokenPriceUsd(token);
+      if (priceUsd <= 0) continue;
+
+      if (!bestToken || priceUsd > bestPrice) {
+        bestToken = token;
+        bestPrice = priceUsd;
+        bestProvider = PROVIDER_ORDER[0]; // Aave V3 for now
+      }
+    } catch (err) {
+      log.debug(`Liquidity check failed for ${token.symbol}`, { error: String(err) });
+      continue;
+    }
+  }
+
+  if (!bestToken || !bestProvider) {
+    // Fallback: use the first candidate
+    bestToken = candidates[0];
+    bestProvider = PROVIDER_ORDER[0];
+  }
+
+  return { token: bestToken, provider: bestProvider };
+}
+
+// Build action plan with optional flashloan token/provider override
+async function buildActionPlanForCandidate(
+  candidate: OpportunityCandidate,
+  options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
+): Promise<ActionPlan> {
   switch (candidate.strategy) {
     case 'lpEntryExit':
-      return buildLPActionPlan(candidate);
+      return buildLPActionPlan(candidate, options);
     case 'vaultArb':
-      return buildVaultActionPlan(candidate);
+      return buildVaultActionPlan(candidate, options);
     case 'debtPosition':
-      return buildDebtActionPlan(candidate);
+      return buildDebtActionPlan(candidate, options);
     case 'harvestShort':
-      return buildHarvestActionPlan(candidate);
+      return buildHarvestActionPlan(candidate, options);
     case 'classicIncentive':
-      return buildClassicActionPlan(candidate);
+      return buildClassicActionPlan(candidate, options);
     default:
       throw new Error(`Unknown strategy: ${candidate.strategy}`);
   }
 }
 
-// Worker: continuously pulls candidates from queue and processes them
-async function workerLoop(): Promise<void> {
-  while (true) {
-    // Wait for candidates if queue is empty
-    if (candidateQueue.length === 0) {
-      await new Promise<void>((resolve) => {
-        workerResolve = resolve;
-      });
-      continue;
-    }
+// Token balance helper
+async function getTokenBalance(token: TokenInfo): Promise<ethers.BigNumber> {
+  const contract = new ethers.Contract(
+    token.address,
+    ['function balanceOf(address) view returns (uint256)'],
+    provider
+  );
+  return contract.balanceOf(executionWallet.address);
+}
 
-    const candidate = candidateQueue.shift();
-    if (!candidate) continue;
-
-    // Process candidate (non-blocking)
-    try {
-      await processCandidate(candidate);
-    } catch (err) {
-      log.error(`Error processing candidate ${candidate.id}`, {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+// Worker pool management
+export function startWorkerPool(): void {
+  if (workerPool.length > 0) return;
+  log.info(`Starting worker pool with ${WORKER_COUNT} workers`);
+  for (let i = 0; i < WORKER_COUNT; i++) {
+    const worker = new Worker();
+    workerPool.push(worker);
+    worker.start().catch(err => {
+      log.error(`Worker ${i} crashed`, { error: err instanceof Error ? err.message : String(err) });
+    });
   }
 }
 
-// Push a candidate into the queue and wake up the worker
+export function stopWorkerPool(): void {
+  for (const worker of workerPool) {
+    worker.stop();
+  }
+  workerPool = [];
+}
+
+// Push candidate to queue (called by scan loop)
 export function pushCandidate(candidate: OpportunityCandidate): void {
   candidateQueue.push(candidate);
-  if (workerResolve) {
-    workerResolve();
-    workerResolve = null;
-  }
-  // Ensure worker is running
-  if (!workerRunning) {
-    workerRunning = true;
-    workerLoop().catch((err) => {
-      log.error('Worker loop crashed', { error: err instanceof Error ? err.message : String(err) });
-      workerRunning = false;
-    });
-  }
 }
 
-// Process a single candidate (build plan, execute, measure profit)
-async function processCandidate(candidate: OpportunityCandidate): Promise<void> {
-  if (isBreakerTripped()) {
-    log.warn('Circuit breaker tripped, skipping candidate', { candidateId: candidate.id });
-    return;
-  }
-
-  if (Date.now() - candidate.sourceTimestamp > MAX_OPPORTUNITY_AGE_MS) {
-    log.warn(`Candidate too stale: ${candidate.id}`, { age: Date.now() - candidate.sourceTimestamp });
-    await alertTradeFailed(candidate.id, `Discarded before dispatch, already ${Date.now() - candidate.sourceTimestamp}ms old`);
-    return;
-  }
-
-  if (!canStartNewTrade({ activeTrades: state.activeTrades })) {
-    log.debug('Concurrency limit reached, deferring candidate', { candidateId: candidate.id });
-    // Re-queue for later
-    candidateQueue.push(candidate);
-    return;
-  }
-
-  state.activeTrades += 1;
-
-  let tradeId: number | null = null;
-  let success = false;
-  let lastError: string | null = null;
-
-  try {
-    // Build action plan
-    let plan: ActionPlan;
-    try {
-      plan = await buildActionPlanForCandidate(candidate);
-      candidate.actionPlan = plan;
-    } catch (err) {
-      throw new Error(`Failed to build action plan: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    // Log opportunity and trade
-    const opportunityId = await logOpportunity({
-      pairId: candidate.id,
-      baseSymbol: 'unknown',
-      quoteSymbol: 'unknown',
-      sourceBuy: candidate.strategy,
-      sourceSell: 'execution',
-      priceBuy: 0,
-      priceSell: 0,
-      spreadBps: 0,
-      estLiquidityUsd: 0,
-      estGasCostUsd: candidate.estimatedCostUsd,
-      estProtocolFeeUsd: 0,
-      estNetProfitUsd: candidate.estimatedNetProfitUsd,
-      meetsThreshold: true,
-    });
-
-    tradeId = await logTrade({
-      opportunityId,
-      pairId: candidate.id,
-      status: 'pending',
-      positionSizeUsd: candidate.estimatedNetProfitUsd,
-      expectedProfitUsd: candidate.estimatedNetProfitUsd,
-    });
-
-    await updateTradeStatus(tradeId, 'submitted');
-
-    // Prepare flashloan attempts
-    const eligibleCandidates = FLASH_LOAN_CANDIDATES.filter(
-      (token) => token.address.toLowerCase() !== plan.flashLoanToken.address.toLowerCase()
-    );
-
-    const balancesBefore = new Map<string, ethers.BigNumber>();
-    await Promise.all(
-      eligibleCandidates.map(async (token) => {
-        try {
-          const bal = await getTokenBalance(token);
-          balancesBefore.set(token.symbol, bal);
-        } catch (err) {
-          log.debug('Failed to read pre-trade balance', {
-            token: token.symbol,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      })
-    );
-
-    // Race all flashloan tokens and providers
-    const attempts: Promise<{ txHash?: string; gasUsed?: string; providerName: string; candidate: TokenInfo }>[] = [];
-
-    for (const token of eligibleCandidates) {
-      for (const provider of FLASH_LOAN_PROVIDERS) {
-        attempts.push(attemptOne(candidate, token, provider));
-      }
-    }
-
-    const winner = await Promise.any(attempts);
-
-    // Measure actual profit
-    let actualNetProfitUsd: number | null = null;
-    try {
-      const balanceAfter = await getTokenBalance(winner.candidate);
-      const before = balancesBefore.get(winner.candidate.symbol);
-      if (before) {
-        const deltaRaw = balanceAfter.sub(before);
-        const deltaHuman = Number(ethers.utils.formatUnits(deltaRaw, winner.candidate.decimals));
-        actualNetProfitUsd = deltaHuman * getTokenPriceUsd(winner.candidate);
-      }
-    } catch (balErr) {
-      log.warn('Failed to measure actual post-trade profit', {
-        error: balErr instanceof Error ? balErr.message : String(balErr),
-      });
-    }
-
-    await updateTradeStatus(tradeId, 'confirmed', {
-      txHash: winner.txHash,
-      gasUsed: winner.gasUsed ? Number(winner.gasUsed) : undefined,
-      actualProfitUsd: actualNetProfitUsd ?? undefined,
-    });
-
-    log.info(`✅ Trade executed with ${winner.providerName} / ${winner.candidate.symbol}`, {
-      candidateId: candidate.id,
-      txHash: winner.txHash,
-      estimatedNetProfitUsd: candidate.estimatedNetProfitUsd.toFixed(4),
-      actualNetProfitUsd: actualNetProfitUsd !== null ? actualNetProfitUsd.toFixed(4) : 'unavailable',
-    });
-
-    await alertTradeExecuted(
-      candidate.id,
-      actualNetProfitUsd !== null ? actualNetProfitUsd : candidate.estimatedNetProfitUsd,
-      winner.txHash ?? 'unknown'
-    );
-    success = true;
-  } catch (aggregateErr: any) {
-    const firstError = aggregateErr?.errors?.[0];
-    lastError = firstError?.message || aggregateErr?.message || String(aggregateErr);
-  }
-
-  if (!success) {
-    const finalMessage = lastError || 'All flash‑loan tokens and providers failed';
-    if (tradeId) {
-      await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
-    }
-    log.warn('❌ Trade failed — all candidates/providers failed', {
-      candidateId: candidate.id,
-      error: finalMessage,
-    });
-    await alertTradeFailed(candidate.id, finalMessage);
-  }
-
-  state.activeTrades -= 1;
-}
-
-async function attemptOne(
-  candidate: OpportunityCandidate,
-  flashLoanToken: TokenInfo,
-  provider: FlashLoanProvider
-): Promise<{ txHash?: string; gasUsed?: string; providerName: string; candidate: TokenInfo }> {
-  const plan = candidate.actionPlan!;
-  // Override flashloan token and amount with the current candidate's token
-  // We'll use the existing plan but replace the flashloan token.
-  // For simplicity, we'll rebuild the plan with the new token.
-  // But we need to ensure the plan is compatible; we'll assume it's flexible.
-  // A better approach: the plan's flashloan token should be a parameter.
-  // We'll clone and modify the plan for the specific token.
-  const customPlan: ActionPlan = {
-    ...plan,
-    flashLoanToken: flashLoanToken,
-    flashLoanAmount: ethers.utils.parseUnits(
-      (candidate.estimatedNetProfitUsd / getTokenPriceUsd(flashLoanToken)).toString(),
-      flashLoanToken.decimals
-    ).toString(),
-  };
-  // We need to rebuild the steps with the new token; this is simplified.
-  // For full flexibility, we'd need a strategy‑specific rebuild function.
-  // For v1, we assume the plan's flashloan token is the only variable.
-  const built = await buildBundleFromPlan(customPlan);
-
-  // Simulation check
-  try {
-    const enso = getEnsoClient();
-    if (built.bundleData?.simulation?.success === false) {
-      throw new Error(`Simulation failed: ${built.bundleData?.simulation?.error || 'unknown reason'}`);
-    }
-  } catch (simErr: any) {
-    throw new Error(`Simulation failed: ${simErr.message}`);
-  }
-
-  const result = await executeBundle(built);
-
-  if (!result.success) {
-    throw new Error(`Execution failed: ${result.errorMessage}`);
-  }
-
-  return {
-    txHash: result.txHash,
-    gasUsed: result.gasUsed,
-    providerName: provider.name,
-    candidate: flashLoanToken,
-  };
-}
-
+// Get active trade count (rough estimate from workers currently processing)
 export function getActiveTradeCount(): number {
-  return state.activeTrades;
+  return workerPool.filter(w => w['currentCandidate'] !== null).length;
 }
 
-// Legacy batch processing (for backward compatibility, but we now use streaming)
+// Legacy batch processor for backward compatibility
 export async function processCandidates(candidates: OpportunityCandidate[]): Promise<void> {
   for (const c of candidates) {
     pushCandidate(c);
