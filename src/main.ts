@@ -2,6 +2,7 @@ import { env } from './config/env';
 import { initSchema, closePool } from './db/client';
 import { initEnsoClient } from './execution/ensoClient';
 import { startScanLoop, stopScanLoop } from './scanner/scanLoop';
+import { startWorkerPool } from './execution/queue';
 import { sweepAllProfitTokens } from './treasury/sweep';
 import { executionWallet } from './treasury/wallets';
 import { alertSystemStarted, isDiscordConfigured, alertPeriodSummary } from './notifications/notifier';
@@ -39,8 +40,9 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // Start the new scan loop (dispatcher to multiple strategies)
+  // Start the scan loop AND the worker pool
   startScanLoop();
+  startWorkerPool(); // 🔥 CRITICAL: this was missing
 
   // Fetch initial native price
   const nativePrice = await fetchNativePriceUsd();
