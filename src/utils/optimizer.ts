@@ -18,9 +18,17 @@ function estimatePriceImpact(quote: { price: number; tokenIn: TokenInfo; tokenOu
   return 0;
 }
 
+function extractGas(quote: any): number {
+  if (quote && typeof quote === 'object' && 'gas' in quote) {
+    const gas = Number(quote.gas);
+    if (!isNaN(gas) && gas > 0) return gas;
+  }
+  return 200000; // fallback
+}
+
 export async function findOptimalTradeSize(
-  tokenIn: TokenInfo,      // quote token (e.g., USDC)
-  tokenOut: TokenInfo,     // base token (e.g., GHST)
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
   minSizeUsd: number,
   maxSizeUsd: number,
   nativePriceUsd: number,
@@ -28,7 +36,6 @@ export async function findOptimalTradeSize(
   excludeVenues: string[] = [],
   pairId: string = 'unknown'
 ): Promise<{ optimalSizeUsd: number; bestNetProfitUsd: number; estimatedCostUsd: number; buyQuote: any; sellQuote: any }> {
-  // Reference price for impact estimation (using a tiny amount)
   const refAmountRaw = ethers.utils.parseUnits(
     (1 / (await getStablePrice(tokenIn))).toString(),
     tokenIn.decimals
@@ -59,11 +66,9 @@ export async function findOptimalTradeSize(
     return { optimalSizeUsd: 0, bestNetProfitUsd: 0, estimatedCostUsd: 0, buyQuote: null, sellQuote: null };
   }
 
-  // Fixed number of samples (5-10), configurable via env
   const sampleCount = Math.min(10, Math.max(5, env.OPTIMIZER_SAMPLES ?? 8));
   const step = (maxSizeUsd - minSizeUsd) / (sampleCount - 1);
   const sampleSizes: number[] = [];
-  // Sample from high to low
   for (let i = sampleCount - 1; i >= 0; i--) {
     sampleSizes.push(minSizeUsd + i * step);
   }
@@ -74,18 +79,15 @@ export async function findOptimalTradeSize(
   let bestSellQuote = null;
   let bestEstimatedCost = 0;
 
-  // Token price for converting profit to USD (assume USDC = 1)
   const quoteTokenPrice = await getStablePrice(tokenIn);
 
   for (const sizeUsd of sampleSizes) {
-    // Convert size to raw amount of quote token
     const amountInHuman = sizeUsd / quoteTokenPrice;
     const amountInRaw = ethers.utils.parseUnits(
       amountInHuman.toFixed(tokenIn.decimals),
       tokenIn.decimals
     ).toString();
 
-    // 1. Get buy quote: tokenIn -> tokenOut
     let buyQuote: any = null;
     if (useEnso) {
       buyQuote = await getEnsoRouteQuote(tokenIn, tokenOut, amountInRaw);
@@ -99,9 +101,8 @@ export async function findOptimalTradeSize(
     }
     if (!buyQuote) continue;
 
-    const buyAmountOut = buyQuote.amountOut; // raw amount of tokenOut
+    const buyAmountOut = buyQuote.amountOut;
 
-    // 2. Get sell quote: tokenOut -> tokenIn, using the exact amountOut from buy
     let sellQuote: any = null;
     if (useEnso) {
       sellQuote = await getEnsoRouteQuote(tokenOut, tokenIn, buyAmountOut);
@@ -115,30 +116,27 @@ export async function findOptimalTradeSize(
     }
     if (!sellQuote) continue;
 
-    // 3. Compute round-trip profit in terms of tokenIn (USDC)
     const buyAmountInHuman = Number(amountInRaw) / 10 ** tokenIn.decimals;
     const sellAmountOutHuman = Number(sellQuote.amountOut) / 10 ** tokenIn.decimals;
     const grossProfitUsd = (sellAmountOutHuman - buyAmountInHuman) * quoteTokenPrice;
 
-    // Estimate costs (gas, fees, slippage)
+    // Real gas cost from quotes
     const gasPrice = await provider.getGasPrice();
     const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-    const gasUnits = 200000; // placeholder
-    const gasCostNative = (gasPriceGwei * gasUnits) / 1e9;
+    const buyGas = extractGas(buyQuote);
+    const sellGas = extractGas(sellQuote);
+    const totalGasUnits = buyGas + sellGas;
+    const gasCostNative = (gasPriceGwei * totalGasUnits) / 1e9;
     const gasCostUsd = gasCostNative * nativePriceUsd;
 
-    // Protocol fee (DEX fee) as % of trade size
-    const dexFeeBps = 30; // 0.3%
+    const dexFeeBps = 30;
     const protocolFeeUsd = (sizeUsd * dexFeeBps) / 10000;
-
-    // Slippage buffer
     const slippageBufferBps = 12;
     const slippageCostUsd = (sizeUsd * slippageBufferBps) / 10000;
 
     const totalCost = gasCostUsd + protocolFeeUsd + slippageCostUsd;
     const netProfit = grossProfitUsd - totalCost;
 
-    // Apply price impact filter
     const impact = estimatePriceImpact(buyQuote, referencePrice);
     if (impact > env.MAX_PRICE_IMPACT_BPS) continue;
 
@@ -165,7 +163,6 @@ export async function findOptimalTradeSize(
   };
 }
 
-// Helper to get price of stablecoin (assume 1)
 async function getStablePrice(token: TokenInfo): Promise<number> {
   if (token.symbol === 'USDC' || token.symbol === 'USDT' || token.symbol === 'DAI' || token.symbol === 'USDC.e') {
     return 1.0;
