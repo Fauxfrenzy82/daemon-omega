@@ -1,13 +1,17 @@
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
+import { FlashLoanProvider } from '../../execution/ensoBuilder';
 
-export async function buildActionPlan(candidate: OpportunityCandidate): Promise<ActionPlan> {
+export async function buildActionPlan(
+  candidate: OpportunityCandidate,
+  options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
+): Promise<ActionPlan> {
   const { buyQuote, sellQuote, amountInRaw } = candidate.params;
   const quoteToken = buyQuote.tokenIn;
   const baseToken = buyQuote.tokenOut;
 
-  // Use quote token as flashloan asset (stablecoin)
-  const flashLoanToken = quoteToken;
-  const flashLoanAmount = amountInRaw;
+  // Use the provided flashloan token if given, otherwise default to quote token
+  const flashLoanToken = options?.flashLoanToken || quoteToken;
+  const flashLoanAmount = amountInRaw; // same amount
 
   // Build steps:
   // Step 0: Flashloan (callback contains the rest)
@@ -39,7 +43,7 @@ export async function buildActionPlan(candidate: OpportunityCandidate): Promise<
 
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: 'aave-v3',
+    protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback: [buyStep, sellStep],
