@@ -54,7 +54,7 @@ export const env = {
   // Risk / thresholds
   DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.05),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 10000), // new ceiling
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 10000),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
 
@@ -82,18 +82,21 @@ export const env = {
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
 
-  // --- NEW: Strategy toggles (disable compute-heavy strategies) ---
+  // Strategy toggles
   STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', true),
   STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', true),
   STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', false),
   STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', true),
   STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', false),
 
-  // --- NEW: Enso route migration and pair tiers ---
-  USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true), // use route API as primary
-  ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800), // rate-limit backoff
+  // Enso route migration and pair tiers
+  USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true),
+  ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800),
   PRIMARY_PAIR_IDS: optional('PRIMARY_PAIR_IDS', 'WETH-USDC,WBTC-USDC,WMATIC-USDC,USDCe-USDT,DAI-USDC'),
   SECONDARY_PAIR_IDS: optional('SECONDARY_PAIR_IDS', 'LINK-USDC,AAVE-USDC,GHST-USDC,QUICK-USDC'),
-  SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100), // cap for thin pairs
+  SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100),
   MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 60000),
+
+  // Optimizer
+  OPTIMIZER_ITERATIONS: optionalNumber('OPTIMIZER_ITERATIONS', 10),
 };
