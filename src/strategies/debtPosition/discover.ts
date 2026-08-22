@@ -6,6 +6,7 @@ import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
 import { TOKENS } from '../../config/tokens';
 import { env } from '../../config/env';
+import { fetchLiquidatableUsers } from './dataSource';
 
 const log = createLogger('debtPosition');
 
@@ -27,23 +28,19 @@ interface AccountData {
   healthFactor: ethers.BigNumber;
 }
 
-// Known at-risk borrowers would come from event monitoring or subgraph.
-// For v1, this is empty – you need to populate this list.
-// This is intentionally left empty because we don't have a real-time subgraph integration yet.
-const AT_RISK_BORROWERS: string[] = [];
-
 export async function discoverDebtPosition(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
 
-  if (AT_RISK_BORROWERS.length === 0) {
-    log.info('📭 Debt Position strategy: No at-risk borrowers configured. Skipping.');
-    log.info('💡 To enable this strategy, populate AT_RISK_BORROWERS with real wallet addresses or integrate with Aave subgraph.');
+  // Fetch liquidatable users from Aave subgraph
+  const borrowers = await fetchLiquidatableUsers(50);
+  if (borrowers.length === 0) {
+    log.info('📭 Debt Position strategy: No liquidatable borrowers found from Aave subgraph');
     return [];
   }
 
   const pool = new ethers.Contract(AAVE_POOL, POOL_ABI, provider);
 
-  for (const borrower of AT_RISK_BORROWERS) {
+  for (const borrower of borrowers) {
     try {
       const accountData = (await withRetry(
         () => pool.getUserAccountData(borrower),
