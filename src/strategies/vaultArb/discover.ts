@@ -58,10 +58,10 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
       const underlying = TOKENS[symbol];
       if (!underlying) continue;
 
-      const stataAddress = await withRetry(
+      const stataAddress = (await withRetry(
         () => factory.getStataToken(underlying.address),
         { label: `vaultArb.getStata.${symbol}`, shouldRetry: isTransientError, retries: 2 }
-      );
+      )) as string;
 
       if (stataAddress === ethers.constants.AddressZero) {
         log.debug(`No StataToken wrapper for ${symbol}`);
