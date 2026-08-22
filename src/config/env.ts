@@ -40,10 +40,7 @@ export const env = {
   TREASURY_ADDRESS: required('TREASURY_ADDRESS'),
 
   // --- Enso ---
-  ENSO_API_KEY: required('ENSO_API_KEY'), // Get from https://developers.enso.finance
-  // Correct base is https://api.enso.finance — verified against official SDK docs,
-  // GitHub README, and live Swagger UI at api.enso.finance/api. The previous default
-  // (api.enso.build) does not match any documented or verifiable Enso endpoint.
+  ENSO_API_KEY: required('ENSO_API_KEY'),
   ENSO_BASE_URL: optional('ENSO_BASE_URL', 'https://api.enso.finance'),
 
   // ParaSwap / OpenOcean (keep for price scanning)
@@ -57,12 +54,11 @@ export const env = {
   // Risk / thresholds
   DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.05),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 100),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 10000), // new ceiling
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
 
-  // Venue liquidity filter — discard any single-leg quote whose Enso-reported
-  // priceImpact (in bps) exceeds this. Prevents comparing against dead pools.
+  // Venue liquidity filter — do NOT raise this
   MAX_PRICE_IMPACT_BPS: optionalNumber('MAX_PRICE_IMPACT_BPS', 300),
 
   // Circuit breaker
@@ -85,4 +81,18 @@ export const env = {
   SCAN_INTERVAL_MS: optionalNumber('SCAN_INTERVAL_MS', 15000),
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
+
+  // --- NEW: Strategy toggles (disable compute-heavy strategies) ---
+  STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', true),
+  STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', true),
+  STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', false),
+  STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', true),
+  STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', false),
+
+  // --- NEW: Enso route migration and pair tiers ---
+  USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true), // use route API as primary
+  ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800), // rate-limit backoff
+  PRIMARY_PAIR_IDS: optional('PRIMARY_PAIR_IDS', 'WETH-USDC,WBTC-USDC,WMATIC-USDC,USDCe-USDT,DAI-USDC'),
+  SECONDARY_PAIR_IDS: optional('SECONDARY_PAIR_IDS', 'LINK-USDC,AAVE-USDC,GHST-USDC,QUICK-USDC'),
+  SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100), // cap for thin pairs
 };
