@@ -1,7 +1,9 @@
+import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
 import { getEnsoRouteQuote } from '../scanner/sources/ensoRoute';
 import { getDirectDexQuote, DirectDexQuote } from '../scanner/sources/directDexSource';
 import { createLogger } from './logger';
+import { env } from '../config/env';
 
 const log = createLogger('optimizer');
 
@@ -184,8 +186,3 @@ function getTokenPriceUsd(token: TokenInfo): number {
   };
   return priceMap[token.symbol] || 0.01;
 }
-
-// Import env at runtime to avoid circular
-import { env } from '../config/env';
-import { ethers } from 'ethers';
-import { getEnsoRouteQuote } from '../scanner/sources/ensoRoute';
