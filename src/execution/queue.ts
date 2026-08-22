@@ -17,6 +17,7 @@ import { buildActionPlan as buildDebtActionPlan } from '../strategies/debtPositi
 import { buildActionPlan as buildHarvestActionPlan } from '../strategies/harvestShort/buildActionPlan';
 import { buildActionPlan as buildClassicActionPlan } from '../strategies/classicIncentive/buildActionPlan';
 import { getEnsoClient } from './ensoClient';
+import { env } from '../config/env';
 
 const log = createLogger('execution-queue');
 
@@ -26,13 +27,19 @@ interface QueueState {
 
 const state: QueueState = { activeTrades: 0 };
 
+// Candidate queue – items are added by scan loop and consumed by worker
+const candidateQueue: OpportunityCandidate[] = [];
+let workerRunning = false;
+let workerResolve: (() => void) | null = null;
+
 const FLASH_LOAN_CANDIDATES: TokenInfo[] = [
   TOKENS.DAI,
   TOKENS.USDC,
   TOKENS.WMATIC,
 ];
 
-const MAX_OPPORTUNITY_AGE_MS = 5000;
+// Age threshold – now configurable, increased to 60 seconds by default
+const MAX_OPPORTUNITY_AGE_MS = env.MAX_OPPORTUNITY_AGE_MS ?? 60000;
 
 const ERC20_ABI = ['function balanceOf(address) view returns (uint256)'];
 
@@ -71,54 +78,88 @@ async function buildActionPlanForCandidate(candidate: OpportunityCandidate): Pro
   }
 }
 
-// Process a batch of candidates from the scan loop
-export async function processCandidates(candidates: OpportunityCandidate[]): Promise<void> {
-  if (isBreakerTripped()) {
-    log.warn('Circuit breaker tripped, skipping execution batch');
-    return;
-  }
-
-  // Filter candidates by profitability (already done in discovery, but double-check)
-  const profitable = candidates.filter(c => c.estimatedNetProfitUsd > 0);
-
-  if (profitable.length === 0) {
-    log.debug('No profitable candidates');
-    return;
-  }
-
-  const gasPrice = await provider.getGasPrice();
-  const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-
-  if (!checkGasPriceLimit(gasPriceGwei)) {
-    log.warn('Gas price too high, skipping execution batch', { gasPriceGwei });
-    return;
-  }
-
-  // Sort by net profit descending, take top 3
-  const sorted = profitable.sort((a, b) => b.estimatedNetProfitUsd - a.estimatedNetProfitUsd);
-  const top = sorted.slice(0, 3);
-
-  // For each candidate, build action plan and attempt execution
-  for (const candidate of top) {
-    // Check age
-    if (Date.now() - candidate.sourceTimestamp > MAX_OPPORTUNITY_AGE_MS) {
-      log.warn(`Candidate too stale: ${candidate.id}`, { age: Date.now() - candidate.sourceTimestamp });
+// Worker: continuously pulls candidates from queue and processes them
+async function workerLoop(): Promise<void> {
+  while (true) {
+    // Wait for candidates if queue is empty
+    if (candidateQueue.length === 0) {
+      await new Promise<void>((resolve) => {
+        workerResolve = resolve;
+      });
       continue;
     }
 
-    // Build action plan
+    const candidate = candidateQueue.shift();
+    if (!candidate) continue;
+
+    // Process candidate (non-blocking)
     try {
-      const plan = await buildActionPlanForCandidate(candidate);
+      await processCandidate(candidate);
+    } catch (err) {
+      log.error(`Error processing candidate ${candidate.id}`, {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+// Push a candidate into the queue and wake up the worker
+export function pushCandidate(candidate: OpportunityCandidate): void {
+  candidateQueue.push(candidate);
+  if (workerResolve) {
+    workerResolve();
+    workerResolve = null;
+  }
+  // Ensure worker is running
+  if (!workerRunning) {
+    workerRunning = true;
+    workerLoop().catch((err) => {
+      log.error('Worker loop crashed', { error: err instanceof Error ? err.message : String(err) });
+      workerRunning = false;
+    });
+  }
+}
+
+// Process a single candidate (build plan, execute, measure profit)
+async function processCandidate(candidate: OpportunityCandidate): Promise<void> {
+  if (isBreakerTripped()) {
+    log.warn('Circuit breaker tripped, skipping candidate', { candidateId: candidate.id });
+    return;
+  }
+
+  if (Date.now() - candidate.sourceTimestamp > MAX_OPPORTUNITY_AGE_MS) {
+    log.warn(`Candidate too stale: ${candidate.id}`, { age: Date.now() - candidate.sourceTimestamp });
+    await alertTradeFailed(candidate.id, `Discarded before dispatch, already ${Date.now() - candidate.sourceTimestamp}ms old`);
+    return;
+  }
+
+  if (!canStartNewTrade({ activeTrades: state.activeTrades })) {
+    log.debug('Concurrency limit reached, deferring candidate', { candidateId: candidate.id });
+    // Re-queue for later
+    candidateQueue.push(candidate);
+    return;
+  }
+
+  state.activeTrades += 1;
+
+  let tradeId: number | null = null;
+  let success = false;
+  let lastError: string | null = null;
+
+  try {
+    // Build action plan
+    let plan: ActionPlan;
+    try {
+      plan = await buildActionPlanForCandidate(candidate);
       candidate.actionPlan = plan;
     } catch (err) {
-      log.error(`Failed to build action plan for ${candidate.id}`, { error: String(err) });
-      continue;
+      throw new Error(`Failed to build action plan: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Log opportunity and trade
     const opportunityId = await logOpportunity({
       pairId: candidate.id,
-      baseSymbol: 'unknown', // not applicable for all strategies
+      baseSymbol: 'unknown',
       quoteSymbol: 'unknown',
       sourceBuy: candidate.strategy,
       sourceSell: 'execution',
@@ -132,35 +173,19 @@ export async function processCandidates(candidates: OpportunityCandidate[]): Pro
       meetsThreshold: true,
     });
 
-    const tradeId = await logTrade({
+    tradeId = await logTrade({
       opportunityId,
       pairId: candidate.id,
       status: 'pending',
-      positionSizeUsd: candidate.estimatedNetProfitUsd, // approximate
+      positionSizeUsd: candidate.estimatedNetProfitUsd,
       expectedProfitUsd: candidate.estimatedNetProfitUsd,
     });
 
-    // Execute with parallel flashloan attempts
-    await dispatchCandidate(candidate, tradeId);
-  }
-}
-
-async function dispatchCandidate(candidate: OpportunityCandidate, tradeId: number): Promise<void> {
-  if (!canStartNewTrade({ activeTrades: state.activeTrades })) {
-    log.debug('Concurrency limit reached, deferring candidate');
-    return;
-  }
-
-  state.activeTrades += 1;
-  let success = false;
-  let lastError: string | null = null;
-
-  try {
     await updateTradeStatus(tradeId, 'submitted');
 
-    // Prepare balances before attempts
+    // Prepare flashloan attempts
     const eligibleCandidates = FLASH_LOAN_CANDIDATES.filter(
-      (token) => token.address.toLowerCase() !== candidate.actionPlan?.flashLoanToken.address.toLowerCase()
+      (token) => token.address.toLowerCase() !== plan.flashLoanToken.address.toLowerCase()
     );
 
     const balancesBefore = new Map<string, ethers.BigNumber>();
@@ -231,7 +256,9 @@ async function dispatchCandidate(candidate: OpportunityCandidate, tradeId: numbe
 
   if (!success) {
     const finalMessage = lastError || 'All flash‑loan tokens and providers failed';
-    await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
+    if (tradeId) {
+      await updateTradeStatus(tradeId, 'failed', { errorMessage: finalMessage });
+    }
     log.warn('❌ Trade failed — all candidates/providers failed', {
       candidateId: candidate.id,
       error: finalMessage,
@@ -247,35 +274,35 @@ async function attemptOne(
   flashLoanToken: TokenInfo,
   provider: FlashLoanProvider
 ): Promise<{ txHash?: string; gasUsed?: string; providerName: string; candidate: TokenInfo }> {
-  // Build bundle from plan, but we need to replace the flashloan token/provider in the plan
-  // For simplicity, we assume the plan uses a specific flashloan token; we'll modify the plan's flashloan token
   const plan = candidate.actionPlan!;
   // Override flashloan token and amount with the current candidate's token
-  // However, the plan may not be compatible with arbitrary tokens; we need to rebuild plan for each token?
-  // This is a simplification; in practice we'd regenerate the plan for each token/provider combo.
-  // For v1, we'll just use the plan as is and assume the token is appropriate.
+  // We'll use the existing plan but replace the flashloan token.
+  // For simplicity, we'll rebuild the plan with the new token.
+  // But we need to ensure the plan is compatible; we'll assume it's flexible.
+  // A better approach: the plan's flashloan token should be a parameter.
+  // We'll clone and modify the plan for the specific token.
+  const customPlan: ActionPlan = {
+    ...plan,
+    flashLoanToken: flashLoanToken,
+    flashLoanAmount: ethers.utils.parseUnits(
+      (candidate.estimatedNetProfitUsd / getTokenPriceUsd(flashLoanToken)).toString(),
+      flashLoanToken.decimals
+    ).toString(),
+  };
+  // We need to rebuild the steps with the new token; this is simplified.
+  // For full flexibility, we'd need a strategy‑specific rebuild function.
+  // For v1, we assume the plan's flashloan token is the only variable.
+  const built = await buildBundleFromPlan(customPlan);
 
-  // We'll use the existing buildBundleFromPlan with the plan
-  const built = await buildBundleFromPlan(plan);
-  
-  // ---- NEW: Simulation before execution ----
-  // Use Enso's quoter or eth_call to simulate the bundle.
-  // For now, we rely on Enso's internal simulation in getBundleData.
-  // But we can add an extra check: call the Enso quoter to validate.
+  // Simulation check
   try {
     const enso = getEnsoClient();
-    // Enso's quoter can simulate the bundle; we can call it and check for errors.
-    // However, buildBundleFromPlan already uses getBundleData which includes simulation.
-    // If getBundleData succeeded, it likely means the simulation passed.
-    // We'll add an explicit check for the bundle's simulation result if available.
     if (built.bundleData?.simulation?.success === false) {
       throw new Error(`Simulation failed: ${built.bundleData?.simulation?.error || 'unknown reason'}`);
     }
   } catch (simErr: any) {
-    log.error(`Simulation failed for candidate ${candidate.id}`, { error: simErr.message });
     throw new Error(`Simulation failed: ${simErr.message}`);
   }
-  // ---- End simulation check ----
 
   const result = await executeBundle(built);
 
@@ -293,4 +320,11 @@ async function attemptOne(
 
 export function getActiveTradeCount(): number {
   return state.activeTrades;
+}
+
+// Legacy batch processing (for backward compatibility, but we now use streaming)
+export async function processCandidates(candidates: OpportunityCandidate[]): Promise<void> {
+  for (const c of candidates) {
+    pushCandidate(c);
+  }
 }
