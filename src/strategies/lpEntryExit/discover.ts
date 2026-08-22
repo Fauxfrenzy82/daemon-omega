@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { TokenInfo } from '../../config/tokens';
 import { OpportunityCandidate } from '../common/opportunityCandidate';
-import { enabledPairs, PairConfig } from '../../config/pairs';
+import { enabledPairs } from '../../config/pairs';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { findOptimalTradeSize } from '../../utils/optimizer';
@@ -22,12 +22,11 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     const isPrimary = PRIMARY_PAIR_IDS.includes(pair.id);
     const maxSizeUsd = isPrimary ? env.MAX_POSITION_SIZE_USD : Math.min(env.MAX_POSITION_SIZE_USD, SECONDARY_MAX_POSITION);
 
-    // Determine optimal trade size using Enso route (or direct if fallback)
     const useEnso = env.USE_ENSO_ROUTE_PRIMARY;
     const result = await findOptimalTradeSize(
       pair.quote,
       pair.base,
-      10, // min size $10
+      10,
       maxSizeUsd,
       nativePriceUsd,
       useEnso,
@@ -40,16 +39,14 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       continue;
     }
 
-    // Build candidate from the optimal quote
-    const quote = result.quote as any; // Cast to any to avoid TypeScript narrowing
+    const quote = result.quote;
     if (!quote) {
       log.debug(`No quote returned for ${pair.id} at optimal size`);
       continue;
     }
 
-    // We need to build buy and sell legs. The optimizer gave us a quote for buying base with quote.
-    // We need a sell leg for the same size. We'll fetch a sell quote using the amountOut from the buy leg.
-    const buyAmountOut = quote.amountOut;
+    // Get sell quote for the same size using the amountOut from buy
+    const buyAmountOut = (quote as any).amountOut;
     if (!buyAmountOut) {
       log.debug(`Buy quote missing amountOut for ${pair.id}`);
       continue;
@@ -59,11 +56,11 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     if (useEnso) {
       sellQuote = await getEnsoRouteQuote(pair.base, pair.quote, buyAmountOut);
     } else {
-      // Direct: get best sell quote from other venues
       const { getDirectDexQuote } = await import('../../scanner/sources/directDexSource');
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'];
       const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, pair.base, pair.quote, buyAmountOut)));
-      const valid = quotes.filter((q): q is any => q !== null);
+      // Fix TypeScript error: use type assertion for filter
+      const valid = quotes.filter((q): q is NonNullable<typeof quotes[number]> => q !== null);
       if (valid.length > 0) {
         sellQuote = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
       }
@@ -74,17 +71,13 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       continue;
     }
 
-    // Compute gross and net profit from the two legs
+    // Compute gross profit from the two legs (just for logging, net from optimizer is used)
     const startAmountHuman = Number(quote.amountIn) / 10 ** pair.quote.decimals;
     const endAmountHuman = Number(sellQuote.amountOut) / 10 ** pair.quote.decimals;
-
     const grossProfitHuman = endAmountHuman - startAmountHuman;
-    const grossProfitUsd = grossProfitHuman * getTokenPriceUsd(pair.quote);
 
-    // Costs already accounted in optimizer? We'll compute net again.
-    const estimatedGasUsd = 0.05 * nativePriceUsd;
-    const protocolFeeUsd = grossProfitUsd * 0.0005;
-    const netProfitUsd = grossProfitUsd - estimatedGasUsd - protocolFeeUsd;
+    // Use the optimizer's net profit directly
+    const netProfitUsd = result.bestNetProfitUsd;
 
     if (netProfitUsd <= env.DEFAULT_MIN_PROFIT_USD) {
       log.debug(`Net profit ${netProfitUsd.toFixed(4)} below threshold for ${pair.id}`);
@@ -102,12 +95,12 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
         sellQuote: sellQuote,
         optimalSizeUsd: result.optimalSizeUsd,
         nativePriceUsd,
-        grossProfitUsd,
+        grossProfitUsd: grossProfitHuman * 1.0, // placeholder, not used in decision
         netProfitUsd,
       },
-      estimatedGrossProfitUsd: grossProfitUsd,
+      estimatedGrossProfitUsd: grossProfitHuman * 1.0, // placeholder
       estimatedNetProfitUsd: netProfitUsd,
-      estimatedCostUsd: grossProfitUsd - netProfitUsd,
+      estimatedCostUsd: (grossProfitHuman * 1.0) - netProfitUsd,
       actionPlan: null,
       sourceTimestamp: Date.now(),
     };
@@ -118,21 +111,4 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
 
   log.info(`LP Entry/Exit found ${candidates.length} candidates`);
   return candidates;
-}
-
-// Helper
-function getTokenPriceUsd(token: TokenInfo): number {
-  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
-    return 1.0;
-  }
-  const priceMap: Record<string, number> = {
-    'WMATIC': 0.1,
-    'WETH': 3000,
-    'WBTC': 60000,
-    'LINK': 15,
-    'AAVE': 150,
-    'GHST': 1.5,
-    'QUICK': 0.05,
-  };
-  return priceMap[token.symbol] || 0.01;
 }
