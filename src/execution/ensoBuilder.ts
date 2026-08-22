@@ -160,6 +160,5 @@ export async function buildArbitrageBundle(
 ): Promise<BuiltBundle> {
   // This is now deprecated; use buildBundleFromPlan with ActionPlan
   log.warn('buildArbitrageBundle is deprecated, use buildBundleFromPlan with ActionPlan');
-  // We'll just throw to force migration
   throw new Error('Deprecated: use buildBundleFromPlan with ActionPlan');
 }
