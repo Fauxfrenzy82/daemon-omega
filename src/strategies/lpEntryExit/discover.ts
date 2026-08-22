@@ -41,7 +41,7 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     }
 
     // Build candidate from the optimal quote
-    const quote = result.quote;
+    const quote = result.quote as any; // Cast to any to avoid TypeScript narrowing
     if (!quote) {
       log.debug(`No quote returned for ${pair.id} at optimal size`);
       continue;
@@ -49,8 +49,7 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
 
     // We need to build buy and sell legs. The optimizer gave us a quote for buying base with quote.
     // We need a sell leg for the same size. We'll fetch a sell quote using the amountOut from the buy leg.
-    // Use type assertion to avoid TypeScript 'never' error.
-    const buyAmountOut = (quote as any).amountOut;
+    const buyAmountOut = quote.amountOut;
     if (!buyAmountOut) {
       log.debug(`Buy quote missing amountOut for ${pair.id}`);
       continue;
