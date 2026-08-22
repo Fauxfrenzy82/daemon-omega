@@ -1,7 +1,7 @@
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
-import { SCHEMA_SQL } from './schema'; // <-- import embedded SQL
+import { SCHEMA_SQL } from './schema';
 
 const logger = createLogger('db');
 
@@ -53,7 +53,6 @@ export async function withTransaction<T>(
 }
 
 export async function initSchema(): Promise<void> {
-  // Use embedded SQL constant instead of reading from file system
   await pool.query(SCHEMA_SQL);
   logger.info('Schema initialized');
 }
