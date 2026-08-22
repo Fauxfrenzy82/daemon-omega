@@ -16,13 +16,13 @@ const log = createLogger('scanLoop');
 let loopHandle: NodeJS.Timeout | null = null;
 let cachedNativePrice = 0.5;
 
-// List of strategy discover functions
+// List of strategy discover functions with enabled flags
 const discoverers = [
-  { name: 'LP Entry/Exit', fn: discoverLPEntryExit },
-  { name: 'Vault Arbitrage', fn: discoverVaultArb },
-  { name: 'Debt Position', fn: discoverDebtPosition },
-  { name: 'Harvest + Spot Sell', fn: discoverHarvestShort },
-  { name: 'Classic Incentive', fn: discoverClassicIncentive },
+  { name: 'LP Entry/Exit', fn: discoverLPEntryExit, enabled: env.STRATEGY_LP_ENABLED ?? true },
+  { name: 'Vault Arbitrage', fn: discoverVaultArb, enabled: env.STRATEGY_VAULT_ENABLED ?? true },
+  { name: 'Debt Position', fn: discoverDebtPosition, enabled: env.STRATEGY_DEBT_ENABLED ?? false },
+  { name: 'Harvest + Spot Sell', fn: discoverHarvestShort, enabled: env.STRATEGY_HARVEST_ENABLED ?? true },
+  { name: 'Classic Incentive', fn: discoverClassicIncentive, enabled: env.STRATEGY_CLASSIC_ENABLED ?? false },
 ];
 
 async function runScanCycle(): Promise<void> {
@@ -49,8 +49,9 @@ async function runScanCycle(): Promise<void> {
   log.info('Scan cycle started', { nativePrice: cachedNativePrice });
 
   const allCandidates: OpportunityCandidate[] = [];
+  const active = discoverers.filter(d => d.enabled);
 
-  for (const discoverer of discoverers) {
+  for (const discoverer of active) {
     try {
       const candidates = await discoverer.fn(cachedNativePrice);
       allCandidates.push(...candidates);
@@ -65,10 +66,10 @@ async function runScanCycle(): Promise<void> {
   log.info('Scan cycle complete', {
     totalCandidates: allCandidates.length,
     nativePrice: cachedNativePrice,
+    activeStrategies: active.map(d => d.name).join(', '),
   });
 
   if (allCandidates.length > 0) {
-    // Pass to queue for execution
     const { processCandidates } = await import('../execution/queue');
     await processCandidates(allCandidates);
   }
@@ -76,12 +77,13 @@ async function runScanCycle(): Promise<void> {
 
 export function startScanLoop(): void {
   if (loopHandle) return;
-  log.info('Starting scan loop', { intervalMs: env.SCAN_INTERVAL_MS });
+  const interval = env.SCAN_INTERVAL_MS ?? 15000;
+  log.info('Starting scan loop', { intervalMs: interval });
   loopHandle = setInterval(() => {
     runScanCycle().catch((err) => {
       log.error('Scan cycle error', { error: err instanceof Error ? err.message : String(err) });
     });
-  }, env.SCAN_INTERVAL_MS);
+  }, interval);
 }
 
 export function stopScanLoop(): void {
