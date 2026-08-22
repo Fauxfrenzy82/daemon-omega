@@ -4,42 +4,17 @@ import { OpportunityCandidate } from '../common/opportunityCandidate';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { getDirectDexQuote } from '../../scanner/sources/directDexSource';
-import { TOKENS } from '../../config/tokens';
+import { REWARD_POSITIONS } from '../../config/farms';
+import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 
 const log = createLogger('harvestShort');
-
-// Known reward-bearing positions (v1: QuickSwap farms, etc.)
-// In production, this would be discovered via subgraph or on-chain.
-// For now we use a placeholder; these addresses need to be verified.
-// This is intentionally empty because we don't have real reward positions configured.
-const REWARD_POSITIONS: Array<{
-  id: string;
-  positionAddress: string;
-  rewardToken: TokenInfo;
-  entryToken: TokenInfo;
-  protocol: string;
-}> = [];
-
-function getTokenPriceUsd(token: TokenInfo): number {
-  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
-    return 1.0;
-  }
-  const priceMap: Record<string, number> = {
-    'WMATIC': 0.1,
-    'WETH': 3000,
-    'WBTC': 60000,
-    'QUICK': 0.05,
-    'GHST': 1.5,
-  };
-  return priceMap[token.symbol] || 0.01;
-}
 
 export async function discoverHarvestShort(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
 
   if (REWARD_POSITIONS.length === 0) {
     log.info('📭 Harvest + Spot Sell strategy: No reward positions configured. Skipping.');
-    log.info('💡 To enable this strategy, populate REWARD_POSITIONS with real farming positions.');
+    log.info('💡 To enable this strategy, populate REWARD_POSITIONS in src/config/farms.ts');
     return [];
   }
 
@@ -47,7 +22,7 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
     try {
       // For v1, we assume rewards are claimable.
       // In production, call the contract's pendingRewards function.
-      // Here we use a fixed amount for demo.
+      // Here we use a fixed amount for demo (1 token).
       const rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
 
       // Check liquidity for reward token -> entry token
@@ -63,8 +38,8 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
         continue;
       }
 
-      const rewardValue = (Number(rewardAmount) / 10 ** position.rewardToken.decimals) *
-        getTokenPriceUsd(position.rewardToken);
+      const rewardPrice = await getLiveTokenPriceUsd(position.rewardToken);
+      const rewardValue = (Number(rewardAmount) / 10 ** position.rewardToken.decimals) * rewardPrice;
       const estimatedGasUsd = 0.05 * nativePriceUsd;
       const netProfitUsd = rewardValue - estimatedGasUsd;
 
