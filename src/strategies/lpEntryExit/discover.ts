@@ -6,6 +6,7 @@ import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { findOptimalTradeSize } from '../../utils/optimizer';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
+import { provider } from '../../treasury/wallets';
 
 const log = createLogger('lpEntryExit');
 
@@ -14,23 +15,39 @@ const PRIMARY_PAIR_IDS = env.PRIMARY_PAIR_IDS.split(',').map(s => s.trim());
 const SECONDARY_PAIR_IDS = env.SECONDARY_PAIR_IDS.split(',').map(s => s.trim());
 const SECONDARY_MAX_POSITION = env.SECONDARY_MAX_POSITION_USD;
 
+/**
+ * Discover LP entry/exit arbitrage opportunities using liquidity-aware optimal sizing.
+ * Uses Enso route as primary quote source, falls back to direct DEX queries if configured.
+ */
 export async function discoverLPEntryExit(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
   const pairs = enabledPairs();
 
+  // Get current block number for freshness tracking
+  let currentBlockNumber = 0;
+  try {
+    currentBlockNumber = await provider.getBlockNumber();
+  } catch (err) {
+    log.warn('Failed to fetch block number, using 0', { error: String(err) });
+  }
+
   for (const pair of pairs) {
     const isPrimary = PRIMARY_PAIR_IDS.includes(pair.id);
-    const maxSizeUsd = isPrimary ? env.MAX_POSITION_SIZE_USD : Math.min(env.MAX_POSITION_SIZE_USD, SECONDARY_MAX_POSITION);
+    const maxSizeUsd = isPrimary
+      ? env.MAX_POSITION_SIZE_USD
+      : Math.min(env.MAX_POSITION_SIZE_USD, SECONDARY_MAX_POSITION);
 
     const useEnso = env.USE_ENSO_ROUTE_PRIMARY;
+
+    // 1. Find optimal trade size and get the buy quote
     const result = await findOptimalTradeSize(
-      pair.quote,
-      pair.base,
-      10,
+      pair.quote,      // sell token (quote)
+      pair.base,       // buy token (base)
+      10,              // min size $10
       maxSizeUsd,
       nativePriceUsd,
       useEnso,
-      [],
+      [],              // excludeVenues (none for now)
       pair.id
     );
 
@@ -39,14 +56,14 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       continue;
     }
 
-    const quote = result.quote;
-    if (!quote) {
-      log.debug(`No quote returned for ${pair.id} at optimal size`);
+    const buyQuote = result.quote;
+    if (!buyQuote) {
+      log.debug(`No buy quote returned for ${pair.id} at optimal size`);
       continue;
     }
 
-    // Get sell quote for the same size using the amountOut from buy
-    const buyAmountOut = (quote as any).amountOut;
+    // 2. Get sell quote for the amountOut of the buy quote
+    const buyAmountOut = (buyQuote as any).amountOut;
     if (!buyAmountOut) {
       log.debug(`Buy quote missing amountOut for ${pair.id}`);
       continue;
@@ -58,8 +75,10 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     } else {
       const { getDirectDexQuote } = await import('../../scanner/sources/directDexSource');
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'];
-      const quotes = await Promise.all(venues.map(v => getDirectDexQuote(v, pair.base, pair.quote, buyAmountOut)));
-      // Fix TypeScript error: use type assertion for filter
+      const quotes = await Promise.all(
+        venues.map(v => getDirectDexQuote(v, pair.base, pair.quote, buyAmountOut))
+      );
+      // Fix TypeScript: explicitly type the filter result
       const valid = quotes.filter((q): q is NonNullable<typeof quotes[number]> => q !== null);
       if (valid.length > 0) {
         sellQuote = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
@@ -71,10 +90,11 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       continue;
     }
 
-    // Compute gross profit from the two legs (just for logging, net from optimizer is used)
-    const startAmountHuman = Number(quote.amountIn) / 10 ** pair.quote.decimals;
+    // 3. Compute gross profit (for logging only; net profit from optimizer is authoritative)
+    const startAmountHuman = Number(buyQuote.amountIn) / 10 ** pair.quote.decimals;
     const endAmountHuman = Number(sellQuote.amountOut) / 10 ** pair.quote.decimals;
     const grossProfitHuman = endAmountHuman - startAmountHuman;
+    // Gross profit in USD is not needed for decision; the optimizer already computed it internally.
 
     // Use the optimizer's net profit directly
     const netProfitUsd = result.bestNetProfitUsd;
@@ -84,20 +104,22 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       continue;
     }
 
-    // Build candidate
+    // 4. Build candidate
     const candidate: OpportunityCandidate = {
       id: `lp-${pair.id}-${Date.now()}`,
       strategy: 'lpEntryExit',
       protocol: useEnso ? 'enso-route' : 'direct',
       params: {
         pairId: pair.id,
-        buyQuote: quote,
+        buyQuote: buyQuote,
         sellQuote: sellQuote,
         optimalSizeUsd: result.optimalSizeUsd,
         nativePriceUsd,
-        grossProfitUsd: grossProfitHuman * 1.0, // placeholder, not used in decision
+        grossProfitUsd: grossProfitHuman * 1.0, // placeholder, not used for profitability
         netProfitUsd,
+        blockNumber: currentBlockNumber,
       },
+      // These fields are used for logging and thresholds; use optimizer's net profit
       estimatedGrossProfitUsd: grossProfitHuman * 1.0, // placeholder
       estimatedNetProfitUsd: netProfitUsd,
       estimatedCostUsd: (grossProfitHuman * 1.0) - netProfitUsd,
