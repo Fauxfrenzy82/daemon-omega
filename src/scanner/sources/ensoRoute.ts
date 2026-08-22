@@ -48,7 +48,7 @@ export const ensoRouteSource: PriceSource = {
         return null;
       }
 
-      // Extract price impact if available
+      // Extract price impact if available and enforce threshold
       const priceImpactBps = (routeData as any)?.priceImpact;
       if (priceImpactBps !== undefined && priceImpactBps !== null) {
         const maxImpact = env.MAX_PRICE_IMPACT_BPS ?? 300;
@@ -98,3 +98,17 @@ export const ensoRouteSource: PriceSource = {
     }
   },
 };
+
+// Helper function to get Enso route quote as a standalone function for optimizer use
+export async function getEnsoRouteQuote(
+  tokenIn: any,
+  tokenOut: any,
+  amountIn: string
+): Promise<any> {
+  const result = await ensoRouteSource.getQuote({
+    tokenIn,
+    tokenOut,
+    amountIn,
+  });
+  return result;
+}
