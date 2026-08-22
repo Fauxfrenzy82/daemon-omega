@@ -10,7 +10,8 @@ import { env } from '../../config/env';
 
 const log = createLogger('vaultArb');
 
-// StataToken Factory on Polygon
+// StataToken Factory on Polygon – this address may not exist on Polygon mainnet.
+// If it reverts, we log and return empty.
 const STATATOKEN_FACTORY = '0xb65308a8f4ce57a72f13312cecbaaf47601a574a';
 
 // Aave V3 aToken addresses on Polygon (known assets)
@@ -42,7 +43,7 @@ function getTokenPriceUsd(token: TokenInfo): number {
     return 1.0;
   }
   const priceMap: Record<string, number> = {
-    'WMATIC': 0.5,
+    'WMATIC': 0.1,
     'WETH': 3000,
     'WBTC': 60000,
   };
@@ -53,18 +54,25 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
   const candidates: OpportunityCandidate[] = [];
   const factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
 
+  // Log that we are attempting vault discovery
+  log.debug('Vault Arbitrage discovery started');
+
   for (const [symbol, aTokenAddress] of Object.entries(ATOKEN_MAP)) {
     try {
       const underlying = TOKENS[symbol];
-      if (!underlying) continue;
+      if (!underlying) {
+        log.debug(`Skipping ${symbol}: no underlying token definition`);
+        continue;
+      }
 
+      // Try to get StataToken address from factory
       const stataAddress = (await withRetry(
         () => factory.getStataToken(underlying.address),
         { label: `vaultArb.getStata.${symbol}`, shouldRetry: isTransientError, retries: 2 }
       )) as string;
 
       if (stataAddress === ethers.constants.AddressZero) {
-        log.debug(`No StataToken wrapper for ${symbol}`);
+        log.debug(`No StataToken wrapper for ${symbol} on Polygon`);
         continue;
       }
 
@@ -121,15 +129,35 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
             grossProfitUsd: grossProfitUsd.toFixed(4),
             netProfitUsd: netProfitUsd.toFixed(4),
           });
+        } else {
+          log.debug(`Net profit below threshold for ${symbol}`, {
+            netProfitUsd: netProfitUsd.toFixed(6),
+            threshold: env.DEFAULT_MIN_PROFIT_USD
+          });
         }
+      } else {
+        log.debug(`No profitable gross profit for ${symbol}`, { grossProfitUsd: grossProfitUsd.toFixed(6) });
       }
     } catch (err) {
-      log.debug(`Vault check failed for ${symbol}`, {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // Log the error but continue to next asset
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      // If it's a revert, it's likely the factory doesn't exist on Polygon
+      if (errorMsg.includes('revert') || errorMsg.includes('CALL_EXCEPTION')) {
+        log.debug(`StataToken factory revert for ${symbol} – likely not deployed on Polygon`, {
+          error: errorMsg
+        });
+      } else {
+        log.debug(`Vault check failed for ${symbol}`, {
+          error: errorMsg,
+        });
+      }
     }
   }
 
-  log.info(`Vault Arbitrage found ${candidates.length} candidates`);
+  if (candidates.length === 0) {
+    log.info('📭 Vault Arbitrage found 0 candidates – StataToken wrapper may not be deployed on Polygon');
+  } else {
+    log.info(`📦 Vault Arbitrage found ${candidates.length} candidates`);
+  }
   return candidates;
 }
