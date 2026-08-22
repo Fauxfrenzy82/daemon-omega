@@ -1,12 +1,12 @@
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
+import { FlashLoanProvider } from '../../execution/ensoBuilder';
 
-// Aave V3 Pool ABI for liquidationCall
+const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+
 const POOL_LIQUIDATION_ABI = [
   'function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external',
 ];
-
-const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
 function encodeLiquidationCall(
   collateralAsset: string,
@@ -25,23 +25,21 @@ function encodeLiquidationCall(
   ]);
 }
 
-export async function buildActionPlan(candidate: OpportunityCandidate): Promise<ActionPlan> {
+export async function buildActionPlan(
+  candidate: OpportunityCandidate,
+  options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
+): Promise<ActionPlan> {
   const { borrower, debtAsset, collateralAsset, debtToCover } = candidate.params;
 
-  const flashLoanToken = debtAsset;
+  const flashLoanToken = options?.flashLoanToken || debtAsset;
   const flashLoanAmount = debtToCover;
-
-  // Build callback steps:
-  // 1. Call liquidationCall (custom call)
-  // 2. Sell seized collateral (swap) -> debt asset
-  // Flashloan auto-repays
 
   const liquidationData = encodeLiquidationCall(
     collateralAsset.address,
     debtAsset.address,
     borrower,
     debtToCover,
-    false // receiveAToken = false (receive underlying collateral)
+    false
   );
 
   const liquidationStep: ActionStep = {
@@ -50,7 +48,7 @@ export async function buildActionPlan(candidate: OpportunityCandidate): Promise<
     target: AAVE_POOL,
     data: liquidationData,
     value: '0',
-    useOutput: true, // Output is the seized collateral amount
+    useOutput: true,
   };
 
   const swapStep: ActionStep = {
@@ -58,14 +56,13 @@ export async function buildActionPlan(candidate: OpportunityCandidate): Promise<
     protocol: 'enso',
     tokenIn: collateralAsset.address,
     tokenOut: debtAsset.address,
-    amountIn: { useOutputOfCallAt: 0 }, // Use output of liquidation call
+    amountIn: { useOutputOfCallAt: 0 },
     slippage: '100',
-    // Enso route will find best path; no primaryAddress needed
   };
 
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: 'aave-v3',
+    protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback: [liquidationStep, swapStep],
