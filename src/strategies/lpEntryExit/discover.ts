@@ -6,6 +6,7 @@ import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { findOptimalTradeSize } from '../../utils/optimizer';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
+import { getDirectDexQuote, DirectDexQuote } from '../../scanner/sources/directDexSource';
 import { provider } from '../../treasury/wallets';
 
 const log = createLogger('lpEntryExit');
@@ -69,17 +70,16 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       continue;
     }
 
-    let sellQuote = null;
+    let sellQuote: any = null; // Explicitly type as any to avoid type conflicts
     if (useEnso) {
       sellQuote = await getEnsoRouteQuote(pair.base, pair.quote, buyAmountOut);
     } else {
-      const { getDirectDexQuote } = await import('../../scanner/sources/directDexSource');
       const venues = ['uniswap-v3', 'sushiswap-v2', 'quickswap-v2'];
       const quotes = await Promise.all(
         venues.map(v => getDirectDexQuote(v, pair.base, pair.quote, buyAmountOut))
       );
-      // Fix TypeScript: explicitly type the filter result
-      const valid = quotes.filter((q): q is NonNullable<typeof quotes[number]> => q !== null);
+      // Filter out nulls and cast to DirectDexQuote[] explicitly
+      const valid = quotes.filter((q): q is DirectDexQuote => q !== null);
       if (valid.length > 0) {
         sellQuote = valid.reduce((a, b) => (Number(a.amountOut) > Number(b.amountOut) ? a : b));
       }
