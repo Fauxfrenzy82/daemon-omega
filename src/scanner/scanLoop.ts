@@ -10,13 +10,14 @@ import { discoverVaultArb } from '../strategies/vaultArb/discover';
 import { discoverDebtPosition } from '../strategies/debtPosition/discover';
 import { discoverHarvestShort } from '../strategies/harvestShort/discover';
 import { discoverClassicIncentive } from '../strategies/classicIncentive/discover';
+import { pushCandidate } from '../execution/queue';
 
 const log = createLogger('scanLoop');
 
 let loopHandle: NodeJS.Timeout | null = null;
 let cachedNativePrice = 0.5;
 
-// List of strategy discover functions with enabled flags and names
+// List of strategy discover functions with enabled flags
 const discoverers = [
   { 
     name: 'LP Entry/Exit', 
@@ -73,10 +74,7 @@ async function runScanCycle(): Promise<void> {
 
   log.info('🔍 Scan cycle started', { nativePrice: cachedNativePrice });
 
-  const allCandidates: OpportunityCandidate[] = [];
   const active = discoverers.filter(d => d.enabled);
-
-  // Collect per‑strategy results for summary
   const strategyResults: Record<string, { candidates: number, status: string, note?: string }> = {};
 
   for (const discoverer of active) {
@@ -87,8 +85,11 @@ async function runScanCycle(): Promise<void> {
 
     try {
       candidates = await discoverer.fn(cachedNativePrice);
-      allCandidates.push(...candidates);
-      log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates`);
+      // Push each candidate to queue immediately
+      for (const candidate of candidates) {
+        pushCandidate(candidate);
+      }
+      log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates, pushed to queue`);
     } catch (err) {
       status = 'error';
       note = err instanceof Error ? err.message : String(err);
@@ -102,20 +103,11 @@ async function runScanCycle(): Promise<void> {
     };
   }
 
-  // Summary log with clear visibility
   log.info('📊 Scan cycle summary', {
     nativePrice: cachedNativePrice,
-    totalCandidates: allCandidates.length,
+    totalCandidates: Object.values(strategyResults).reduce((sum, s) => sum + s.candidates, 0),
     strategies: strategyResults,
   });
-
-  // If candidates exist, pass to queue
-  if (allCandidates.length > 0) {
-    const { processCandidates } = await import('../execution/queue');
-    await processCandidates(allCandidates);
-  } else {
-    log.info('⛔ No candidates from any strategy this cycle');
-  }
 }
 
 export function startScanLoop(): void {
