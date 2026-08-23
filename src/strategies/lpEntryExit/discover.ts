@@ -6,6 +6,7 @@ import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { findOptimalTradeSize } from '../../utils/optimizer';
 import { provider } from '../../treasury/wallets';
+import { pushCandidate } from '../../execution/queue';
 
 const log = createLogger('lpEntryExit');
 
@@ -85,6 +86,10 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       sourceTimestamp: Date.now(),
     };
 
+    // STREAM: push immediately to execution queue
+    pushCandidate(candidate);
+
+    // Also keep for summary
     candidates.push(candidate);
     log.info(`✅ Found LP candidate for ${pair.id}`, {
       sizeUsd: result.optimalSizeUsd.toFixed(2),
