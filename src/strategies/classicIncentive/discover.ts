@@ -2,6 +2,7 @@ import { OpportunityCandidate } from '../common/opportunityCandidate';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { fetchActiveIncentives } from './dataSource';
+import { pushCandidate } from '../../execution/queue';
 
 const log = createLogger('classicIncentive');
 
@@ -10,7 +11,6 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
 
   log.info('🔍 Classic Incentive discovery started');
 
-  // Fetch active incentive programs from QuickSwap subgraph
   const incentives = await fetchActiveIncentives(20);
 
   if (incentives.length === 0) {
@@ -20,11 +20,8 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
 
   for (const incentive of incentives) {
     try {
-      // For v1, we evaluate each incentive program
-      const rewardValue = Number(incentive.totalReward) / 1e18; // Assuming 18 decimals
-      const rewardUsd = rewardValue * 1; // Placeholder – use actual token price
-
-      // Estimate costs
+      const rewardValue = Number(incentive.totalReward) / 1e18;
+      const rewardUsd = rewardValue * 1;
       const estimatedGasUsd = 0.1 * nativePriceUsd;
       const netProfitUsd = rewardUsd - estimatedGasUsd;
 
@@ -50,6 +47,8 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
           sourceTimestamp: Date.now(),
         };
 
+        // STREAM
+        pushCandidate(candidate);
         candidates.push(candidate);
         log.info(`Found classic incentive candidate for ${incentive.id}`, {
           netProfitUsd: netProfitUsd.toFixed(4),
