@@ -4,21 +4,22 @@ import { withRetry, isTransientError } from '../../utils/retry';
 const log = createLogger('debtPositionDataSource');
 
 /**
- * Aave V3 Polygon Subgraph endpoints.
+ * Aave V3 Polygon Subgraph.
  * 
- * Correct subgraph ID: Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211
- * 
- * Sources:
- * - https://lobehub.com/zh-TW/mcp/paulieb14-graph-aave-mcp
- * - https://github.com/aave-dao/aave-address-book
+ * Subgraph ID verified from The Graph Explorer:
+ * https://thegraph.com/explorer/subgraphs/Co2URyXjnxaw8WqxKyVHdirq9Ahhm5vcTs4dMedAq211
  * 
  * The decentralized network requires a valid API key from The Graph Studio.
  * Set SUBGRAPH_API_KEY in your environment variables.
+ * 
+ * Endpoint format: https://gateway.thegraph.com/api/{API_KEY}/subgraphs/id/{SUBGRAPH_ID}
  */
 const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
+const AAVE_V3_POLYGON_SUBGRAPH_ID = 'Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211';
+
 const AAVE_SUBGRAPH_ENDPOINTS = [
   // Decentralized network with API key (preferred)
-  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211` : null,
+  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/${AAVE_V3_POLYGON_SUBGRAPH_ID}` : null,
   // Studio hosted endpoint (alternative)
   'https://api.studio.thegraph.com/query/23875/aave-v3-polygon/version/latest',
   // Fallback hosted endpoint (deprecated, may still work)
