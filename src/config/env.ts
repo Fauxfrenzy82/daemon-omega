@@ -52,7 +52,7 @@ export const env = {
   DATABASE_URL: required('DATABASE_URL'),
 
   // Risk / thresholds
-  DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.05),
+  DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.01),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
   MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 10000),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
@@ -99,12 +99,12 @@ export const env = {
   SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100),
   MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 10000),
 
-  // Optimizer – reduced from 8 to 4 to avoid 429 errors and speed up scan
+  // Optimizer – reduced to avoid 429 errors
   OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
 
   // Worker pool
   WORKER_POOL_SIZE: optionalNumber('WORKER_POOL_SIZE', 3),
 
-  // LP Entry/Exit – max pairs per cycle to prevent timeouts
+  // LP Entry/Exit – max pairs per cycle
   LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
 };
