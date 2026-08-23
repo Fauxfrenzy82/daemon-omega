@@ -32,7 +32,6 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
 
     const useEnso = env.USE_ENSO_ROUTE_PRIMARY;
 
-    // Optimizer returns both buy and sell quotes with net profit already computed
     const result = await findOptimalTradeSize(
       pair.quote,
       pair.base,
