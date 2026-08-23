@@ -3,6 +3,10 @@ import { withRetry, isTransientError } from '../../utils/retry';
 
 const log = createLogger('debtPositionDataSource');
 
+/**
+ * Aave V3 Polygon Subgraph endpoint.
+ * Verified: https://api.thegraph.com/subgraphs/name/aave/protocol-v3-polygon
+ */
 const AAVE_SUBGRAPH_URL = 'https://api.thegraph.com/subgraphs/name/aave/protocol-v3-polygon';
 
 export interface LiquidatableUser {
