@@ -96,11 +96,8 @@ async function runScanCycle(): Promise<void> {
       try {
         log.info(`🔍 Running strategy: ${discoverer.name} (${discoverer.description})`);
         candidates = await discoverer.fn(cachedNativePrice);
-        // Push each candidate to queue immediately
-        for (const candidate of candidates) {
-          // The discover functions already call pushCandidate, so we don't need to push here
-          // but we keep for summary
-        }
+        // The discover functions already call pushCandidate, so we don't need to push here
+        // but we keep for summary
         log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates`);
       } catch (err) {
         status = 'error';
