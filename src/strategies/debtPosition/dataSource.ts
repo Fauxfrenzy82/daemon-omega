@@ -5,14 +5,11 @@ const log = createLogger('debtPositionDataSource');
 
 /**
  * Aave V3 Polygon Subgraph.
- *
- * Subgraph ID verified from The Graph Explorer:
- * 6yuf1C49aWEscgk5n9D1DekeG1BCk5Z9imJYJT3sVmAT
- *
+ * 
+ * Subgraph ID: 6yuf1C49aWEscgk5n9D1DekeG1BCk5Z9imJYJT3sVmAT
+ * 
  * The decentralized network requires a valid API key from The Graph Studio.
  * Set SUBGRAPH_API_KEY in your environment variables.
- *
- * Endpoint format: https://gateway.thegraph.com/api/{API_KEY}/subgraphs/id/{SUBGRAPH_ID}
  */
 const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
 const AAVE_V3_POLYGON_SUBGRAPH_ID = '6yuf1C49aWEscgk5n9D1DekeG1BCk5Z9imJYJT3sVmAT';
@@ -37,7 +34,7 @@ export interface LiquidatableUser {
 
 interface SubgraphResponse {
   data?: {
-    users?: Array<{
+    accounts?: Array<{
       id: string;
       healthFactor: string;
       totalCollateralUSD: string;
@@ -56,7 +53,6 @@ async function fetchFromEndpoint(endpoint: string, query: string): Promise<Subgr
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // If using the clean URL (Option B), pass API key in Authorization header
         ...(endpoint.includes('gateway.thegraph.com/api/subgraphs/id/') && SUBGRAPH_API_KEY
           ? { 'Authorization': `Bearer ${SUBGRAPH_API_KEY}` }
           : {}),
@@ -79,8 +75,9 @@ async function fetchFromEndpoint(endpoint: string, query: string): Promise<Subgr
 }
 
 export async function fetchLiquidatableUsers(limit: number = 100): Promise<string[]> {
+  // FIXED: Use "accounts" not "users" – this is the correct schema field for Aave V3
   const query = `{
-    users(where: { healthFactor_lt: "1" }, first: ${limit}) {
+    accounts(where: { healthFactor_lt: "1" }, first: ${limit}) {
       id
       healthFactor
       totalCollateralUSD
@@ -102,12 +99,12 @@ export async function fetchLiquidatableUsers(limit: number = 100): Promise<strin
         throw new Error(`Subgraph errors: ${JSON.stringify(data.errors)}`);
       }
 
-      const users = data.data?.users || [];
-      if (users.length > 0) {
-        log.debug(`Fetched ${users.length} liquidatable users from ${endpoint}`);
-        return users.map(u => u.id);
+      const accounts = data.data?.accounts || [];
+      if (accounts.length > 0) {
+        log.debug(`Fetched ${accounts.length} liquidatable accounts from ${endpoint}`);
+        return accounts.map(u => u.id);
       }
-      log.debug(`No liquidatable users found from ${endpoint}`);
+      log.debug(`No liquidatable accounts found from ${endpoint}`);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (lastError.message.includes('auth error') || lastError.message.includes('API key')) {
@@ -128,8 +125,9 @@ export async function fetchLiquidatableUsers(limit: number = 100): Promise<strin
 }
 
 export async function fetchLiquidatableUsersDetailed(limit: number = 100): Promise<LiquidatableUser[]> {
+  // FIXED: Use "accounts" not "users"
   const query = `{
-    users(where: { healthFactor_lt: "1" }, first: ${limit}) {
+    accounts(where: { healthFactor_lt: "1" }, first: ${limit}) {
       id
       healthFactor
       totalCollateralUSD
@@ -151,10 +149,10 @@ export async function fetchLiquidatableUsersDetailed(limit: number = 100): Promi
         throw new Error(`Subgraph errors: ${JSON.stringify(data.errors)}`);
       }
 
-      const users = data.data?.users || [];
-      if (users.length > 0) {
-        log.debug(`Fetched ${users.length} detailed liquidatable users from ${endpoint}`);
-        return users;
+      const accounts = data.data?.accounts || [];
+      if (accounts.length > 0) {
+        log.debug(`Fetched ${accounts.length} detailed liquidatable accounts from ${endpoint}`);
+        return accounts;
       }
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
