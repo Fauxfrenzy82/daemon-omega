@@ -7,13 +7,10 @@ import { withRetry, isTransientError } from '../../utils/retry';
 import { TOKENS } from '../../config/tokens';
 import { env } from '../../config/env';
 import { fetchLiquidatableUsers } from './dataSource';
+import { pushCandidate } from '../../execution/queue';
 
 const log = createLogger('debtPosition');
 
-/**
- * Aave V3 Pool on Polygon.
- * Verified: https://polygonscan.com/address/0x794a61358D6845594F94dc1DB02A252b5b4814aD
- */
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
 const POOL_ABI = [
@@ -35,7 +32,6 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
 
   log.info('🔍 Debt Position discovery started');
 
-  // Fetch liquidatable users from Aave subgraph
   const borrowers = await fetchLiquidatableUsers(50);
   if (borrowers.length === 0) {
     log.info('📭 Debt Position: No liquidatable borrowers found from Aave subgraph');
@@ -58,16 +54,11 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
         continue;
       }
 
-      // For v1, we inspect the user's position. In production, this would come from subgraph.
-      // We'll use a simplified approach with known assets.
       const debtAsset = TOKENS.USDC;
       const collateralAsset = TOKENS.WETH;
-
-      // Approximate debt amount – in reality, compute from the user's debt.
       const debtToCover = ethers.utils.parseUnits('100', debtAsset.decimals);
 
-      // Estimate profit: liquidation bonus = debtToCover * bonusRate (5% placeholder)
-      const bonusBps = 500; // 5%
+      const bonusBps = 500;
       const grossProfitUsd = (Number(debtToCover) / 10 ** debtAsset.decimals) * (bonusBps / 10000);
       const estimatedGasUsd = 0.1 * nativePriceUsd;
       const netProfitUsd = grossProfitUsd - estimatedGasUsd;
@@ -92,6 +83,8 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
           sourceTimestamp: Date.now(),
         };
 
+        // STREAM
+        pushCandidate(candidate);
         candidates.push(candidate);
         log.info(`Found debt position candidate for ${borrower.slice(0, 10)}`, {
           healthFactor,
