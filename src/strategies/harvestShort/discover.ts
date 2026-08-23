@@ -6,6 +6,7 @@ import { env } from '../../config/env';
 import { getDirectDexQuote } from '../../scanner/sources/directDexSource';
 import { REWARD_POSITIONS } from '../../config/farms';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
+import { pushCandidate } from '../../execution/queue';
 
 const log = createLogger('harvestShort');
 
@@ -21,12 +22,8 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
 
   for (const position of REWARD_POSITIONS) {
     try {
-      // For v1, we assume rewards are claimable.
-      // In production, call the contract's pendingRewards function.
-      // Here we use a fixed amount for demo (1 token).
       const rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
 
-      // Check liquidity for reward token -> entry token
       const sellQuote = await getDirectDexQuote(
         'uniswap-v3',
         position.rewardToken,
@@ -65,6 +62,8 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
           sourceTimestamp: Date.now(),
         };
 
+        // STREAM
+        pushCandidate(candidate);
         candidates.push(candidate);
         log.info(`Found harvest opportunity for ${position.id}`, {
           rewardValue: rewardValue.toFixed(4),
