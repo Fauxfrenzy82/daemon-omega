@@ -13,10 +13,12 @@ const log = createLogger('vaultArb');
 
 /**
  * Correct StataToken Factory on Polygon.
- * Verified from the official Aave address book:
- * https://github.com/aave-dao/aave-address-book/blob/main/src/ts/AaveV3Polygon.ts
  * 
- * Correct factory address: 0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa
+ * Verified from:
+ * 1. Aave official GitHub: github.com/aave-dao/aave-address-book
+ * 2. Published npm package: @bgd-labs/aave-address-book
+ * 
+ * Address: 0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa
  * Method: getStaticAToken(address underlying) returns address
  */
 const STATATOKEN_FACTORY = '0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa';
@@ -35,21 +37,8 @@ const STATATOKEN_ABI = [
   'function totalSupply() external view returns (uint256)',
 ];
 
-/**
- * Hardcoded per-asset StataToken addresses on Polygon.
- * Sourced from the official Aave address book, each address has a PolygonScan link.
- * We use these directly to avoid a factory call when the asset is known.
- * 
- * Source: github.com/aave-dao/aave-address-book, src/ts/AaveV3Polygon.ts
- * 
- * Token address matching:
- *   - WPOL (registry) = 0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270 -> this codebase's WMATIC
- *   - USDT0 (registry) = 0xc2132D05D31c914a87C6611C10748AEb04B58e8F -> this codebase's USDT
- *   - USDC (bridged, registry) = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 -> this codebase's USDC.e
- *   - USDCn (native, registry) = 0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359 -> this codebase's USDC
- * 
- * We match by underlying address, not symbol.
- */
+// Token address matching (underlying address → StataToken address)
+// Sourced from Aave address book.
 const STATIC_A_TOKEN_MAP: Record<string, string> = {
   // WMATIC -> WPOL
   '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270': '0x98254592408E389D1dd2dBa318656C2C5c305b4E',
@@ -91,7 +80,6 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
 
   log.info('🔍 Vault Arbitrage discovery started');
 
-  // Get all tokens we want to check
   const tokensToCheck = [
     TOKENS.WMATIC,
     TOKENS.USDT,
@@ -109,11 +97,11 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
       const symbol = token.symbol;
       const underlyingAddress = token.address.toLowerCase();
 
-      // First, try to get StataToken from the hardcoded map
+      // Try hardcoded map first
       let stataAddress = STATIC_A_TOKEN_MAP[underlyingAddress];
       let source = 'hardcoded';
 
-      // If not in map, try the factory (using the correct address)
+      // If not in map, try the factory
       if (!stataAddress) {
         try {
           stataAddress = (await withRetry(
@@ -136,7 +124,7 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
 
       const stata = new ethers.Contract(stataAddress, STATATOKEN_ABI, provider);
 
-      // Verify the StataToken's underlying matches the expected token
+      // Verify underlying matches
       try {
         const underlyingCheck = await stata.underlying();
         if (underlyingCheck.toLowerCase() !== token.address.toLowerCase()) {
