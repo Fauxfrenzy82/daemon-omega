@@ -13,18 +13,15 @@ const log = createLogger('vaultArb');
 
 /**
  * Aave StataToken Factory on Polygon.
+ * Correct factory: 0x72F591346bb15DBc946767B0DaF3527cB17b7097
+ * Method: getStaticAToken(address underlying)
  * Verified from aave-address-book.
  */
-const STATATOKEN_FACTORY = '0xCA2E1E33E5BCF4978E2d683656E1f5610f8C4A7E';
+const STATATOKEN_FACTORY = '0x72F591346bb15DBc946767B0DaF3527cB17b7097';
 
-const ATOKEN_MAP: Record<string, string> = {
-  'USDC': '0xA354F35829Ae975e850e23e9615b11Da1B3dC4DE',
-  'USDT': '0x6ab707Aca953eDAeFBc4fD23bA73294241490620',
-  'DAI': '0x82E64f49Ed5EC1bC6e43DAD4FC8Af9bb3A2312EE',
-  'WETH': '0x4d5F47FA6A74757f35C14fD3a6Ef8E3C9BC514E8',
-  'WBTC': '0x078f358208685046a11C85e8ad32895DED33A249',
-  'WMATIC': '0x6d80113e533a2C0fe82EaBD35f1875DcEA89Ea97',
-};
+const FACTORY_ABI = [
+  'function getStaticAToken(address underlying) external view returns (address)',
+];
 
 const STATATOKEN_ABI = [
   'function underlying() external view returns (address)',
@@ -36,9 +33,14 @@ const STATATOKEN_ABI = [
   'function totalSupply() external view returns (uint256)',
 ];
 
-const FACTORY_ABI = [
-  'function getStataToken(address underlying) external view returns (address)',
-];
+const ATOKEN_MAP: Record<string, string> = {
+  'USDC': '0xA354F35829Ae975e850e23e9615b11Da1B3dC4DE',
+  'USDT': '0x6ab707Aca953eDAeFBc4fD23bA73294241490620',
+  'DAI': '0x82E64f49Ed5EC1bC6e43DAD4FC8Af9bb3A2312EE',
+  'WETH': '0x4d5F47FA6A74757f35C14fD3a6Ef8E3C9BC514E8',
+  'WBTC': '0x078f358208685046a11C85e8ad32895DED33A249',
+  'WMATIC': '0x6d80113e533a2C0fe82EaBD35f1875DcEA89Ea97',
+};
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
@@ -66,9 +68,10 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         continue;
       }
 
+      // Correct method: getStaticAToken
       const stataAddress = (await withRetry(
-        () => factory.getStataToken(underlying.address),
-        { label: `vaultArb.getStata.${symbol}`, shouldRetry: isTransientError, retries: 2 }
+        () => factory.getStaticAToken(underlying.address),
+        { label: `vaultArb.getStaticAToken.${symbol}`, shouldRetry: isTransientError, retries: 2 }
       )) as string;
 
       if (stataAddress === ethers.constants.AddressZero) {
@@ -122,7 +125,7 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
             sourceTimestamp: Date.now(),
           };
 
-          // STREAM: push immediately
+          // STREAM
           pushCandidate(candidate);
           candidates.push(candidate);
           log.info(`Found vault arbitrage for ${symbol}`, {
