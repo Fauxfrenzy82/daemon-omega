@@ -12,15 +12,19 @@ import { pushCandidate } from '../../execution/queue';
 const log = createLogger('vaultArb');
 
 /**
- * Aave StataToken Factory on Polygon.
- * Correct factory: 0x72F591346bb15DBc946767B0DaF3527cB17b7097
- * Method: getStaticAToken(address underlying)
- * Verified from aave-address-book.
+ * Correct StataToken Factory on Polygon.
+ * Verified from Aave address book and governance post:
+ * - Factory: 0x72F591346bb15DBc946767B0DaF3527cB17b7097
+ * - Method: getStaticAToken(address underlying) returns address
+ * 
+ * Source: https://governance.aave.com/t/bgd-statatoken-v3/11894
+ * StataToken Factories are deployed on all active networks with Aave instances[reference:6]
  */
 const STATATOKEN_FACTORY = '0x72F591346bb15DBc946767B0DaF3527cB17b7097';
 
 const FACTORY_ABI = [
   'function getStaticAToken(address underlying) external view returns (address)',
+  'function getStaticATokens() external view returns (address[])',
 ];
 
 const STATATOKEN_ABI = [
@@ -33,6 +37,10 @@ const STATATOKEN_ABI = [
   'function totalSupply() external view returns (uint256)',
 ];
 
+/**
+ * Aave V3 aToken addresses on Polygon (known assets).
+ * Verified via aave-address-book and PolygonScan.
+ */
 const ATOKEN_MAP: Record<string, string> = {
   'USDC': '0xA354F35829Ae975e850e23e9615b11Da1B3dC4DE',
   'USDT': '0x6ab707Aca953eDAeFBc4fD23bA73294241490620',
@@ -60,6 +68,15 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
 
   log.info('🔍 Vault Arbitrage discovery started');
 
+  // First, try to get all deployed StataTokens
+  let allStataTokens: string[] = [];
+  try {
+    allStataTokens = await factory.getStaticATokens();
+    log.debug(`Found ${allStataTokens.length} StataTokens deployed`);
+  } catch (err) {
+    log.debug('Could not fetch all StataTokens, falling back to individual queries');
+  }
+
   for (const [symbol, aTokenAddress] of Object.entries(ATOKEN_MAP)) {
     try {
       const underlying = TOKENS[symbol];
@@ -68,7 +85,7 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         continue;
       }
 
-      // Correct method: getStaticAToken
+      // Query the factory for StataToken address using the correct method
       const stataAddress = (await withRetry(
         () => factory.getStaticAToken(underlying.address),
         { label: `vaultArb.getStaticAToken.${symbol}`, shouldRetry: isTransientError, retries: 2 }
@@ -79,7 +96,11 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         continue;
       }
 
+      log.debug(`Found StataToken for ${symbol}: ${stataAddress}`);
+
       const stata = new ethers.Contract(stataAddress, STATATOKEN_ABI, provider);
+
+      // Test with 1 unit of underlying
       const testAmount = ethers.utils.parseUnits('1', underlying.decimals);
       const sharesForDeposit = await stata.previewDeposit(testAmount);
       const assetsForRedeem = await stata.previewRedeem(sharesForDeposit);
@@ -125,12 +146,13 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
             sourceTimestamp: Date.now(),
           };
 
-          // STREAM
+          // STREAM: push immediately
           pushCandidate(candidate);
           candidates.push(candidate);
           log.info(`Found vault arbitrage for ${symbol}`, {
             grossProfitUsd: grossProfitUsd.toFixed(4),
             netProfitUsd: netProfitUsd.toFixed(4),
+            stataAddress: stataAddress,
           });
         } else {
           log.debug(`Net profit below threshold for ${symbol}`, {
