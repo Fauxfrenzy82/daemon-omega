@@ -3,10 +3,10 @@ import { TokenInfo } from '../../config/tokens';
 import { OpportunityCandidate } from '../common/opportunityCandidate';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
-import { getDirectDexQuote } from '../../scanner/sources/directDexSource';
 import { REWARD_POSITIONS } from '../../config/farms';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { pushCandidate } from '../../execution/queue';
+import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
 
 const log = createLogger('harvestShort');
 
@@ -22,10 +22,13 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
 
   for (const position of REWARD_POSITIONS) {
     try {
+      // For v1, we assume rewards are claimable.
+      // In production, call the contract's pendingRewards function.
+      // Here we use a fixed amount for demo (1 token).
       const rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
 
-      const sellQuote = await getDirectDexQuote(
-        'uniswap-v3',
+      // Use Enso route instead of direct DEX quoter to avoid revert issues
+      const sellQuote = await getEnsoRouteQuote(
         position.rewardToken,
         position.entryToken,
         rewardAmount.toString()
