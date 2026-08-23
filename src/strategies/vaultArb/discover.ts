@@ -7,20 +7,16 @@ import { createLogger } from '../../utils/logger';
 import { withRetry, isTransientError } from '../../utils/retry';
 import { TOKENS } from '../../config/tokens';
 import { env } from '../../config/env';
+import { pushCandidate } from '../../execution/queue';
 
 const log = createLogger('vaultArb');
 
 /**
  * Aave StataToken Factory on Polygon.
- * Verified from aave-address-book:
- * https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Polygon.sol
+ * Verified from aave-address-book.
  */
 const STATATOKEN_FACTORY = '0xCA2E1E33E5BCF4978E2d683656E1f5610f8C4A7E';
 
-/**
- * Aave V3 aToken addresses on Polygon (known assets).
- * Verified via Aave address book and PolygonScan.
- */
 const ATOKEN_MAP: Record<string, string> = {
   'USDC': '0xA354F35829Ae975e850e23e9615b11Da1B3dC4DE',
   'USDT': '0x6ab707Aca953eDAeFBc4fD23bA73294241490620',
@@ -70,7 +66,6 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         continue;
       }
 
-      // Query the factory for StataToken address
       const stataAddress = (await withRetry(
         () => factory.getStataToken(underlying.address),
         { label: `vaultArb.getStata.${symbol}`, shouldRetry: isTransientError, retries: 2 }
@@ -82,8 +77,6 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
       }
 
       const stata = new ethers.Contract(stataAddress, STATATOKEN_ABI, provider);
-
-      // Test with 1 unit of underlying
       const testAmount = ethers.utils.parseUnits('1', underlying.decimals);
       const sharesForDeposit = await stata.previewDeposit(testAmount);
       const assetsForRedeem = await stata.previewRedeem(sharesForDeposit);
@@ -129,6 +122,8 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
             sourceTimestamp: Date.now(),
           };
 
+          // STREAM: push immediately
+          pushCandidate(candidate);
           candidates.push(candidate);
           log.info(`Found vault arbitrage for ${symbol}`, {
             grossProfitUsd: grossProfitUsd.toFixed(4),
