@@ -6,8 +6,10 @@ const log = createLogger('debtPositionDataSource');
 /**
  * Aave V3 Polygon Subgraph.
  * 
- * Subgraph ID verified from The Graph Explorer:
- * https://thegraph.com/explorer/subgraphs/Co2URyXjnxaw8WqxKyVHdirq9Ahhm5vcTs4dMedAq211
+ * Subgraph ID verified from The Graph Studio:
+ * https://thegraph.com/studio/
+ * 
+ * Correct ID: 6yuf1C49aWEscgkSn9D1Dek6e1B8CkS2j3nJYJ73sVnAT
  * 
  * The decentralized network requires a valid API key from The Graph Studio.
  * Set SUBGRAPH_API_KEY in your environment variables.
@@ -15,7 +17,7 @@ const log = createLogger('debtPositionDataSource');
  * Endpoint format: https://gateway.thegraph.com/api/{API_KEY}/subgraphs/id/{SUBGRAPH_ID}
  */
 const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
-const AAVE_V3_POLYGON_SUBGRAPH_ID = 'Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211';
+const AAVE_V3_POLYGON_SUBGRAPH_ID = '6yuf1C49aWEscgkSn9D1Dek6e1B8CkS2j3nJYJ73sVnAT';
 
 const AAVE_SUBGRAPH_ENDPOINTS = [
   // Decentralized network with API key (preferred)
