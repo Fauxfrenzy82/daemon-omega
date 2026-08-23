@@ -12,9 +12,10 @@ const log = createLogger('harvestShort');
 export async function discoverHarvestShort(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
 
+  log.info('🔍 Harvest + Spot Sell discovery started');
+
   if (REWARD_POSITIONS.length === 0) {
-    log.info('📭 Harvest + Spot Sell strategy: No reward positions configured. Skipping.');
-    log.info('💡 To enable this strategy, populate REWARD_POSITIONS in src/config/farms.ts');
+    log.info('📭 Harvest + Spot Sell: No reward positions configured. Add farms to src/config/farms.ts');
     return [];
   }
 
