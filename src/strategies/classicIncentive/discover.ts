@@ -3,6 +3,7 @@ import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { fetchActiveIncentives } from './dataSource';
 import { pushCandidate } from '../../execution/queue';
+import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 
 const log = createLogger('classicIncentive');
 
@@ -11,6 +12,7 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
 
   log.info('🔍 Classic Incentive discovery started');
 
+  // Fetch active incentive programs from QuickSwap subgraph
   const incentives = await fetchActiveIncentives(20);
 
   if (incentives.length === 0) {
@@ -20,10 +22,13 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
 
   for (const incentive of incentives) {
     try {
-      const rewardValue = Number(incentive.totalReward) / 1e18;
-      const rewardUsd = rewardValue * 1;
+      // Get live reward token price
+      const rewardPrice = await getLiveTokenPriceUsd(incentive.rewardToken);
+      const rewardValue = (Number(incentive.totalReward) / 1e18) * rewardPrice;
+
+      // Estimate costs
       const estimatedGasUsd = 0.1 * nativePriceUsd;
-      const netProfitUsd = rewardUsd - estimatedGasUsd;
+      const netProfitUsd = rewardValue - estimatedGasUsd;
 
       if (netProfitUsd > env.DEFAULT_MIN_PROFIT_USD) {
         const candidate: OpportunityCandidate = {
@@ -38,20 +43,30 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
             remainingReward: incentive.remainingReward,
             startTime: incentive.startTime,
             endTime: incentive.endTime,
+            poolAddress: incentive.poolAddress,
             nativePriceUsd,
+            rewardValue,
           },
-          estimatedGrossProfitUsd: rewardUsd,
+          estimatedGrossProfitUsd: rewardValue,
           estimatedNetProfitUsd: netProfitUsd,
-          estimatedCostUsd: rewardUsd - netProfitUsd,
+          estimatedCostUsd: rewardValue - netProfitUsd,
           actionPlan: null,
           sourceTimestamp: Date.now(),
         };
 
-        // STREAM
+        // STREAM: push immediately
         pushCandidate(candidate);
         candidates.push(candidate);
         log.info(`Found classic incentive candidate for ${incentive.id}`, {
           netProfitUsd: netProfitUsd.toFixed(4),
+          rewardToken: incentive.rewardToken.symbol,
+          rewardValue: rewardValue.toFixed(4),
+        });
+      } else {
+        log.debug(`Incentive ${incentive.id} below profit threshold`, {
+          rewardValue: rewardValue.toFixed(4),
+          netProfitUsd: netProfitUsd.toFixed(6),
+          threshold: env.DEFAULT_MIN_PROFIT_USD
         });
       }
     } catch (err) {
