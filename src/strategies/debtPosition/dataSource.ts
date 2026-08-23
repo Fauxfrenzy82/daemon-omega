@@ -96,7 +96,6 @@ export async function fetchLiquidatableUsers(limit: number = 100): Promise<strin
       log.debug(`No liquidatable users found from ${endpoint}`);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      // If it's an auth error, the user needs to set SUBGRAPH_API_KEY.
       if (lastError.message.includes('auth error') || lastError.message.includes('API key')) {
         log.warn('Subgraph requires an API key. Set SUBGRAPH_API_KEY in environment.');
       } else {
