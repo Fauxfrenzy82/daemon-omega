@@ -50,6 +50,25 @@ const AAVE_POOL_ABI = [
 ];
 const ERC20_ABI = ['function totalSupply() view returns (uint256)'];
 
+/**
+ * Interface for Aave V3 reserve data returned by getReserveData.
+ */
+interface ReserveData {
+  configuration: ethers.BigNumber;
+  liquidityIndex: ethers.BigNumber;
+  variableBorrowIndex: ethers.BigNumber;
+  currentLiquidityRate: ethers.BigNumber;
+  currentVariableBorrowRate: ethers.BigNumber;
+  currentStableBorrowRate: ethers.BigNumber;
+  lastUpdateTimestamp: number;
+  id: number;
+  aTokenAddress: string;
+  stableDebtTokenAddress: string;
+  variableDebtTokenAddress: string;
+  interestRateStrategyAddress: string;
+  accruedToTreasury: ethers.BigNumber;
+}
+
 // Worker class
 class Worker {
   private running = true;
@@ -271,10 +290,11 @@ async function selectBestFlashloanOption(
 
   for (const token of candidates) {
     try {
-      const reserveData = await withRetry(
+      const reserveData = (await withRetry(
         () => pool.getReserveData(token.address),
         { label: `queue.liquidity.${token.symbol}`, shouldRetry: isTransientError, retries: 2 }
-      );
+      )) as unknown as ReserveData;
+
       const aTokenAddress = reserveData.aTokenAddress;
       const variableDebtAddress = reserveData.variableDebtTokenAddress;
 
@@ -318,10 +338,11 @@ async function selectBestFlashloanOption(
     // fallback: pick the first candidate with any liquidity > 0
     for (const token of candidates) {
       try {
-        const reserveData = await withRetry(
+        const reserveData = (await withRetry(
           () => pool.getReserveData(token.address),
           { label: `queue.liquidity.${token.symbol}`, shouldRetry: isTransientError, retries: 1 }
-        );
+        )) as unknown as ReserveData;
+
         const aTokenAddress = reserveData.aTokenAddress;
         const variableDebtAddress = reserveData.variableDebtTokenAddress;
         const aToken = new ethers.Contract(aTokenAddress, ERC20_ABI, provider);
