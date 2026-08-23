@@ -6,10 +6,29 @@ import { TOKENS } from '../../config/tokens';
 const log = createLogger('classicIncentiveDataSource');
 
 /**
- * QuickSwap V3 Subgraph endpoint.
- * Source: https://api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3[reference:10]
+ * QuickSwap V3 Subgraph endpoints.
+ * 
+ * Correct subgraph ID: 5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU
+ * 
+ * Sources:
+ * - https://thegraph.com/explorer/subgraphs/5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU
+ * - https://github.com/sameepsi/quickswap-v3-subgraph
+ * 
+ * The decentralized network requires a valid API key from The Graph Studio.
+ * Set SUBGRAPH_API_KEY in your environment variables.
+ * 
+ * The hosted endpoint (api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3)
+ * is deprecated and no longer reliable. Use the decentralized gateway instead.
  */
-const QUICKSWAP_V3_SUBGRAPH = 'https://api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3';
+const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
+const QUICKSWAP_V3_ENDPOINTS = [
+  // Decentralized network with API key (preferred)
+  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU` : null,
+  // Studio hosted endpoint (alternative)
+  'https://api.studio.thegraph.com/query/23875/quickswap-v3/version/latest',
+  // Fallback hosted endpoint (deprecated)
+  'https://api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3',
+].filter(Boolean) as string[];
 
 export interface IncentiveProgram {
   id: string;
@@ -42,10 +61,31 @@ interface SubgraphResponse {
   errors?: Array<{ message: string }>;
 }
 
-/**
- * Fetch active incentive programs from QuickSwap V3 subgraph.
- * These are one-time incentive programs that can be captured atomically.
- */
+async function fetchFromEndpoint(endpoint: string, query: string): Promise<SubgraphResponse> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    return (await response.json()) as SubgraphResponse;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
 export async function fetchActiveIncentives(limit: number = 20): Promise<IncentiveProgram[]> {
   try {
     const currentTimestamp = Math.floor(Date.now() / 1000);
@@ -80,63 +120,74 @@ export async function fetchActiveIncentives(limit: number = 20): Promise<Incenti
       }
     }`;
 
-    const response = await withRetry(
-      () => fetch(QUICKSWAP_V3_SUBGRAPH, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query }),
-        signal: AbortSignal.timeout(10000),
-      }),
-      { label: 'classicIncentive.subgraph', shouldRetry: isTransientError, retries: 2 }
-    );
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      throw new Error(`Subgraph request failed: ${response.status}`);
+    for (const endpoint of QUICKSWAP_V3_ENDPOINTS) {
+      try {
+        log.debug(`Attempting to fetch from: ${endpoint}`);
+        const response = await withRetry(
+          () => fetchFromEndpoint(endpoint, query),
+          { label: `classicIncentive.subgraph.${endpoint}`, shouldRetry: isTransientError, retries: 2 }
+        );
+
+        if (response.errors) {
+          throw new Error(`Subgraph errors: ${JSON.stringify(response.errors)}`);
+        }
+
+        const incentives = response.data?.incentives || [];
+        if (incentives.length > 0) {
+          log.debug(`Fetched ${incentives.length} active incentives from ${endpoint}`);
+          return incentives.map((inc: any) => {
+            const rewardTokenAddress = inc.rewardToken.toLowerCase();
+            let rewardToken = TOKENS.QUICK;
+            let entryToken = TOKENS.USDC;
+
+            for (const [symbol, token] of Object.entries(TOKENS)) {
+              if (token.address.toLowerCase() === rewardTokenAddress) {
+                rewardToken = token;
+                break;
+              }
+            }
+
+            if (inc.pool?.token0) {
+              for (const [symbol, token] of Object.entries(TOKENS)) {
+                if (token.address.toLowerCase() === inc.pool.token0.id.toLowerCase()) {
+                  entryToken = token;
+                  break;
+                }
+              }
+            }
+
+            return {
+              id: inc.id,
+              rewardToken: rewardToken,
+              entryToken: entryToken,
+              totalReward: inc.totalReward,
+              remainingReward: inc.totalReward,
+              startTime: Number(inc.startTime),
+              endTime: Number(inc.endTime),
+              poolAddress: inc.pool?.id || '',
+            };
+          });
+        }
+        log.debug(`No incentives found from ${endpoint}`);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (lastError.message.includes('auth error') || lastError.message.includes('API key')) {
+          log.warn('QuickSwap subgraph requires an API key. Set SUBGRAPH_API_KEY in environment.');
+        } else {
+          log.warn(`QuickSwap subgraph endpoint failed: ${lastError.message}`);
+        }
+        continue;
+      }
     }
 
-    const data = (await response.json()) as SubgraphResponse;
-    if (data.errors) {
-      throw new Error(`Subgraph errors: ${JSON.stringify(data.errors)}`);
+    if (!SUBGRAPH_API_KEY) {
+      log.error('No SUBGRAPH_API_KEY set. Set it in environment to use Classic Incentive strategy.');
     }
 
-    const incentives = data.data?.incentives || [];
-    log.debug(`Fetched ${incentives.length} active incentives from QuickSwap subgraph`);
-
-    return incentives.map((inc: any) => {
-      // Try to map reward token to known token
-      const rewardTokenAddress = inc.rewardToken.toLowerCase();
-      let rewardToken = TOKENS.QUICK; // default
-      let entryToken = TOKENS.USDC; // default
-
-      // Try to find matching token
-      for (const [symbol, token] of Object.entries(TOKENS)) {
-        if (token.address.toLowerCase() === rewardTokenAddress) {
-          rewardToken = token;
-          break;
-        }
-      }
-
-      // Entry token is typically the pool's token0 or token1
-      if (inc.pool?.token0) {
-        for (const [symbol, token] of Object.entries(TOKENS)) {
-          if (token.address.toLowerCase() === inc.pool.token0.id.toLowerCase()) {
-            entryToken = token;
-            break;
-          }
-        }
-      }
-
-      return {
-        id: inc.id,
-        rewardToken: rewardToken,
-        entryToken: entryToken,
-        totalReward: inc.totalReward,
-        remainingReward: inc.totalReward, // Simplified; would need to compute remaining
-        startTime: Number(inc.startTime),
-        endTime: Number(inc.endTime),
-        poolAddress: inc.pool?.id || '',
-      };
-    });
+    log.error('All QuickSwap subgraph endpoints failed', { error: lastError?.message });
+    return [];
   } catch (err) {
     log.error('Failed to fetch active incentives from QuickSwap subgraph', {
       error: err instanceof Error ? err.message : String(err),
