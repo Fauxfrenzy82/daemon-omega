@@ -6,24 +6,22 @@ import { TOKENS } from '../../config/tokens';
 const log = createLogger('classicIncentiveDataSource');
 
 /**
- * QuickSwap V3 Subgraph endpoints.
+ * QuickSwap V3 Subgraph.
  * 
- * Correct subgraph ID: 5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU
- * 
- * Sources:
- * - https://thegraph.com/explorer/subgraphs/5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU
- * - https://github.com/sameepsi/quickswap-v3-subgraph
+ * Subgraph ID verified from The Graph Explorer:
+ * https://thegraph.com/explorer/subgraphs/5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU
  * 
  * The decentralized network requires a valid API key from The Graph Studio.
  * Set SUBGRAPH_API_KEY in your environment variables.
  * 
- * The hosted endpoint (api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3)
- * is deprecated and no longer reliable. Use the decentralized gateway instead.
+ * Endpoint format: https://gateway.thegraph.com/api/{API_KEY}/subgraphs/id/{SUBGRAPH_ID}
  */
 const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
+const QUICKSWAP_V3_SUBGRAPH_ID = '5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU';
+
 const QUICKSWAP_V3_ENDPOINTS = [
   // Decentralized network with API key (preferred)
-  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU` : null,
+  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/${QUICKSWAP_V3_SUBGRAPH_ID}` : null,
   // Studio hosted endpoint (alternative)
   'https://api.studio.thegraph.com/query/23875/quickswap-v3/version/latest',
   // Fallback hosted endpoint (deprecated)
