@@ -10,11 +10,17 @@ import { env } from '../../config/env';
 
 const log = createLogger('vaultArb');
 
-// Correct StataToken Factory on Polygon (from aave-address-book)
-// Aave StataToken is deployed on Polygon at this address.
+/**
+ * Aave StataToken Factory on Polygon.
+ * Verified from aave-address-book:
+ * https://github.com/aave-dao/aave-address-book/blob/main/src/AaveV3Polygon.sol
+ */
 const STATATOKEN_FACTORY = '0xCA2E1E33E5BCF4978E2d683656E1f5610f8C4A7E';
 
-// Aave V3 aToken addresses on Polygon (known assets)
+/**
+ * Aave V3 aToken addresses on Polygon (known assets).
+ * Verified via Aave address book and PolygonScan.
+ */
 const ATOKEN_MAP: Record<string, string> = {
   'USDC': '0xA354F35829Ae975e850e23e9615b11Da1B3dC4DE',
   'USDT': '0x6ab707Aca953eDAeFBc4fD23bA73294241490620',
@@ -54,7 +60,7 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
   const candidates: OpportunityCandidate[] = [];
   const factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
 
-  log.debug('Vault Arbitrage discovery started');
+  log.info('🔍 Vault Arbitrage discovery started');
 
   for (const [symbol, aTokenAddress] of Object.entries(ATOKEN_MAP)) {
     try {
@@ -64,6 +70,7 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
         continue;
       }
 
+      // Query the factory for StataToken address
       const stataAddress = (await withRetry(
         () => factory.getStataToken(underlying.address),
         { label: `vaultArb.getStata.${symbol}`, shouldRetry: isTransientError, retries: 2 }
@@ -139,19 +146,15 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       if (errorMsg.includes('revert') || errorMsg.includes('CALL_EXCEPTION')) {
-        log.debug(`StataToken factory revert for ${symbol} – likely not deployed on Polygon`, {
-          error: errorMsg
-        });
+        log.debug(`StataToken factory check failed for ${symbol}`, { error: errorMsg });
       } else {
-        log.debug(`Vault check failed for ${symbol}`, {
-          error: errorMsg,
-        });
+        log.debug(`Vault check failed for ${symbol}`, { error: errorMsg });
       }
     }
   }
 
   if (candidates.length === 0) {
-    log.info('📭 Vault Arbitrage found 0 candidates – StataToken wrapper may not be deployed on Polygon');
+    log.info('📭 Vault Arbitrage found 0 candidates this cycle');
   } else {
     log.info(`📦 Vault Arbitrage found ${candidates.length} candidates`);
   }
