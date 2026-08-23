@@ -14,9 +14,24 @@ const PRIMARY_PAIR_IDS = env.PRIMARY_PAIR_IDS.split(',').map(s => s.trim());
 const SECONDARY_PAIR_IDS = env.SECONDARY_PAIR_IDS.split(',').map(s => s.trim());
 const SECONDARY_MAX_POSITION = env.SECONDARY_MAX_POSITION_USD;
 
+// Limit pairs per cycle to avoid excessive time
+const MAX_PAIRS_PER_CYCLE = env.LP_MAX_PAIRS_PER_CYCLE ?? 5;
+
+// Simple round-robin pair rotation
+let pairOffset = 0;
+
 export async function discoverLPEntryExit(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
-  const pairs = enabledPairs();
+  const allPairs = enabledPairs();
+
+  // Rotate which pairs we scan this cycle to ensure fairness and reduce time
+  const pairsToScan = allPairs.slice(pairOffset, pairOffset + MAX_PAIRS_PER_CYCLE);
+  pairOffset = (pairOffset + MAX_PAIRS_PER_CYCLE) % allPairs.length;
+
+  if (pairsToScan.length === 0) {
+    log.debug('No pairs to scan this cycle');
+    return candidates;
+  }
 
   let currentBlockNumber = 0;
   try {
@@ -25,7 +40,7 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
     log.warn('Failed to fetch block number, using 0', { error: String(err) });
   }
 
-  for (const pair of pairs) {
+  for (const pair of pairsToScan) {
     const isPrimary = PRIMARY_PAIR_IDS.includes(pair.id);
     const maxSizeUsd = isPrimary
       ? env.MAX_POSITION_SIZE_USD
@@ -86,10 +101,8 @@ export async function discoverLPEntryExit(nativePriceUsd: number): Promise<Oppor
       sourceTimestamp: Date.now(),
     };
 
-    // STREAM: push immediately to execution queue
+    // STREAM: push immediately
     pushCandidate(candidate);
-
-    // Also keep for summary
     candidates.push(candidate);
     log.info(`✅ Found LP candidate for ${pair.id}`, {
       sizeUsd: result.optimalSizeUsd.toFixed(2),
