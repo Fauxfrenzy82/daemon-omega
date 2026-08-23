@@ -20,16 +20,7 @@ export interface ActionPlan {
 
 /**
  * Valid flashloan protocols per Enso documentation:
- * - morpho-markets-v1: 0% fee
- * - aave-v3: Dynamic (pool-specific)
- * - balancer-v3: Pool-specific fee
- * - uniswap-v3: Pool-specific fee (0.05%, 0.3%, or 1%)
- * - dolomite: 0% fee
- * - bend: 0% fee (Morpho fork)
- * - hyperlend: Dynamic (Aave V3 fork)
- * - kodiak: Pool-specific fee (Uniswap V3 fork)
- *
- * Source: https://docs.enso.build/pages/build/reference/flashloans#supported-protocols
+ * https://docs.enso.build/pages/build/reference/flashloans
  */
 export type FlashloanProtocol = 
   | 'aave-v3'
@@ -41,6 +32,15 @@ export type FlashloanProtocol =
   | 'hyperlend'
   | 'kodiak';
 
+/**
+ * ActionStep defines all possible actions in an Enso Bundle.
+ * - flashloan: Borrow tokens without collateral (uses supported lending protocols)
+ * - swap: Token swap via Enso routing (protocol: 'enso')
+ * - deposit: Deposit into lending protocol (Aave V3, StataToken)
+ * - withdraw: Withdraw from lending protocol (Aave V3, StataToken)
+ * - harvest: Claim rewards from a yield position (protocol: 'enso')
+ * - call: Raw contract call (protocol: 'custom')
+ */
 export type ActionStep =
   | { type: 'flashloan'; protocol: FlashloanProtocol; token: string; amount: string; callback: ActionStep[] }
   | { type: 'swap'; protocol: 'enso'; tokenIn: string; tokenOut: string; amountIn: string | { useOutputOfCallAt: number }; slippage: string; primaryAddress?: string; poolFee?: number }
