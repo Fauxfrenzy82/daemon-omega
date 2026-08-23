@@ -20,6 +20,9 @@ const log = createLogger('vaultArb');
  * 
  * Address: 0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa
  * Method: getStaticAToken(address underlying) returns address
+ * 
+ * Note: This factory is only used as a fallback for assets not in the hardcoded map.
+ * The hardcoded map is preferred because it avoids an unnecessary RPC call.
  */
 const STATATOKEN_FACTORY = '0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa';
 
@@ -37,8 +40,18 @@ const STATATOKEN_ABI = [
   'function totalSupply() external view returns (uint256)',
 ];
 
-// Token address matching (underlying address → StataToken address)
-// Sourced from Aave address book.
+/**
+ * Hardcoded map of underlying token address → StataToken address.
+ * 
+ * This map is sourced from the official Aave address book.
+ * It is checked FIRST, before any factory call.
+ * 
+ * If a token is in this map, we use the hardcoded address directly.
+ * Only tokens NOT in this map will trigger a factory call.
+ * 
+ * This avoids unnecessary RPC calls and eliminates the revert risk
+ * for known assets.
+ */
 const STATIC_A_TOKEN_MAP: Record<string, string> = {
   // WMATIC -> WPOL
   '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270': '0x98254592408E389D1dd2dBa318656C2C5c305b4E',
@@ -76,7 +89,10 @@ function getTokenPriceUsd(token: TokenInfo): number {
 
 export async function discoverVaultArb(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
-  const factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
+  
+  // Only instantiate the factory contract if we actually need it.
+  // The factory is not used for any token in the hardcoded map.
+  let factory: ethers.Contract | null = null;
 
   log.info('🔍 Vault Arbitrage discovery started');
 
@@ -97,12 +113,16 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
       const symbol = token.symbol;
       const underlyingAddress = token.address.toLowerCase();
 
-      // Try hardcoded map first
+      // 1. FIRST: Check the hardcoded map.
       let stataAddress = STATIC_A_TOKEN_MAP[underlyingAddress];
       let source = 'hardcoded';
 
-      // If not in map, try the factory
+      // 2. ONLY if NOT in map, fall back to the factory.
       if (!stataAddress) {
+        // Lazily instantiate the factory only if needed.
+        if (!factory) {
+          factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
+        }
         try {
           stataAddress = (await withRetry(
             () => factory.getStaticAToken(token.address),
