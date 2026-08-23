@@ -5,26 +5,26 @@ const log = createLogger('debtPositionDataSource');
 
 /**
  * Aave V3 Polygon Subgraph.
- * 
- * Subgraph ID verified from The Graph Studio:
- * https://thegraph.com/studio/
- * 
- * Correct ID: 6yuf1C49aWEscgkSn9D1Dek6e1B8CkS2j3nJYJ73sVnAT
- * 
+ *
+ * Subgraph ID verified from The Graph Explorer:
+ * 6yuf1C49aWEscgk5n9D1DekeG1BCk5Z9imJYJT3sVmAT
+ *
  * The decentralized network requires a valid API key from The Graph Studio.
  * Set SUBGRAPH_API_KEY in your environment variables.
- * 
+ *
  * Endpoint format: https://gateway.thegraph.com/api/{API_KEY}/subgraphs/id/{SUBGRAPH_ID}
  */
 const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
-const AAVE_V3_POLYGON_SUBGRAPH_ID = '6yuf1C49aWEscgkSn9D1Dek6e1B8CkS2j3nJYJ73sVnAT';
+const AAVE_V3_POLYGON_SUBGRAPH_ID = '6yuf1C49aWEscgk5n9D1DekeG1BCk5Z9imJYJT3sVmAT';
 
 const AAVE_SUBGRAPH_ENDPOINTS = [
   // Decentralized network with API key (preferred)
   SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/${AAVE_V3_POLYGON_SUBGRAPH_ID}` : null,
+  // Clean URL with Authorization header (alternative)
+  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/subgraphs/id/${AAVE_V3_POLYGON_SUBGRAPH_ID}` : null,
   // Studio hosted endpoint (alternative)
   'https://api.studio.thegraph.com/query/23875/aave-v3-polygon/version/latest',
-  // Fallback hosted endpoint (deprecated, may still work)
+  // Fallback hosted endpoint (deprecated)
   'https://api.thegraph.com/subgraphs/name/aave/protocol-v3-polygon',
 ].filter(Boolean) as string[];
 
@@ -54,7 +54,13 @@ async function fetchFromEndpoint(endpoint: string, query: string): Promise<Subgr
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        // If using the clean URL (Option B), pass API key in Authorization header
+        ...(endpoint.includes('gateway.thegraph.com/api/subgraphs/id/') && SUBGRAPH_API_KEY
+          ? { 'Authorization': `Bearer ${SUBGRAPH_API_KEY}` }
+          : {}),
+      },
       body: JSON.stringify({ query }),
       signal: controller.signal,
     });
