@@ -99,9 +99,12 @@ export const env = {
   SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100),
   MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 10000),
 
-  // Optimizer
-  OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 8),
+  // Optimizer – reduced from 8 to 4 to avoid 429 errors and speed up scan
+  OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
 
   // Worker pool
   WORKER_POOL_SIZE: optionalNumber('WORKER_POOL_SIZE', 3),
+
+  // LP Entry/Exit – max pairs per cycle to prevent timeouts
+  LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
 };
