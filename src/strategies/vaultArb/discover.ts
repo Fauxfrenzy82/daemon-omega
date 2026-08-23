@@ -21,7 +21,7 @@ const log = createLogger('vaultArb');
  * Address: 0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa
  * Method: getStaticAToken(address underlying) returns address
  * 
- * Note: This factory is only used as a fallback for assets not in the hardcoded map.
+ * Note: This factory is ONLY used as a fallback for assets NOT in the hardcoded map.
  * The hardcoded map is preferred because it avoids an unnecessary RPC call.
  */
 const STATATOKEN_FACTORY = '0x1504F1d7b6892600ae0d394F9042e696dd9F87Fa';
@@ -51,26 +51,28 @@ const STATATOKEN_ABI = [
  * 
  * This avoids unnecessary RPC calls and eliminates the revert risk
  * for known assets.
+ * 
+ * The keys are the **lowercase** addresses of the underlying tokens.
  */
 const STATIC_A_TOKEN_MAP: Record<string, string> = {
   // WMATIC -> WPOL
-  '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270': '0x98254592408E389D1dd2dBa318656C2C5c305b4E',
+  '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270': '0x98254592408E389D1dd2dBa318656C2C5c305b4E',
   // USDT -> USDT0
-  '0xc2132D05D31c914a87C6611C10748AEb04B58e8F': '0x87A1fdc4C726c459f597282be639a045062c0E46',
+  '0xc2132d05d31c914a87c6611c10748aeb04b58e8f': '0x87A1fdc4C726c459f597282be639a045062c0E46',
   // USDC.e (bridged) -> USDC (bridged) in Aave
-  '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174': '0x1017F4a86Fc3A3c824346d0b8C5e96A5029bDAf9',
+  '0x2791bca1f2de4661ed88a30c99a7a9449aa84174': '0x1017F4a86Fc3A3c824346d0b8C5e96A5029bDAf9',
   // USDC (native) -> USDCn in Aave
-  '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359': '0x2dCa80061632f3F87c9cA28364d1d0c30cD79a19',
+  '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359': '0x2dCa80061632f3F87c9cA28364d1d0c30cD79a19',
   // DAI
-  '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063': '0x83c59636e602787A6EEbBdA2915217B416193FcB',
+  '0x8f3cf7ad23cd3cadbd9735aff958023239c6a063': '0x83c59636e602787A6EEbBdA2915217B416193FcB',
   // WETH
-  '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619': '0xb3D5Af0A52a35692D3FcbE37669b3B8C31dddE7D',
+  '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619': '0xb3D5Af0A52a35692D3FcbE37669b3B8C31dddE7D',
   // WBTC
-  '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6': '0xbC0f50CCB8514Aa7dFEB297521c4BdEBc9C7d22d',
+  '0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6': '0xbC0f50CCB8514Aa7dFEB297521c4BdEBc9C7d22d',
   // AAVE
-  '0xD6DF932A45C0f255f85145f286eA0b292B21C90B': '0xCA2E1E33E5BCF4978E2d683656E1f5610f8C4A7E',
+  '0xd6df932a45c0f255f85145f286ea0b292b21c90b': '0xCA2E1E33E5BCF4978E2d683656E1f5610f8C4A7E',
   // GHST
-  '0x385Eeac5cB85A38A9a07A70c73e0a3271CfB54A7': '0x123319636A6a9c85D9959399304F4cB23F64327e',
+  '0x385eeac5cb85a38a9a07a70c73e0a3271cfb54a7': '0x123319636A6a9c85D9959399304F4cB23F64327e',
 };
 
 function getTokenPriceUsd(token: TokenInfo): number {
@@ -116,6 +118,8 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
 
       // 2. ONLY if NOT in map, fall back to the factory.
       if (!stataAddress) {
+        // Log that we're falling back to the factory
+        log.debug(`Token ${symbol} not in hardcoded map, calling factory`);
         try {
           stataAddress = (await withRetry(
             () => factory.getStaticAToken(token.address),
