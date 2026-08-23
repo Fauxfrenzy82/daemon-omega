@@ -6,21 +6,19 @@ const log = createLogger('debtPositionDataSource');
 /**
  * Aave V3 Polygon Subgraph endpoints.
  * 
- * 1. The Graph hosted service (may require API key)[reference:7]
- * 2. Decentralized network using subgraph ID[reference:8]
- * 3. Alternative hosted endpoint
- * 
- * The decentralized subgraph ID for Aave V3 Polygon is:
- * Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211[reference:9]
+ * The Graph's hosted service has been sunset, so the free endpoint is unreliable.
+ * To use the decentralized network, you need an API key from The Graph Studio.
+ * Set SUBGRAPH_API_KEY in your environment.
  */
+const SUBGRAPH_API_KEY = process.env.SUBGRAPH_API_KEY || '';
 const AAVE_SUBGRAPH_ENDPOINTS = [
-  // Decentralized network via The Graph's gateway (requires API key for some)
-  'https://gateway.thegraph.com/api/aave/subgraphs/id/Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211',
-  // Hosted service (may work without API key)
+  // Decentralized network with API key
+  SUBGRAPH_API_KEY ? `https://gateway.thegraph.com/api/${SUBGRAPH_API_KEY}/subgraphs/id/Co2URyXjnxaw8WqxKyVHdirq9Ahhmsvcts4dMedAq211` : null,
+  // Hosted service (deprecated, may fail)
   'https://api.thegraph.com/subgraphs/name/aave/protocol-v3-polygon',
   // Alternative hosted endpoint
   'https://api.studio.thegraph.com/query/23875/aave-v3-polygon/version/latest',
-];
+].filter(Boolean) as string[];
 
 export interface LiquidatableUser {
   id: string;
@@ -91,55 +89,25 @@ export async function fetchLiquidatableUsers(limit: number = 100): Promise<strin
       }
 
       const users = data.data?.users || [];
-      log.debug(`Fetched ${users.length} liquidatable users from ${endpoint}`);
       if (users.length > 0) {
+        log.debug(`Fetched ${users.length} liquidatable users from ${endpoint}`);
         return users.map(u => u.id);
       }
+      log.debug(`No liquidatable users found from ${endpoint}`);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      log.warn(`Subgraph endpoint failed: ${lastError.message}`);
+      // If it's an auth error, the user needs to set SUBGRAPH_API_KEY.
+      if (lastError.message.includes('auth error') || lastError.message.includes('API key')) {
+        log.warn('Subgraph requires an API key. Set SUBGRAPH_API_KEY in environment.');
+      } else {
+        log.warn(`Subgraph endpoint failed: ${lastError.message}`);
+      }
       continue;
     }
   }
 
-  log.error('All subgraph endpoints failed', { error: lastError?.message });
-  return [];
-}
-
-export async function fetchLiquidatableUsersDetailed(limit: number = 100): Promise<LiquidatableUser[]> {
-  const query = `{
-    users(where: { healthFactor_lt: "1" }, first: ${limit}) {
-      id
-      healthFactor
-      totalCollateralUSD
-      totalDebtUSD
-    }
-  }`;
-
-  let lastError: Error | null = null;
-
-  for (const endpoint of AAVE_SUBGRAPH_ENDPOINTS) {
-    try {
-      log.debug(`Attempting to fetch detailed from: ${endpoint}`);
-      const data = await withRetry(
-        () => fetchFromEndpoint(endpoint, query),
-        { label: `debtPosition.subgraph.detailed.${endpoint}`, shouldRetry: isTransientError, retries: 2 }
-      );
-
-      if (data.errors) {
-        throw new Error(`Subgraph errors: ${JSON.stringify(data.errors)}`);
-      }
-
-      const users = data.data?.users || [];
-      log.debug(`Fetched ${users.length} detailed liquidatable users from ${endpoint}`);
-      if (users.length > 0) {
-        return users;
-      }
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      log.warn(`Subgraph endpoint failed: ${lastError.message}`);
-      continue;
-    }
+  if (!SUBGRAPH_API_KEY) {
+    log.error('No SUBGRAPH_API_KEY set. The Graph decentralized network requires an API key. Set it in environment to use Debt Position strategy.');
   }
 
   log.error('All subgraph endpoints failed', { error: lastError?.message });
