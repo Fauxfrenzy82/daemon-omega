@@ -89,10 +89,7 @@ function getTokenPriceUsd(token: TokenInfo): number {
 
 export async function discoverVaultArb(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
-  
-  // Only instantiate the factory contract if we actually need it.
-  // The factory is not used for any token in the hardcoded map.
-  let factory: ethers.Contract | null = null;
+  const factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
 
   log.info('🔍 Vault Arbitrage discovery started');
 
@@ -119,10 +116,6 @@ export async function discoverVaultArb(nativePriceUsd: number): Promise<Opportun
 
       // 2. ONLY if NOT in map, fall back to the factory.
       if (!stataAddress) {
-        // Lazily instantiate the factory only if needed.
-        if (!factory) {
-          factory = new ethers.Contract(STATATOKEN_FACTORY, FACTORY_ABI, provider);
-        }
         try {
           stataAddress = (await withRetry(
             () => factory.getStaticAToken(token.address),
