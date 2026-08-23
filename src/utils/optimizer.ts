@@ -66,9 +66,11 @@ export async function findOptimalTradeSize(
     return { optimalSizeUsd: 0, bestNetProfitUsd: 0, estimatedCostUsd: 0, buyQuote: null, sellQuote: null };
   }
 
-  const sampleCount = Math.min(10, Math.max(5, env.OPTIMIZER_SAMPLES ?? 8));
+  // Reduced sample count: 4 samples max (high-to-low)
+  const sampleCount = Math.min(4, Math.max(3, env.OPTIMIZER_SAMPLES ?? 4));
   const step = (maxSizeUsd - minSizeUsd) / (sampleCount - 1);
   const sampleSizes: number[] = [];
+  // Sample from high to low
   for (let i = sampleCount - 1; i >= 0; i--) {
     sampleSizes.push(minSizeUsd + i * step);
   }
