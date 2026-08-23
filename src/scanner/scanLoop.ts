@@ -10,7 +10,6 @@ import { discoverVaultArb } from '../strategies/vaultArb/discover';
 import { discoverDebtPosition } from '../strategies/debtPosition/discover';
 import { discoverHarvestShort } from '../strategies/harvestShort/discover';
 import { discoverClassicIncentive } from '../strategies/classicIncentive/discover';
-import { pushCandidate } from '../execution/queue';
 
 const log = createLogger('scanLoop');
 
@@ -18,36 +17,36 @@ let loopTimer: NodeJS.Timeout | null = null;
 let isScanning = false;
 let cachedNativePrice = 0.5;
 
-// List of strategy discover functions with enabled flags
+// All strategies enabled by default (fallback to true)
 const discoverers = [
-  {
-    name: 'LP Entry/Exit',
-    fn: discoverLPEntryExit,
+  { 
+    name: 'LP Entry/Exit', 
+    fn: discoverLPEntryExit, 
     enabled: env.STRATEGY_LP_ENABLED ?? true,
     description: 'DEX round‑trip arbitrage'
   },
-  {
-    name: 'Vault Arbitrage',
-    fn: discoverVaultArb,
+  { 
+    name: 'Vault Arbitrage', 
+    fn: discoverVaultArb, 
     enabled: env.STRATEGY_VAULT_ENABLED ?? true,
     description: 'ERC‑4626 StataToken wrapper arbitrage'
   },
-  {
-    name: 'Debt Position',
-    fn: discoverDebtPosition,
-    enabled: env.STRATEGY_DEBT_ENABLED ?? false,
+  { 
+    name: 'Debt Position', 
+    fn: discoverDebtPosition, 
+    enabled: env.STRATEGY_DEBT_ENABLED ?? true,  // <-- CHANGED to true
     description: 'Aave V3 liquidation arbitrage'
   },
-  {
-    name: 'Harvest + Spot Sell',
-    fn: discoverHarvestShort,
+  { 
+    name: 'Harvest + Spot Sell', 
+    fn: discoverHarvestShort, 
     enabled: env.STRATEGY_HARVEST_ENABLED ?? true,
     description: 'Claim rewards and sell immediately'
   },
-  {
-    name: 'Classic Incentive',
-    fn: discoverClassicIncentive,
-    enabled: env.STRATEGY_CLASSIC_ENABLED ?? false,
+  { 
+    name: 'Classic Incentive', 
+    fn: discoverClassicIncentive, 
+    enabled: env.STRATEGY_CLASSIC_ENABLED ?? true,  // <-- CHANGED to true
     description: 'Instant‑claim incentive programs'
   },
 ];
@@ -86,18 +85,23 @@ async function runScanCycle(): Promise<void> {
     const active = discoverers.filter(d => d.enabled);
     const strategyResults: Record<string, { candidates: number, status: string, note?: string }> = {};
 
+    // Log which strategies are active
+    log.info(`📋 Active strategies: ${active.map(d => d.name).join(', ')}`);
+
     for (const discoverer of active) {
       let candidates: OpportunityCandidate[] = [];
       let status = 'success';
       let note = '';
 
       try {
+        log.info(`🔍 Running strategy: ${discoverer.name} (${discoverer.description})`);
         candidates = await discoverer.fn(cachedNativePrice);
         // Push each candidate to queue immediately
         for (const candidate of candidates) {
-          pushCandidate(candidate);
+          // The discover functions already call pushCandidate, so we don't need to push here
+          // but we keep for summary
         }
-        log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates, pushed to queue`);
+        log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates`);
       } catch (err) {
         status = 'error';
         note = err instanceof Error ? err.message : String(err);
