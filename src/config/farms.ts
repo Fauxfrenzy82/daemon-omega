@@ -12,11 +12,14 @@ export interface RewardPosition {
 /**
  * Real farm positions on Polygon.
  * 
- * QuickSwap Eternal Farming: 0x8a26436e41d0b5fc4c6ed36c1976fafbe173444e[reference:10][reference:11]
- * Farming Center: 0x7F281A8cdF66eF5e9db8434Ec6D97acc1bc01E78[reference:12]
+ * QuickSwap Eternal Farming: 0x8a26436e41d0b5fc4c6ed36c1976fafbe173444e
+ * Farming Center: 0x7F281A8cdF66eF5e9db8434Ec6D97acc1bc01E78
+ * 
+ * The QUICK token address used is: 0xB5C064F955D8e7F38fE0460C556a72987494eE17
+ * This is the migrated QUICK token (2023 migration with 1:1000 redenomination).
  * 
  * To discover more farms, query the QuickSwap V3 subgraph:
- * https://api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3[reference:13]
+ * https://api.thegraph.com/subgraphs/name/sameepsi/quickswap-v3
  */
 export const REWARD_POSITIONS: RewardPosition[] = [
   {
