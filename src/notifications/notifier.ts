@@ -3,6 +3,7 @@ import { env } from '../config/env';
 import { createLogger } from '../utils/logger';
 import { withRetry, isTransientError } from '../utils/retry';
 import { PeriodSummary } from '../reporting/summary';
+import { RateLimiter } from '../utils/rateLimiter';
 
 const log = createLogger('notifier');
 
@@ -18,6 +19,9 @@ const LEVEL_COLOR: Record<AlertLevel, number> = {
 export interface AlertFields {
   [key: string]: string | number | boolean | undefined;
 }
+
+// Rate limiter: one Discord message every 5 seconds (burst of 1)
+const discordLimiter = new RateLimiter(1, 5000, 'discord');
 
 function sanitizeFields(fields: AlertFields): AlertFields {
   const sanitized: AlertFields = {};
@@ -64,6 +68,9 @@ export async function sendAlert(
   if (!env.DISCORD_WEBHOOK_URL) {
     return;
   }
+
+  // Acquire rate limiter token – one message per 5 seconds
+  await discordLimiter.acquire();
 
   try {
     const embed = {
