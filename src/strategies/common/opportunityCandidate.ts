@@ -33,8 +33,8 @@ export type ActionStep =
       type: 'flashloan'; 
       protocol: FlashloanProtocol; 
       token: string; 
-      tokenIn?: string;       // Will be converted to array in ensoBuilder
-      amountIn?: string;      // Will be converted to array in ensoBuilder (must match tokenIn length)
+      tokenIn?: string;       // ✅ Will be converted to array in ensoBuilder
+      amountIn?: string;      // ✅ Will be converted to array in ensoBuilder
       amount: string; 
       callback: ActionStep[] 
     }
