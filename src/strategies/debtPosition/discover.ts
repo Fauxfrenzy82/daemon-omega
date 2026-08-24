@@ -31,6 +31,9 @@ interface AccountData {
   healthFactor: ethers.BigNumber;
 }
 
+/**
+ * Encode getUserAccountData call data for Enso custom action.
+ */
 function encodeGetUserAccountData(user: string): string {
   const iface = new ethers.utils.Interface(POOL_ABI);
   return iface.encodeFunctionData('getUserAccountData', [user]);
@@ -38,7 +41,8 @@ function encodeGetUserAccountData(user: string): string {
 
 /**
  * Fetch potential borrowers from recent Borrow events on Aave V3 Pool.
- * Scans the last N blocks for Borrow events (limited to free tier: 10 blocks).
+ * ✅ FIX: toBlock is set to currentBlock, not 'latest'.
+ * This ensures Alchemy's 10-block limit is actually respected.
  */
 async function fetchRecentBorrowers(blocksBack: number = 10): Promise<string[]> {
   const borrowers: string[] = [];
@@ -48,7 +52,7 @@ async function fetchRecentBorrowers(blocksBack: number = 10): Promise<string[]> 
   const filter = {
     address: AAVE_POOL,
     fromBlock,
-    toBlock: 'latest',
+    toBlock: currentBlock, // ✅ FIX: Use currentBlock, not 'latest'
   };
 
   const borrowEventSignature = 'Borrow(address,address,address,uint256,uint256,uint256,uint16)';
@@ -88,7 +92,7 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
 
   log.info('🔍 Debt Position discovery started');
 
-  // Fetch borrowers from recent Borrow events (10 blocks = ~20 seconds on Polygon)
+  // Fetch borrowers from recent Borrow events (10 blocks = actual 10 blocks now)
   const borrowers = await fetchRecentBorrowers(10);
 
   if (borrowers.length === 0) {
