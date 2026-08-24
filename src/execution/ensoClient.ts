@@ -12,19 +12,21 @@ export interface EnsoBundleParams {
   fromAddress: string;
   chainId: number;
   routingStrategy?: 'router' | 'routeMulti';
+  receiver?: string;
+  spender?: string;
 }
 
 export interface EnsoAction {
   protocol: string;
   action: string;
   args: Record<string, any>;
-  tokenIn?: string;
-  amountIn?: string;
-  tokenOut?: string;
 }
 
 /**
  * Direct HTTP client for Enso API – bypasses the SDK.
+ * Uses the correct endpoints from Enso documentation:
+ * - POST /v1/shortcuts/route  - Route API (optimal path between tokens)
+ * - POST /v1/shortcuts/bundle - Bundle API (custom multi-action workflows)
  */
 export class EnsoClient {
   private apiKey: string;
@@ -44,19 +46,17 @@ export class EnsoClient {
       firstAction: actions?.[0] ? {
         protocol: actions[0].protocol,
         action: actions[0].action,
-        hasTokenIn: !!actions[0].tokenIn,
-        tokenInValue: actions[0].tokenIn,
       } : null,
     });
 
     try {
       const response = await axios.post(
-        `${BASE_URL}/api/v1/bundle`,
+        `${BASE_URL}/v1/shortcuts/bundle`,  // ✅ Fixed: correct endpoint
         payload,
         {
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': this.apiKey,
+            'Authorization': `Bearer ${this.apiKey}`,
           },
           timeout: 30000,
         }
@@ -90,12 +90,12 @@ export class EnsoClient {
 
     try {
       const response = await axios.post(
-        `${BASE_URL}/api/v1/route`,
+        `${BASE_URL}/v1/shortcuts/route`,  // ✅ Fixed: correct endpoint
         payload,
         {
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': this.apiKey,
+            'Authorization': `Bearer ${this.apiKey}`,
           },
           timeout: 15000,
         }
