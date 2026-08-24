@@ -47,15 +47,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // 🔥 FIX: Build action with args nested
+      // 🔥 FIX: tokenIn and amountIn go at the ROOT level of the action
       const action: any = {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
 
-      // 🔥 CRITICAL FIX: tokenIn and amountIn MUST be at the ROOT level
-      // NOT inside args. Enso's API validates these fields at the root.
       if (step.tokenIn) {
         action.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
         if (step.amountIn === undefined) {
@@ -150,7 +148,7 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
 
   const cacheKey = `${JSON.stringify(actions)}`;
   
-  // ⚠️ FORCE CLEAR CACHE to ensure old bundles aren't reused
+  // Force clear cache to ensure old malformed bundles aren't reused
   bundleCache.delete(cacheKey);
   
   const cached = bundleCache.get(cacheKey);
