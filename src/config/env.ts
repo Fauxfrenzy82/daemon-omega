@@ -85,9 +85,7 @@ export const env = {
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
 
-  // ============================================================
-  // STRATEGY TOGGLES – ALL ENABLED
-  // ============================================================
+  // Strategy toggles
   STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', true),
   STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', true),
   STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', true),
@@ -102,7 +100,7 @@ export const env = {
   SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100),
   MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 10000),
 
-  // Optimizer – reduced to avoid 429 errors
+  // Optimizer
   OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
 
   // Worker pool
