@@ -5,7 +5,8 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('ensoClient');
 
-const BASE_URL = env.ENSO_BASE_URL || 'https://api.enso.finance';
+// ✅ FIX: Base URL includes /api
+const BASE_URL = env.ENSO_BASE_URL || 'https://api.enso.build/api';
 const API_KEY = env.ENSO_API_KEY;
 
 export interface EnsoBundleParams {
@@ -22,12 +23,6 @@ export interface EnsoAction {
   args: Record<string, any>;
 }
 
-/**
- * Direct HTTP client for Enso API – bypasses the SDK.
- * Uses the correct endpoints from Enso documentation:
- * - POST /v1/shortcuts/route  - Route API (optimal path between tokens)
- * - POST /v1/shortcuts/bundle - Bundle API (custom multi-action workflows)
- */
 export class EnsoClient {
   private apiKey: string;
 
@@ -36,10 +31,7 @@ export class EnsoClient {
   }
 
   async getBundleData(params: EnsoBundleParams, actions: EnsoAction[]): Promise<any> {
-    const payload = {
-      ...params,
-      actions,
-    };
+    const payload = { ...params, actions };
 
     log.info('🌐 ENSO BUNDLE REQUEST (DIRECT)', {
       actionCount: actions?.length,
@@ -50,8 +42,9 @@ export class EnsoClient {
     });
 
     try {
+      // ✅ FIX: Correct endpoint: /v1/shortcuts/bundle (base URL already includes /api)
       const response = await axios.post(
-        `${BASE_URL}/v1/shortcuts/bundle`,  // ✅ Fixed: correct endpoint
+        `${BASE_URL}/v1/shortcuts/bundle`,
         payload,
         {
           headers: {
@@ -89,8 +82,9 @@ export class EnsoClient {
     });
 
     try {
+      // ✅ FIX: Correct endpoint: /v1/shortcuts/route (base URL already includes /api)
       const response = await axios.post(
-        `${BASE_URL}/v1/shortcuts/route`,  // ✅ Fixed: correct endpoint
+        `${BASE_URL}/v1/shortcuts/route`,
         payload,
         {
           headers: {
