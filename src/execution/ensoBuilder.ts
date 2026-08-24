@@ -28,13 +28,6 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
-/**
- * Convert an ActionStep to an Enso-compatible action object.
- *
- * CRITICAL FIX: For flashloan actions, tokenIn and amountIn must be
- * at the ROOT level of the action object, NOT nested inside args.
- * Enso's API validates these fields at the root level.
- */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
@@ -54,14 +47,15 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // 🔥 FIX: Build the action with args nested
+      // 🔥 FIX: Build action with args nested
       const action: any = {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
 
-      // 🔥 CRITICAL FIX: tokenIn and amountIn go at the ROOT level
+      // 🔥 CRITICAL FIX: tokenIn and amountIn MUST be at the ROOT level
+      // NOT inside args. Enso's API validates these fields at the root.
       if (step.tokenIn) {
         action.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
         if (step.amountIn === undefined) {
@@ -155,6 +149,10 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   };
 
   const cacheKey = `${JSON.stringify(actions)}`;
+  
+  // ⚠️ FORCE CLEAR CACHE to ensure old bundles aren't reused
+  bundleCache.delete(cacheKey);
+  
   const cached = bundleCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     log.info(`✅ Using cached bundle for plan`);
