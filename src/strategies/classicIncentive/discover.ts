@@ -1,4 +1,5 @@
 import { ethers } from 'ethers';
+import { TokenInfo } from '../../config/tokens';
 import { OpportunityCandidate } from '../common/opportunityCandidate';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
