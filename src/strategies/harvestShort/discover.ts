@@ -7,6 +7,7 @@ import { REWARD_POSITIONS } from '../../config/farms';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { pushCandidate } from '../../execution/queue';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
+import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('harvestShort');
 
@@ -20,6 +21,8 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
     return [];
   }
 
+  const enso = getEnsoClient();
+
   for (const position of REWARD_POSITIONS) {
     try {
       // For v1, we assume rewards are claimable.
@@ -27,7 +30,7 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
       // Here we use a fixed amount for demo (1 token).
       const rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
 
-      // Use Enso route instead of direct DEX quoter to avoid revert issues
+      // Use Enso route instead of direct DEX quoter
       const sellQuote = await getEnsoRouteQuote(
         position.rewardToken,
         position.entryToken,
@@ -35,7 +38,7 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
       );
 
       if (!sellQuote) {
-        log.debug(`No liquidity for ${position.rewardToken.symbol} -> ${position.entryToken.symbol}`);
+        log.debug(`No Enso route for ${position.rewardToken.symbol} -> ${position.entryToken.symbol}`);
         continue;
       }
 
@@ -65,7 +68,7 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
           sourceTimestamp: Date.now(),
         };
 
-        // STREAM
+        // STREAM: push immediately
         pushCandidate(candidate);
         candidates.push(candidate);
         log.info(`Found harvest opportunity for ${position.id}`, {
