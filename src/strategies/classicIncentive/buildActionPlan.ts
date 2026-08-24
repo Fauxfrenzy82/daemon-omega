@@ -31,7 +31,6 @@ async function buildAaveIncentivePlan(
   const flashLoanToken = options?.flashLoanToken || asset;
   const flashLoanAmount = borrowAmount;
 
-  // Step 1: Deposit flashloan as collateral
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -40,7 +39,6 @@ async function buildAaveIncentivePlan(
     primaryAddress: AAVE_POOL,
   };
 
-  // Step 2: Borrow asset (to earn incentives)
   const borrowStep: ActionStep = {
     type: 'call',
     protocol: 'custom',
@@ -49,7 +47,6 @@ async function buildAaveIncentivePlan(
     useOutput: true,
   };
 
-  // Step 3: Swap borrowed asset back to flashloan token
   const swapStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -59,13 +56,13 @@ async function buildAaveIncentivePlan(
     slippage: '100',
   };
 
-  // Step 4: Flashloan with proper params (tokenIn and amountIn will be converted to arrays in ensoBuilder)
+  // ✅ FIX: Pass tokenIn and amountIn (ensoBuilder will convert to arrays)
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address,   // Will be wrapped in array by ensoBuilder
-    amountIn: flashLoanAmount,          // Will be wrapped in array by ensoBuilder (matches tokenIn)
+    tokenIn: flashLoanToken.address,   // ✅ Will be wrapped in array
+    amountIn: flashLoanAmount,          // ✅ Will be wrapped in array
     amount: flashLoanAmount,
     callback: [depositStep, borrowStep, swapStep],
   };
@@ -89,7 +86,6 @@ async function buildQuickSwapV3Plan(
     token0.decimals
   ).toString();
 
-  // Step 1: Swap to get token1
   const swapStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -99,7 +95,7 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // Step 2: Flashloan with proper params
+  // ✅ FIX: Pass tokenIn and amountIn
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
