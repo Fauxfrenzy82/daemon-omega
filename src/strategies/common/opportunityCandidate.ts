@@ -28,15 +28,28 @@ export type FlashloanProtocol =
   | 'hyperlend'
   | 'kodiak';
 
+/**
+ * ✅ CORRECTED ActionStep model for flashloans.
+ * 
+ * The key distinction:
+ * - token/amount: the flash-borrowed asset (flashloanToken/flashloanAmount)
+ * - tokenIn/amountIn: USER-SUPPLIED input/collateral (optional, semantically different)
+ * - tokenOut: expected callback output (optional)
+ * 
+ * These are NOT interchangeable.
+ */
 export type ActionStep =
   | { 
       type: 'flashloan'; 
       protocol: FlashloanProtocol; 
-      token: string; 
-      tokenIn?: string;       // ✅ Will be converted to array in ensoBuilder
-      amountIn?: string;      // ✅ Will be converted to array in ensoBuilder
-      amount: string; 
-      callback: ActionStep[] 
+      token: string;           // flashloanToken
+      amount: string;          // flashloanAmount
+      tokenIn?: string | string[];      // User-supplied input (optional)
+      amountIn?: string | string[] | { useOutputOfCallAt: number }; // Matching user input
+      tokenOut?: string | string[];     // Expected callback output (optional)
+      callback: ActionStep[];
+      primaryAddress?: string;
+      receiver?: string;
     }
   | { type: 'swap'; protocol: 'enso'; tokenIn: string; tokenOut: string; amountIn: string | { useOutputOfCallAt: number }; slippage: string; primaryAddress?: string; poolFee?: number }
   | { type: 'deposit'; protocol: 'aave-v3' | 'stata'; token: string; amount: string | { useOutputOfCallAt: number }; primaryAddress?: string }
