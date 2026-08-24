@@ -18,7 +18,7 @@ const AAVE_POOL_ABI = [
   'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
 ];
 
-// Get position size from env var
+// ✅ Get position size from env var (default 5000)
 const CLASSIC_INCENTIVE_POSITION_SIZE_USD = env.CLASSIC_INCENTIVE_POSITION_SIZE_USD ?? 5000;
 
 async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
@@ -112,17 +112,23 @@ async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCa
 
   for (const pool of pools) {
     try {
-      const testAmount = ethers.utils.parseUnits('100', TOKENS.USDC.decimals);
+      // ✅ Use env var for QuickSwap position size too
+      const positionSize = CLASSIC_INCENTIVE_POSITION_SIZE_USD;
+      const testAmount = ethers.utils.parseUnits(
+        (positionSize / getTokenPriceUsd(pool.token0)).toString(),
+        pool.token0.decimals
+      );
+
       const quote = await getEnsoRouteQuote(pool.token0, pool.token1, testAmount.toString());
 
       if (!quote) continue;
 
-      const feeUsd = 100 * 0.003;
+      const feeUsd = positionSize * 0.003;
       const estimatedGasUsd = 0.02 * nativePriceUsd;
-      const incentiveReward = 100 * 0.005;
+      const incentiveReward = positionSize * 0.005;
       const netProfitUsd = incentiveReward - feeUsd - estimatedGasUsd;
 
-      if (netProfitUsd > 0.01) {
+      if (netProfitUsd > env.DEFAULT_MIN_PROFIT_USD) {
         const candidate: OpportunityCandidate = {
           id: `classic-quickswap-${pool.token0.symbol}-${pool.token1.symbol}-${Date.now()}`,
           strategy: 'classicIncentive',
@@ -132,7 +138,7 @@ async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCa
             token0: pool.token0,
             token1: pool.token1,
             fee: pool.fee,
-            positionSize: 100,
+            positionSize,
             netProfitUsd,
             quote,
             nativePriceUsd,
@@ -148,6 +154,7 @@ async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCa
         candidates.push(candidate);
         log.info(`✅ Found QuickSwap V3 incentive for ${pool.token0.symbol}-${pool.token1.symbol}`, {
           netProfitUsd: netProfitUsd.toFixed(4),
+          positionSize,
         });
       }
     } catch (err) {
