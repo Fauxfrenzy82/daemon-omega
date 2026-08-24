@@ -33,7 +33,7 @@ export type ActionStep =
       type: 'flashloan'; 
       protocol: FlashloanProtocol; 
       token: string; 
-      tokenIn?: string; // FIX: Added tokenIn parameter for Aave V3 flashloan
+      tokenIn?: string; // Required for Aave V3
       amount: string; 
       callback: ActionStep[] 
     }
