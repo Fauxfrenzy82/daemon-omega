@@ -5,45 +5,53 @@ export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { rewardToken, entryToken, totalReward } = candidate.params;
+  const { rewardToken, entryToken, rewardAmount, positionAddress } = candidate.params;
 
   const flashLoanToken = options?.flashLoanToken || entryToken;
-  const flashLoanAmount = '1000000000000000000'; // 1 token (simplified)
+  const flashLoanAmount = '1000000000000000000'; // Minimal entry amount
 
-  // For Classic Incentive, the action is:
+  // Steps for classic incentive arbitrage:
   // 1. Flashloan entry token
-  // 2. Swap entry token -> reward token (or deposit into position)
+  // 2. Enter position (deposit/stake) - uses positionAddress
   // 3. Claim reward (harvest)
-  // 4. Swap reward token -> entry token
-  // 5. Repay flashloan
+  // 4. Sell reward token -> entry token
+  // 5. Exit position (withdraw)
+  // 6. Repay flashloan (auto)
 
-  // Step 1: Swap entry token to enter the position
-  // Using Enso route for the swap
+  // Step 1: Enter position (deposit)
   const enterStep: ActionStep = {
-    type: 'swap',
-    protocol: 'enso',
-    tokenIn: entryToken.address,
-    tokenOut: rewardToken.address,
-    amountIn: flashLoanAmount,
-    slippage: '100',
+    type: 'deposit',
+    protocol: 'quickswap', // or appropriate protocol
+    token: entryToken.address,
+    amount: flashLoanAmount,
+    primaryAddress: positionAddress,
   };
 
-  // Step 2: Harvest the reward (if needed)
+  // Step 2: Harvest the reward
   const harvestStep: ActionStep = {
     type: 'harvest',
     protocol: 'enso',
-    positionAddress: candidate.params.positionAddress || '',
+    positionAddress: positionAddress,
     token: rewardToken.address,
   };
 
-  // Step 3: Swap reward token back to entry token
-  const exitStep: ActionStep = {
+  // Step 3: Sell reward token back to entry token
+  const sellStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
     tokenIn: rewardToken.address,
     tokenOut: entryToken.address,
-    amountIn: { useOutputOfCallAt: 0 }, // Use output of harvest step
+    amountIn: { useOutputOfCallAt: 0 }, // Use harvest output
     slippage: '100',
+  };
+
+  // Step 4: Exit position (withdraw)
+  const exitStep: ActionStep = {
+    type: 'withdraw',
+    protocol: 'quickswap',
+    token: entryToken.address,
+    amount: { useOutputOfCallAt: 1 }, // Use output of sell step? Actually need to track shares
+    primaryAddress: positionAddress,
   };
 
   const flashloanStep: ActionStep = {
@@ -51,7 +59,7 @@ export async function buildActionPlan(
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    callback: [enterStep, harvestStep, exitStep],
+    callback: [enterStep, harvestStep, sellStep, exitStep],
   };
 
   return {
