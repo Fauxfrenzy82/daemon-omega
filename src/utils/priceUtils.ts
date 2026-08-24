@@ -94,7 +94,7 @@ function getFallbackPrice(token: TokenInfo): number {
 
 /**
  * Get cached native price – lazy initialization only when called.
- * NEVER called at top level.
+ * ⚠️ NEVER called at top level – only when explicitly requested.
  */
 export function getCachedNativePrice(): number {
   const now = Date.now();
@@ -128,11 +128,10 @@ export function getCachedLiquidity(): Record<string, number> {
 }
 
 // ========== Background refresh functions ==========
-// These are called lazily, NEVER at top level during import.
+// ⚠️ These are called lazily, NEVER at top level during import.
 
 async function fetchNativePriceInBackground(): Promise<void> {
   try {
-    // Use WMATIC as native token proxy
     const price = await getLiveTokenPriceUsd(TOKENS.WMATIC);
     cachedNativePrice = price;
     cachedNativePriceTimestamp = Date.now();
