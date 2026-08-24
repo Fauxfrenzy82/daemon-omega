@@ -28,6 +28,10 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
+/**
+ * Convert an ActionStep to an Enso-compatible action object.
+ * Supports all action types: flashloan, swap, deposit, withdraw, harvest, call.
+ */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan':
