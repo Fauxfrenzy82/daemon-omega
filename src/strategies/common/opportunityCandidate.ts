@@ -34,7 +34,7 @@ export type ActionStep =
       protocol: FlashloanProtocol; 
       token: string; 
       tokenIn?: string;       // Will be converted to array in ensoBuilder
-      amountIn?: string;      // Will be converted to array in ensoBuilder
+      amountIn?: string;      // Will be converted to array in ensoBuilder (must match tokenIn length)
       amount: string; 
       callback: ActionStep[] 
     }
