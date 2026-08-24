@@ -30,17 +30,19 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 
 /**
  * Convert an ActionStep to an Enso-compatible action object.
+ * CRITICAL FIX: tokenIn and amountIn must be arrays for flashloan.
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // tokenIn and tokenOut must be arrays for Enso's flashloan
+      // Enso requires tokenIn and amountIn as arrays for flashloan
+      // If tokenIn is provided as string, wrap it in an array
       const tokenIn = step.tokenIn ? [step.tokenIn] : [step.token];
-      const tokenOut = [step.token];
-      
-      // amountIn must match the length of tokenIn
       const amountIn = step.amountIn ? [step.amountIn] : [step.amount];
-      
+      const tokenOut = [step.token];
+      const flashloanAmount = step.amount;
+      const flashloanToken = step.token;
+
       return {
         protocol: step.protocol,
         action: 'flashloan',
@@ -48,9 +50,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
           tokenIn: tokenIn,
           amountIn: amountIn,
           tokenOut: tokenOut,
-          // flashloanToken and flashloanAmount are also required
-          flashloanToken: step.token,
-          flashloanAmount: step.amount,
+          flashloanToken: flashloanToken,
+          flashloanAmount: flashloanAmount,
           callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
         },
       };
