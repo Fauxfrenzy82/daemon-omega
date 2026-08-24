@@ -30,32 +30,31 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 
 /**
  * Convert an ActionStep to an Enso-compatible action object.
- * Supports all action types: flashloan, swap, deposit, withdraw, harvest, call.
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
-    case 'flashloan':
-      // For Aave V3, tokenIn is required by Enso's API.
-      // It should be the address of the token being borrowed.
-      const args: any = {
-        flashloanToken: step.token,
-        flashloanAmount: step.amount,
-        tokenOut: [step.token],
-        callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
-      };
+    case 'flashloan': {
+      // tokenIn and tokenOut must be arrays for Enso's flashloan
+      const tokenIn = step.tokenIn ? [step.tokenIn] : [step.token];
+      const tokenOut = [step.token];
       
-      // Always include tokenIn for Aave V3 flashloans (required by Enso)
-      if (step.protocol === 'aave-v3') {
-        args.tokenIn = step.tokenIn || step.token;
-      } else if (step.tokenIn) {
-        args.tokenIn = step.tokenIn;
-      }
+      // amountIn must match the length of tokenIn
+      const amountIn = step.amountIn ? [step.amountIn] : [step.amount];
       
       return {
         protocol: step.protocol,
         action: 'flashloan',
-        args,
+        args: {
+          tokenIn: tokenIn,
+          amountIn: amountIn,
+          tokenOut: tokenOut,
+          // flashloanToken and flashloanAmount are also required
+          flashloanToken: step.token,
+          flashloanAmount: step.amount,
+          callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
+        },
       };
+    }
     case 'swap':
       return {
         protocol: 'enso',
@@ -119,7 +118,6 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   const chainId = activeChain.chainId;
   const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
 
-  // Build actions array from plan steps
   const actions = plan.steps.map(step => convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount }));
 
   const bundleParams = {
@@ -165,7 +163,6 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   }
 }
 
-// Legacy function kept for backward compatibility, but deprecated
 export async function buildArbitrageBundle(
   opp: EvaluatedOpportunity,
   flashLoanToken: TokenInfo,
