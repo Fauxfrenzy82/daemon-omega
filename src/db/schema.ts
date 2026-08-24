@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS opportunities (
   est_protocol_fee_usd NUMERIC,
   est_net_profit_usd NUMERIC NOT NULL,
   meets_threshold BOOLEAN NOT NULL,
+  strategy TEXT,
+  strategy_metadata JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -23,6 +25,9 @@ CREATE INDEX IF NOT EXISTS idx_opportunities_pair_created
 
 CREATE INDEX IF NOT EXISTS idx_opportunities_meets_threshold
   ON opportunities (meets_threshold, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_opportunities_strategy
+  ON opportunities (strategy, created_at DESC);
 
 -- Trades: actual execution attempts (successful or failed)
 CREATE TABLE IF NOT EXISTS trades (
