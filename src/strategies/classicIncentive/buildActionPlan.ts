@@ -59,13 +59,13 @@ async function buildAaveIncentivePlan(
     slippage: '100',
   };
 
-  // Step 4: Flashloan with proper array handling
+  // Step 4: Flashloan with proper arrays (ensoBuilder will convert to arrays)
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address, // tokenIn as string (will be converted to array in builder)
-    amountIn: flashLoanAmount,        // amountIn matching tokenIn
+    tokenIn: flashLoanToken.address,  // This will be wrapped in an array by ensoBuilder
+    amountIn: flashLoanAmount,        // This will be wrapped in an array by ensoBuilder
     amount: flashLoanAmount,
     callback: [depositStep, borrowStep, swapStep],
   };
@@ -99,7 +99,7 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // Step 2: Flashloan with proper array handling
+  // Step 2: Flashloan with proper arrays
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
