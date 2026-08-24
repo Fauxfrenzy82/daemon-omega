@@ -29,12 +29,11 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 ];
 
 /**
- * ✅ FIXED: Convert an ActionStep to an Enso-compatible action object.
+ * Convert an ActionStep to an Enso-compatible action object.
  *
- * IMPORTANT CHANGE: For flashloan, tokenIn and amountIn are now passed as
- * **strings** (not arrays). The Enso API for aave-v3 requires these fields
- * to be single strings when borrowing a single asset. Using arrays causes
- * the validation error "aave-v3 requires tokenIn as input".
+ * CRITICAL FIX: For flashloan actions, tokenIn and amountIn must be
+ * at the ROOT level of the action object, NOT nested inside args.
+ * Enso's API validates these fields at the root level.
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
@@ -55,33 +54,34 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // 🔥 FIX: Do NOT wrap tokenIn and amountIn in arrays – Enso expects strings.
-      if (step.tokenIn) {
-        // If tokenIn is already an array, take the first element (or join? but we assume string)
-        args.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
-
-        if (step.amountIn === undefined) {
-          throw new Error('Flashloan has tokenIn but no matching amountIn');
-        }
-        args.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
-      }
-
-      if (step.tokenOut) {
-        args.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
-      }
-
-      if (step.primaryAddress) {
-        args.primaryAddress = step.primaryAddress;
-      }
-      if (step.receiver) {
-        args.receiver = step.receiver;
-      }
-
-      return {
+      // 🔥 FIX: Build the action with args nested
+      const action: any = {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
+
+      // 🔥 CRITICAL FIX: tokenIn and amountIn go at the ROOT level
+      if (step.tokenIn) {
+        action.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
+        if (step.amountIn === undefined) {
+          throw new Error('Flashloan has tokenIn but no matching amountIn');
+        }
+        action.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
+      }
+
+      if (step.tokenOut) {
+        action.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
+      }
+
+      if (step.primaryAddress) {
+        action.primaryAddress = step.primaryAddress;
+      }
+      if (step.receiver) {
+        action.receiver = step.receiver;
+      }
+
+      return action;
     }
     case 'swap':
       return {
