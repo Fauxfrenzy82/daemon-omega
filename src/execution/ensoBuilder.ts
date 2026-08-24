@@ -28,6 +28,17 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
+/**
+ * Convert an ActionStep to an Enso-compatible action object.
+ *
+ * 🔥 CRITICAL FIX FOR FLASHLOANS:
+ * According to Enso's official Flashloan API specification:
+ * - tokenIn and amountIn are TOP-LEVEL fields of the action object
+ * - They MUST NOT be nested inside args
+ * - args contains flashloanToken, flashloanAmount, and callback
+ *
+ * This fix resolves the error: "aave-v3 requires tokenIn as input"
+ */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
@@ -41,20 +52,23 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
+      // Build args with flashloan-specific parameters
       const args: Record<string, any> = {
         flashloanToken: step.token,
         flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // 🔥 FIX: tokenIn and amountIn go at the ROOT level of the action
+      // 🔥 FIX: Create the action with tokenIn and amountIn at the ROOT level
       const action: any = {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
 
+      // ✅ tokenIn and amountIn are top-level fields (not inside args)
       if (step.tokenIn) {
+        // Ensure single string (not array) – Enso expects string for single token
         action.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
         if (step.amountIn === undefined) {
           throw new Error('Flashloan has tokenIn but no matching amountIn');
@@ -147,10 +161,10 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   };
 
   const cacheKey = `${JSON.stringify(actions)}`;
-  
-  // Force clear cache to ensure old malformed bundles aren't reused
+
+  // 🔥 IMPORTANT: Clear cache to prevent using stale, malformed bundles
   bundleCache.delete(cacheKey);
-  
+
   const cached = bundleCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     log.info(`✅ Using cached bundle for plan`);
