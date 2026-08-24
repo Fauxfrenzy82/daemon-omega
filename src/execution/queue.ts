@@ -6,12 +6,10 @@ let currentResolve: ((value: OpportunityCandidate | null) => void) | null = null
 
 /**
  * Push a candidate to the queue and immediately wake up a waiting worker.
- * This is the only write operation to the queue.
  */
 export function pushCandidate(candidate: OpportunityCandidate): void {
   candidateQueue.push(candidate);
   
-  // Wake up the first waiter in the same tick
   if (resolveNext) {
     const wake = resolveNext;
     resolveNext = null;
@@ -20,15 +18,13 @@ export function pushCandidate(candidate: OpportunityCandidate): void {
 }
 
 /**
- * Blocking pop. Worker calls this and waits (does not poll) until a candidate is available.
- * Resolves immediately in the same tick pushCandidate is called.
+ * Blocking pop – resolves immediately when pushCandidate is called.
  */
 export async function popCandidate(): Promise<OpportunityCandidate | null> {
   if (candidateQueue.length > 0) {
     return candidateQueue.shift()!;
   }
 
-  // Block until pushCandidate wakes us
   return new Promise((resolve) => {
     currentResolve = resolve;
     resolveNext = () => {
@@ -42,6 +38,27 @@ export async function popCandidate(): Promise<OpportunityCandidate | null> {
   });
 }
 
+/**
+ * Get the current queue length – used for monitoring.
+ */
 export function getQueueLength(): number {
   return candidateQueue.length;
+}
+
+/**
+ * Get the number of active trades (workers processing candidates).
+ * Used by concurrency.ts and healthServer.ts.
+ */
+let activeTrades = 0;
+
+export function getActiveTradeCount(): number {
+  return activeTrades;
+}
+
+export function incrementActiveTrades(): void {
+  activeTrades++;
+}
+
+export function decrementActiveTrades(): void {
+  if (activeTrades > 0) activeTrades--;
 }
