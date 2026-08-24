@@ -18,6 +18,9 @@ const AAVE_POOL_ABI = [
   'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
 ];
 
+// NEW: Get position size from env var
+const CLASSIC_INCENTIVE_POSITION_SIZE_USD = env.CLASSIC_INCENTIVE_POSITION_SIZE_USD ?? 500;
+
 async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
   const pool = new ethers.Contract(AAVE_POOL, AAVE_POOL_ABI, provider);
@@ -43,7 +46,8 @@ async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandida
       const variableBorrowRate = Number(reserveData.currentVariableBorrowRate) / 1e27 * 100;
 
       if (variableBorrowRate < 2 && liquidityRate > 0.5) {
-        const positionSize = 500;
+        // Use env var for position size
+        const positionSize = CLASSIC_INCENTIVE_POSITION_SIZE_USD;
         const borrowAmount = ethers.utils.parseUnits(
           (positionSize / getTokenPriceUsd(asset.token)).toString(),
           asset.token.decimals
@@ -85,6 +89,7 @@ async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandida
             netProfitUsd: netProfitUsd.toFixed(4),
             borrowRate: variableBorrowRate.toFixed(2),
             lendRate: liquidityRate.toFixed(2),
+            positionSize,
           });
         }
       }
@@ -109,6 +114,7 @@ async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCa
   for (const pool of pools) {
     try {
       const testAmount = ethers.utils.parseUnits('100', TOKENS.USDC.decimals);
+      // Pass the token objects directly – they have .address
       const quote = await getEnsoRouteQuote(pool.token0, pool.token1, testAmount.toString());
 
       if (!quote) continue;
