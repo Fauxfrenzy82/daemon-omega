@@ -28,17 +28,6 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
-/**
- * Convert an ActionStep to an Enso-compatible action object.
- *
- * 🔥 CRITICAL FIX FOR FLASHLOANS:
- * According to Enso's official Flashloan API specification:
- * - tokenIn and amountIn are TOP-LEVEL fields of the action object
- * - They MUST NOT be nested inside args
- * - args contains flashloanToken, flashloanAmount, and callback
- *
- * This fix resolves the error: "aave-v3 requires tokenIn as input"
- */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
@@ -52,23 +41,22 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // Build args with flashloan-specific parameters
+      // Build args – these are specific to the flashloan protocol
       const args: Record<string, any> = {
         flashloanToken: step.token,
         flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // 🔥 FIX: Create the action with tokenIn and amountIn at the ROOT level
+      // 🔥 Create the action object – tokenIn/amountIn go at ROOT, NOT in args
       const action: any = {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
 
-      // ✅ tokenIn and amountIn are top-level fields (not inside args)
+      // ✅ Place tokenIn and amountIn at the root level (required by Enso)
       if (step.tokenIn) {
-        // Ensure single string (not array) – Enso expects string for single token
         action.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
         if (step.amountIn === undefined) {
           throw new Error('Flashloan has tokenIn but no matching amountIn');
@@ -162,7 +150,7 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
 
   const cacheKey = `${JSON.stringify(actions)}`;
 
-  // 🔥 IMPORTANT: Clear cache to prevent using stale, malformed bundles
+  // 🔥 Force clear cache to ensure stale malformed bundles are not reused
   bundleCache.delete(cacheKey);
 
   const cached = bundleCache.get(cacheKey);
