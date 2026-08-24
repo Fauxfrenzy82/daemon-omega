@@ -8,8 +8,8 @@ import { provider } from '../treasury/wallets';
 
 const log = createLogger('cache');
 
-// Cache – initially empty, populated on first demand
-let cachedNativePrice = 0.1;
+// ✅ FIX: Use null as "not initialized", not a hardcoded fallback
+let cachedNativePrice: number | null = null;
 let cachedNativePriceTimestamp = 0;
 const CACHE_TTL_MS = 3000;
 
@@ -94,12 +94,12 @@ function getFallbackPrice(token: TokenInfo): number {
 
 /**
  * Get cached native price – lazy initialization only when called.
- * NEVER called at top level.
+ * ✅ FIX: Returns null if not initialized (so callers know it's unavailable).
  */
-export function getCachedNativePrice(): number {
+export function getCachedNativePrice(): number | null {
   const now = Date.now();
-  if (now - cachedNativePriceTimestamp > CACHE_TTL_MS) {
-    // Fire-and-forget background refresh – but now with proper TokenInfo
+  if (cachedNativePrice === null || now - cachedNativePriceTimestamp > CACHE_TTL_MS) {
+    // Fire-and-forget background refresh
     fetchNativePriceInBackground();
   }
   return cachedNativePrice;
@@ -108,12 +108,12 @@ export function getCachedNativePrice(): number {
 /**
  * Get cached gas price – lazy initialization only when called.
  */
-export function getCachedGasPrice(): ethers.BigNumber {
+export function getCachedGasPrice(): ethers.BigNumber | null {
   const now = Date.now();
   if (!cachedGasPrice || now - cachedGasPriceTimestamp > GAS_CACHE_TTL_MS) {
     fetchGasPriceInBackground();
   }
-  return cachedGasPrice || ethers.utils.parseUnits('30', 'gwei');
+  return cachedGasPrice;
 }
 
 /**
@@ -132,40 +132,9 @@ export function getCachedLiquidity(): Record<string, number> {
 
 async function fetchNativePriceInBackground(): Promise<void> {
   try {
-    // ✅ FIX: Use proper TokenInfo object from TOKENS, not fake { symbol: 'WMATIC' }
     const price = await getLiveTokenPriceUsd(TOKENS.WMATIC);
     cachedNativePrice = price;
     cachedNativePriceTimestamp = Date.now();
   } catch (err) {
-    // Keep stale value
-  }
-}
-
-async function fetchGasPriceInBackground(): Promise<void> {
-  try {
-    cachedGasPrice = await provider.getGasPrice();
-    cachedGasPriceTimestamp = Date.now();
-  } catch (err) {
-    // Keep stale value
-  }
-}
-
-async function fetchLiquidityInBackground(): Promise<void> {
-  try {
-    // Placeholder – replace with actual Aave liquidity fetch if needed
-    const liquidity: Record<string, number> = {};
-    const tokens = ['USDC', 'USDT', 'DAI', 'WETH', 'WMATIC', 'WBTC', 'AAVE'];
-    for (const token of tokens) {
-      liquidity[token] = 10000000;
-    }
-    cachedLiquidity = liquidity;
-    cachedLiquidityTimestamp = Date.now();
-  } catch (err) {
-    // Keep stale value
-  }
-}
-
-// ❌ REMOVED: These top-level calls that executed on import
-// fetchNativePriceInBackground();
-// fetchGasPriceInBackground();
-// fetchLiquidityInBackground();
+    log.warn('Failed to fetch native price in background', {
+      error: err instanceof Error ?
