@@ -42,6 +42,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
           flashloanToken: step.token,
           flashloanAmount: step.amount,
           tokenOut: [step.token],
+          // FIX: Add tokenIn if provided (required by Aave V3 flashloan)
+          ...(step.tokenIn ? { tokenIn: step.tokenIn } : {}),
           callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
         },
       };
