@@ -22,6 +22,17 @@ export async function buildActionPlan(
   }
 }
 
+/**
+ * ✅ Aave incentive plan.
+ * 
+ * This plan:
+ * 1. Flashloans USDC (or the asset being borrowed)
+ * 2. Deposits the flashloaned amount as collateral
+ * 3. Borrows the target asset (which earns incentives)
+ * 4. Swaps the borrowed asset back to the flashloan token
+ * 
+ * The callback repays the flashloan + fee.
+ */
 async function buildAaveIncentivePlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
@@ -40,12 +51,13 @@ async function buildAaveIncentivePlan(
     primaryAddress: AAVE_POOL,
   };
 
-  // ✅ FIX: Borrow with proper onBehalfOf (not AddressZero)
+  // Step 2: Borrow asset (to earn incentives)
+  // ✅ FIX: Use proper onBehalfOf (not AddressZero)
   const borrowStep: ActionStep = {
     type: 'call',
     protocol: 'custom',
     target: AAVE_POOL,
-    data: encodeBorrowWithOnBehalf(asset.address, borrowAmount),
+    data: encodeBorrow(asset.address, borrowAmount, executionWallet.address),
     useOutput: true,
   };
 
@@ -59,14 +71,13 @@ async function buildAaveIncentivePlan(
     slippage: '100',
   };
 
-  // Step 4: Flashloan with proper params
+  // ✅ Flashloan step: token is the flashloan asset, no user input required
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address,
-    amountIn: flashLoanAmount,
     amount: flashLoanAmount,
+    // ✅ No tokenIn/amountIn here – this is a pure flashloan
     callback: [depositStep, borrowStep, swapStep],
   };
 
@@ -77,6 +88,17 @@ async function buildAaveIncentivePlan(
   };
 }
 
+/**
+ * ✅ QuickSwap round-trip plan.
+ * 
+ * This plan:
+ * 1. Flashloans USDC
+ * 2. Swaps USDC → WETH (buy)
+ * 3. Swaps WETH → USDC (sell back)
+ * 4. Repays flashloan + fee
+ * 
+ * The profit comes from the arbitrage spread between the two swaps.
+ */
 async function buildQuickSwapV3Plan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
@@ -89,7 +111,6 @@ async function buildQuickSwapV3Plan(
     token0.decimals
   ).toString();
 
-  // ✅ FIX: Complete round-trip with repayment path
   // Step 1: Swap token0 → token1 (buy)
   const buyStep: ActionStep = {
     type: 'swap',
@@ -100,7 +121,7 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ Step 2: Swap token1 → token0 (sell back to repay)
+  // Step 2: Swap token1 → token0 (sell back to repay)
   const sellStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -110,15 +131,13 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // Step 3: Flashloan with both swap steps in callback
+  // ✅ Flashloan step with both swap steps in callback
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address,
-    amountIn: flashLoanAmount,
     amount: flashLoanAmount,
-    callback: [buyStep, sellStep], // ✅ Complete round-trip
+    callback: [buyStep, sellStep],
   };
 
   return {
@@ -129,17 +148,16 @@ async function buildQuickSwapV3Plan(
 }
 
 // ✅ FIX: Proper borrow encoding with correct onBehalfOf
-function encodeBorrowWithOnBehalf(asset: string, amount: string): string {
+function encodeBorrow(asset: string, amount: string, onBehalfOf: string): string {
   const iface = new ethers.utils.Interface([
     'function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external',
   ]);
-  // Use a valid address (the execution wallet) as onBehalfOf
   return iface.encodeFunctionData('borrow', [
     asset,
     amount,
     2, // Variable interest rate mode
     0, // No referral
-    '0xA714a014Db24b6b86e3f465be93736E019fCB47A', // ✅ Valid onBehalfOf address
+    onBehalfOf, // ✅ Valid onBehalfOf address (execution wallet)
   ]);
 }
 
@@ -156,3 +174,6 @@ function getTokenPriceUsd(token: TokenInfo): number {
   };
   return priceMap[token.symbol] || 0.01;
 }
+
+// Import executionWallet for the onBehalfOf address
+import { executionWallet } from '../../treasury/wallets';
