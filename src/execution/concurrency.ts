@@ -21,3 +21,8 @@ export function hasExecutionCapacity(): boolean {
 export function remainingCapacity(): number {
   return Math.max(0, env.MAX_CONCURRENT_TRADES - getActiveTradeCount());
 }
+
+export function canStartNewTrade(state?: { activeTrades: number }): boolean {
+  const active = state?.activeTrades ?? getActiveTradeCount();
+  return active < env.MAX_CONCURRENT_TRADES;
+}
