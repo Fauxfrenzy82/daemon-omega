@@ -27,6 +27,7 @@ async function bootstrap(): Promise<void> {
 
   await initSchema();
 
+  // CRITICAL: Initialize Enso BEFORE starting scan loop
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
@@ -41,6 +42,7 @@ async function bootstrap(): Promise<void> {
   await alertSystemStarted(executionWallet.address);
 
   // Start the scan loop AND the worker pool – both run independently in parallel
+  // BUT only AFTER Enso is fully initialized
   startScanLoop();
   startWorkerPool();
 
