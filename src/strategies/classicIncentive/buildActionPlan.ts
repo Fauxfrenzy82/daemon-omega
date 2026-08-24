@@ -26,7 +26,7 @@ async function buildAaveIncentivePlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { asset, borrowAmount, positionSize } = candidate.params;
+  const { asset, borrowAmount } = candidate.params;
 
   const flashLoanToken = options?.flashLoanToken || asset;
   const flashLoanAmount = borrowAmount;
@@ -59,12 +59,13 @@ async function buildAaveIncentivePlan(
     slippage: '100',
   };
 
-  // Step 4: Flashloan with tokenIn set (required for Aave V3)
+  // Step 4: Flashloan with proper array handling
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address, // Required by Aave V3 flashloan
+    tokenIn: flashLoanToken.address, // tokenIn as string (will be converted to array in builder)
+    amountIn: flashLoanAmount,        // amountIn matching tokenIn
     amount: flashLoanAmount,
     callback: [depositStep, borrowStep, swapStep],
   };
@@ -80,7 +81,7 @@ async function buildQuickSwapV3Plan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { token0, token1, fee, positionSize, quote } = candidate.params;
+  const { token0, token1, positionSize } = candidate.params;
 
   const flashLoanToken = options?.flashLoanToken || token0;
   const flashLoanAmount = ethers.utils.parseUnits(
@@ -88,7 +89,7 @@ async function buildQuickSwapV3Plan(
     token0.decimals
   ).toString();
 
-  // Step 1: Swap to get token1 if needed
+  // Step 1: Swap to get token1
   const swapStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -98,12 +99,13 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // Step 2: Flashloan with tokenIn set
+  // Step 2: Flashloan with proper array handling
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address, // Required by Aave V3 flashloan
+    tokenIn: flashLoanToken.address,
+    amountIn: flashLoanAmount,
     amount: flashLoanAmount,
     callback: [swapStep],
   };
