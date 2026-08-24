@@ -27,7 +27,8 @@ async function bootstrap(): Promise<void> {
 
   await initSchema();
 
-  // 🔥 CRITICAL: Initialize Enso BEFORE scan loop starts
+  // 🔥 CRITICAL: Initialize Enso BEFORE any module that might call it
+  // This must happen before startScanLoop() AND before any background tasks
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
@@ -41,13 +42,14 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // ✅ Now safe to start scan loop and workers
+  // ✅ Now safe to start scan loop and workers (Enso is ready)
   startScanLoop();
   startWorkerPool();
 
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
+  // Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await fetchNativePriceUsd();
@@ -57,6 +59,7 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
+  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -66,6 +69,7 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
+  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
