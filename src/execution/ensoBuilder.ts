@@ -28,15 +28,10 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
-/**
- * Convert an ActionStep to an Enso-compatible action object.
- * CRITICAL FIX: tokenIn and amountIn must be arrays for flashloan.
- */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // Enso requires tokenIn and amountIn as arrays for flashloan
-      // If tokenIn is provided as string, wrap it in an array
+      // FIX: Enso requires tokenIn and amountIn as arrays
       const tokenIn = step.tokenIn ? [step.tokenIn] : [step.token];
       const amountIn = step.amountIn ? [step.amountIn] : [step.amount];
       const tokenOut = [step.token];
