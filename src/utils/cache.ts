@@ -137,4 +137,41 @@ async function fetchNativePriceInBackground(): Promise<void> {
     cachedNativePriceTimestamp = Date.now();
   } catch (err) {
     log.warn('Failed to fetch native price in background', {
-      error: err instanceof Error ?
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Leave cachedNativePrice as null (so callers know it's unavailable)
+  }
+}
+
+async function fetchGasPriceInBackground(): Promise<void> {
+  try {
+    cachedGasPrice = await provider.getGasPrice();
+    cachedGasPriceTimestamp = Date.now();
+  } catch (err) {
+    log.warn('Failed to fetch gas price in background', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Keep stale value
+  }
+}
+
+async function fetchLiquidityInBackground(): Promise<void> {
+  try {
+    const liquidity: Record<string, number> = {};
+    const tokens = ['USDC', 'USDT', 'DAI', 'WETH', 'WMATIC', 'WBTC', 'AAVE'];
+    for (const token of tokens) {
+      liquidity[token] = 10000000;
+    }
+    cachedLiquidity = liquidity;
+    cachedLiquidityTimestamp = Date.now();
+  } catch (err) {
+    log.warn('Failed to fetch liquidity in background', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ❌ REMOVED: These top-level calls that executed on import
+// fetchNativePriceInBackground();
+// fetchGasPriceInBackground();
+// fetchLiquidityInBackground();
