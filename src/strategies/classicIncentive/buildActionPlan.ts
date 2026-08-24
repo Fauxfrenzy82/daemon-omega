@@ -1,9 +1,10 @@
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
+import { TokenInfo } from '../../config/tokens';
 
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
-  options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
+  options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
   const { rewardToken, entryToken, rewardAmount, positionAddress } = candidate.params;
 
@@ -12,18 +13,20 @@ export async function buildActionPlan(
 
   // Steps for classic incentive arbitrage:
   // 1. Flashloan entry token
-  // 2. Enter position (deposit/stake) - uses positionAddress
+  // 2. Enter position - use Enso route to swap into position
   // 3. Claim reward (harvest)
   // 4. Sell reward token -> entry token
-  // 5. Exit position (withdraw)
+  // 5. Exit position - use Enso route to swap back
   // 6. Repay flashloan (auto)
 
-  // Step 1: Enter position (deposit)
+  // Step 1: Enter position via Enso route
   const enterStep: ActionStep = {
-    type: 'deposit',
-    protocol: 'quickswap', // or appropriate protocol
-    token: entryToken.address,
-    amount: flashLoanAmount,
+    type: 'swap',
+    protocol: 'enso',
+    tokenIn: entryToken.address,
+    tokenOut: rewardToken.address, // Assuming reward token is what we receive
+    amountIn: flashLoanAmount,
+    slippage: '100',
     primaryAddress: positionAddress,
   };
 
@@ -45,13 +48,14 @@ export async function buildActionPlan(
     slippage: '100',
   };
 
-  // Step 4: Exit position (withdraw)
+  // Step 4: Exit position via Enso route
   const exitStep: ActionStep = {
-    type: 'withdraw',
-    protocol: 'quickswap',
-    token: entryToken.address,
-    amount: { useOutputOfCallAt: 1 }, // Use output of sell step? Actually need to track shares
-    primaryAddress: positionAddress,
+    type: 'swap',
+    protocol: 'enso',
+    tokenIn: rewardToken.address,
+    tokenOut: entryToken.address,
+    amountIn: { useOutputOfCallAt: 1 }, // Use output of sell step
+    slippage: '100',
   };
 
   const flashloanStep: ActionStep = {
