@@ -18,15 +18,6 @@ const AAVE_POOL_ABI = [
   'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
 ];
 
-const QUICKSWAP_V3_FACTORY = '0x5aF9F8bc664a4c761f3994D146EaB6fA315DeD1a';
-
-interface AaveReserveData {
-  asset: TokenInfo;
-  liquidityRate: number;
-  variableBorrowRate: number;
-  aTokenAddress: string;
-}
-
 async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
   const pool = new ethers.Contract(AAVE_POOL, AAVE_POOL_ABI, provider);
