@@ -9,50 +9,77 @@ const log = createLogger('ensoClient');
 let ensoClient: EnsoClient | null = null;
 let interceptorsAttached = false;
 
+/**
+ * ✅ FIX: Only attach interceptors to Enso's axios instance, not global axios.
+ * This prevents Discord webhook and other non-Enso requests from being logged.
+ */
 function attachDiagnosticInterceptors(): void {
   if (interceptorsAttached) return;
   interceptorsAttached = true;
 
-  axios.interceptors.request.use(
-    (config) => {
-      log.info('🌐 ENSO OUTBOUND REQUEST', {
-        method: config.method?.toUpperCase(),
-        url: config.url,
-        baseURL: config.baseURL,
-        fullUrl: config.baseURL ? `${config.baseURL}${config.url}` : config.url,
-        params: config.params,
-        data: config.data ? JSON.stringify(config.data) : undefined,
-        headers: config.headers,
-      });
-      return config;
-    },
-    (error) => {
-      log.error('🌐 ENSO REQUEST SETUP FAILED', { error: String(error) });
-      return Promise.reject(error);
-    }
-  );
+  // ✅ Get the axios instance used by EnsoClient
+  // Since we can't directly access EnsoClient's internal axios instance,
+  // we check if we can configure it via the client options.
+  // For now, we'll use a different approach: we don't attach global interceptors.
+  // Instead, we rely on the EnsoClient's built-in logging if available.
+  // If EnsoClient doesn't support built-in logging, we'll create a wrapper.
 
-  axios.interceptors.response.use(
-    (response) => {
-      log.info('🌐 ENSO RESPONSE', {
-        status: response.status,
-        url: response.config?.url,
-        data: JSON.stringify(response.data),
+  // ✅ Safer approach: Create a wrapper around EnsoClient that logs only Enso requests
+  // This avoids the global axios interceptors entirely.
+
+  log.info('Enso client will use request/response logging via wrapper (not global interceptors)');
+}
+
+// ✅ Custom wrapper class to log only Enso requests
+class LoggingEnsoClient {
+  private client: EnsoClient;
+
+  constructor(client: EnsoClient) {
+    this.client = client;
+  }
+
+  async getBundleData(params: any, actions: any): Promise<any> {
+    try {
+      log.info('🌐 ENSO BUNDLE REQUEST', {
+        params: JSON.stringify(params),
+        actions: JSON.stringify(actions),
       });
-      return response;
-    },
-    (error) => {
-      log.error('🌐 ENSO ERROR RESPONSE', {
-        status: error?.response?.status,
-        url: error?.config?.url,
-        data: error?.response?.data ? JSON.stringify(error.response.data) : undefined,
+      const result = await this.client.getBundleData(params, actions);
+      log.info('🌐 ENSO BUNDLE RESPONSE', {
+        hasTx: !!(result as any)?.tx,
+        hasSimulation: !!(result as any)?.simulation,
+      });
+      return result;
+    } catch (error: any) {
+      log.error('🌐 ENSO BUNDLE ERROR', {
         message: error?.message,
+        statusCode: error?.statusCode || error?.response?.status,
+        responseData: error?.responseData || error?.response?.data,
       });
-      return Promise.reject(error);
+      throw error;
     }
-  );
+  }
 
-  log.info('Enso HTTP interceptors attached');
+  async getRouteData(params: any): Promise<any> {
+    try {
+      log.info('🌐 ENSO ROUTE REQUEST', {
+        params: JSON.stringify(params),
+      });
+      const result = await this.client.getRouteData(params);
+      log.info('🌐 ENSO ROUTE RESPONSE', {
+        hasAmountOut: !!(result as any)?.amountOut,
+        hasRoute: !!(result as any)?.route,
+      });
+      return result;
+    } catch (error: any) {
+      log.error('🌐 ENSO ROUTE ERROR', {
+        message: error?.message,
+        statusCode: error?.statusCode || error?.response?.status,
+        responseData: error?.responseData || error?.response?.data,
+      });
+      throw error;
+    }
+  }
 }
 
 export function initEnsoClient(): EnsoClient {
@@ -62,22 +89,18 @@ export function initEnsoClient(): EnsoClient {
         'ENSO_API_KEY is required. Get one from https://developers.enso.finance'
       );
     }
-    attachDiagnosticInterceptors();
 
-    // No custom baseURL passed — every official Enso example
-    // (docs.enso.build, GitHub README, npm page) constructs
-    // EnsoClient with only { apiKey }. The prior attempt of manually
-    // supplying baseURL (first api.enso.build, then corrected to
-    // api.enso.finance) caused the SDK to skip its own internal
-    // /api/v1 path prefix entirely — visible in the last log as a
-    // request to the bare /shortcuts/bundle path with params
-    // serialized as a query string instead of a JSON body, a strong
-    // sign the custom baseURL bypassed the SDK's normal internal
-    // request construction. Letting the SDK use its own default
-    // should restore the correct path and POST-body behavior.
+    // Create the client without global interceptors
     ensoClient = new EnsoClient({
       apiKey: env.ENSO_API_KEY,
     });
+
+    // ✅ Wrap the client for logging (doesn't affect other HTTP traffic)
+    const wrappedClient = new LoggingEnsoClient(ensoClient);
+
+    // Store the wrapped client
+    (ensoClient as any)._wrapped = wrappedClient;
+
     log.info('Enso client initialized', { chainId: activeChain.chainId });
   }
   return ensoClient;
@@ -87,5 +110,18 @@ export function getEnsoClient(): EnsoClient {
   if (!ensoClient) {
     throw new Error('Enso client not initialized. Call initEnsoClient() first.');
   }
+  // Return the wrapped client if available
+  if ((ensoClient as any)._wrapped) {
+    return (ensoClient as any)._wrapped as EnsoClient;
+  }
   return ensoClient;
+}
+
+// ✅ Export the logging wrapper for direct use
+export function getEnsoClientWrapper(): LoggingEnsoClient {
+  const client = getEnsoClient();
+  if (!(client as any)._wrapped) {
+    return new LoggingEnsoClient(client);
+  }
+  return (client as any)._wrapped;
 }
