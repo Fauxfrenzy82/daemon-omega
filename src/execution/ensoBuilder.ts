@@ -35,17 +35,26 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan':
+      // For Aave V3, tokenIn is required by Enso's API.
+      // It should be the address of the token being borrowed.
+      const args: any = {
+        flashloanToken: step.token,
+        flashloanAmount: step.amount,
+        tokenOut: [step.token],
+        callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
+      };
+      
+      // Always include tokenIn for Aave V3 flashloans (required by Enso)
+      if (step.protocol === 'aave-v3') {
+        args.tokenIn = step.tokenIn || step.token;
+      } else if (step.tokenIn) {
+        args.tokenIn = step.tokenIn;
+      }
+      
       return {
         protocol: step.protocol,
         action: 'flashloan',
-        args: {
-          flashloanToken: step.token,
-          flashloanAmount: step.amount,
-          tokenOut: [step.token],
-          // FIX: Add tokenIn if provided (required by Aave V3 flashloan)
-          ...(step.tokenIn ? { tokenIn: step.tokenIn } : {}),
-          callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
-        },
+        args,
       };
     case 'swap':
       return {
@@ -164,7 +173,6 @@ export async function buildArbitrageBundle(
   provider: FlashLoanProvider,
   options: { buyRequiresRequote?: boolean; sellRequiresRequote?: boolean } = {}
 ): Promise<BuiltBundle> {
-  // This is now deprecated; use buildBundleFromPlan with ActionPlan
   log.warn('buildArbitrageBundle is deprecated, use buildBundleFromPlan with ActionPlan');
   throw new Error('Deprecated: use buildBundleFromPlan with ActionPlan');
 }
