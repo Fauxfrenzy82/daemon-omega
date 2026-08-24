@@ -27,7 +27,7 @@ async function bootstrap(): Promise<void> {
 
   await initSchema();
 
-  // ✅ CRITICAL FIX: Initialize Enso BEFORE starting scan loop
+  // 🔥 CRITICAL: Initialize Enso BEFORE any scan loop or background tasks
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
@@ -41,47 +41,37 @@ async function bootstrap(): Promise<void> {
   startHealthServer();
   await alertSystemStarted(executionWallet.address);
 
-  // ✅ Start scan loop and worker pool ONLY after Enso is fully initialized
+  // Now safe to start scan loop and workers
   startScanLoop();
   startWorkerPool();
 
-  // Fetch initial native price
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await fetchNativePriceUsd();
       await sweepAllProfitTokens(currentPrice);
     } catch (err) {
-      log.error('Sweep cycle failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      log.error('Sweep cycle failed', { error: String(err) });
     }
   }, SWEEP_INTERVAL_MS);
 
-  // Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
       await alertPeriodSummary(summary);
     } catch (err) {
-      log.error('Hourly summary failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      log.error('Hourly summary failed', { error: String(err) });
     }
   }, HOURLY_SUMMARY_MS);
 
-  // Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
       await alertPeriodSummary(summary);
     } catch (err) {
-      log.error('Daily summary failed', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      log.error('Daily summary failed', { error: String(err) });
     }
   }, DAILY_SUMMARY_MS);
 
@@ -97,7 +87,6 @@ async function shutdown(signal: string): Promise<void> {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-
 process.on('unhandledRejection', (reason) => {
   log.error('Unhandled promise rejection', { reason: String(reason) });
 });
