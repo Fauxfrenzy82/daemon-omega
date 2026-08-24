@@ -30,13 +30,10 @@ function optionalBool(key: string, fallback: boolean): boolean {
 }
 
 /**
- * ✅ FIX: Normalize ENSO_BASE_URL to ensure it always ends with /api
- * This prevents the Render environment variable from breaking the URL.
+ * Normalize ENSO_BASE_URL to always include /api
  */
 function normalizeEnsoBaseUrl(url: string): string {
-  // Remove trailing slash if present
   let normalized = url.replace(/\/+$/, '');
-  // If the URL doesn't end with /api, append it
   if (!normalized.endsWith('/api')) {
     normalized = `${normalized}/api`;
   }
@@ -58,7 +55,6 @@ export const env = {
 
   // --- Enso ---
   ENSO_API_KEY: required('ENSO_API_KEY'),
-  // ✅ FIX: Normalize the base URL to always include /api
   ENSO_BASE_URL: normalizeEnsoBaseUrl(optional('ENSO_BASE_URL', 'https://api.enso.build/api')),
 
   // ParaSwap / OpenOcean
@@ -121,6 +117,5 @@ export const env = {
   // Subgraph
   SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
 
-  // NEW: Classic Incentive position size (USD)
   CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
 };
