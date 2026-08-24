@@ -7,19 +7,17 @@ import { TOKENS } from '../config/tokens';
 
 const log = createLogger('priceUtils');
 
-// Price cache
+// Price cache – initially empty, populated on first demand
 const priceCache = new Map<string, { price: number; timestamp: number }>();
 const CACHE_TTL_MS = 60000;
-
 const STABLECOINS = ['USDC', 'USDC.e', 'USDT', 'DAI'];
 
 /**
  * Get live price of a token in USD.
- * CRITICAL FIX: Always expects a TokenInfo object with an address.
- * Passing a string symbol (e.g., "WMATIC") will fail.
+ * If Enso is not initialized, returns a fallback price without throwing.
  */
 export async function getLiveTokenPriceUsd(token: TokenInfo): Promise<number> {
-  // If token is a stablecoin, return 1.0 directly
+  // If token is a stablecoin, return 1.0
   if (STABLECOINS.includes(token.symbol)) {
     return 1.0;
   }
@@ -31,34 +29,27 @@ export async function getLiveTokenPriceUsd(token: TokenInfo): Promise<number> {
   }
 
   try {
-    // Use a stablecoin as the other side
     const stableToken = getStablecoin();
     if (!stableToken) {
-      throw new Error('No stablecoin available for price reference');
+      throw new Error('No stablecoin available');
     }
 
-    // Get a quote: sell 1 unit of the token to get stablecoin
     const amountIn = ethers.utils.parseUnits('1', token.decimals).toString();
-
     let quote;
+
     try {
-      // Try Enso route first
       quote = await getEnsoRouteQuote(token, stableToken, amountIn);
     } catch (ensoErr) {
-      log.debug(`Enso route failed for ${token.symbol}->${stableToken.symbol}, falling back to direct DEX`);
+      log.debug(`Enso route failed for ${token.symbol}, falling back to direct DEX`);
       const directQuote = await getDirectDexQuote('uniswap-v3', token, stableToken, amountIn);
       if (directQuote) {
-        quote = {
-          price: directQuote.price,
-          amountOut: directQuote.amountOut,
-        };
+        quote = { price: directQuote.price, amountOut: directQuote.amountOut };
       }
     }
 
     if (quote && quote.price > 0) {
-      const price = quote.price;
-      priceCache.set(token.symbol, { price, timestamp: Date.now() });
-      return price;
+      priceCache.set(token.symbol, { price: quote.price, timestamp: Date.now() });
+      return quote.price;
     }
 
     throw new Error(`Could not get price for ${token.symbol}`);
