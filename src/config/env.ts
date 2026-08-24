@@ -35,7 +35,7 @@ export const env = {
   RPC_WS_URL: optional('RPC_WS_URL', ''),
   CHAIN_ID: optionalNumber('CHAIN_ID', 137),
 
-  // Private Mempool for MEV protection
+  // Private Mempool
   PRIVATE_MEMPOOL_URL: optional('PRIVATE_MEMPOOL_URL', 'https://private-mempool.polygon.technology'),
 
   // Wallets
@@ -46,7 +46,7 @@ export const env = {
   ENSO_API_KEY: required('ENSO_API_KEY'),
   ENSO_BASE_URL: optional('ENSO_BASE_URL', 'https://api.enso.finance'),
 
-  // ParaSwap / OpenOcean (keep for price scanning)
+  // ParaSwap / OpenOcean
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
   OPENOCEAN_API_URL: optional('OPENOCEAN_API_URL', 'https://open-api.openocean.finance/v3/polygon'),
   ZEROEX_API_KEY: optional('ZEROEX_API_KEY', ''),
@@ -57,11 +57,9 @@ export const env = {
   // Risk / thresholds
   DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.01),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 100000),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 10000),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
-
-  // Venue liquidity filter — do NOT raise this
   MAX_PRICE_IMPACT_BPS: optionalNumber('MAX_PRICE_IMPACT_BPS', 300),
 
   // Circuit breaker
@@ -72,7 +70,7 @@ export const env = {
 
   // Sweep
   SWEEP_ENABLED: optionalBool('SWEEP_ENABLED', true),
-  SWEEP_MIN_BALANCE_USD: optionalNumber('SWEEP_MIN_BALANCE_USD', 3),
+  SWEEP_MIN_BALANCE_USD: optionalNumber('SWEEP_MIN_BALANCE_USD', 2),
   SWEEP_KEEP_GAS_RESERVE_USD: optionalNumber('SWEEP_KEEP_GAS_RESERVE_USD', 1),
   SWEEP_TARGET_SYMBOL: optional('SWEEP_TARGET_SYMBOL', 'USDC'),
   SWEEP_DUST_THRESHOLD_USD: optionalNumber('SWEEP_DUST_THRESHOLD_USD', 0.01),
@@ -92,23 +90,22 @@ export const env = {
   STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', true),
   STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', true),
 
-  // Enso route migration and pair tiers
+  // Enso route
   USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true),
   ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800),
   PRIMARY_PAIR_IDS: optional('PRIMARY_PAIR_IDS', 'WETH-USDC,WBTC-USDC,WMATIC-USDC,USDCe-USDT,DAI-USDC'),
   SECONDARY_PAIR_IDS: optional('SECONDARY_PAIR_IDS', 'LINK-USDC,AAVE-USDC,GHST-USDC,QUICK-USDC'),
   SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100),
-  MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 10000),
+  MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 100000),
 
   // Optimizer
   OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
-
-  // Worker pool
   WORKER_POOL_SIZE: optionalNumber('WORKER_POOL_SIZE', 3),
-
-  // LP Entry/Exit – max pairs per cycle
   LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
 
-  // Subgraph API Key (optional, for strategies that use subgraphs)
+  // Subgraph
   SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
+
+  // NEW: Classic Incentive position size (USD)
+  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
 };
