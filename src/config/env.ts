@@ -29,6 +29,20 @@ function optionalBool(key: string, fallback: boolean): boolean {
   return val.toLowerCase() === 'true';
 }
 
+/**
+ * ✅ FIX: Normalize ENSO_BASE_URL to ensure it always ends with /api
+ * This prevents the Render environment variable from breaking the URL.
+ */
+function normalizeEnsoBaseUrl(url: string): string {
+  // Remove trailing slash if present
+  let normalized = url.replace(/\/+$/, '');
+  // If the URL doesn't end with /api, append it
+  if (!normalized.endsWith('/api')) {
+    normalized = `${normalized}/api`;
+  }
+  return normalized;
+}
+
 export const env = {
   // Blockchain / RPC
   RPC_URL: required('RPC_URL'),
@@ -44,7 +58,8 @@ export const env = {
 
   // --- Enso ---
   ENSO_API_KEY: required('ENSO_API_KEY'),
-  ENSO_BASE_URL: optional('ENSO_BASE_URL', 'https://api.enso.finance'),
+  // ✅ FIX: Normalize the base URL to always include /api
+  ENSO_BASE_URL: normalizeEnsoBaseUrl(optional('ENSO_BASE_URL', 'https://api.enso.build/api')),
 
   // ParaSwap / OpenOcean
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
