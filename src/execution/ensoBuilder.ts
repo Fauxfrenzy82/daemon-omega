@@ -29,19 +29,16 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 ];
 
 /**
- * ✅ CORRECTED: Convert an ActionStep to an Enso-compatible action object.
- * 
- * Based on Enso's official flashloan schema:
- * - flashloanToken/flashloanAmount: the asset being flash-borrowed
- * - tokenIn/amountIn: ADDITIONAL assets supplied by the user (NOT the flashloan token)
- * - tokenOut: expected callback output
- * 
- * These are semantically different concepts and should NOT be conflated.
+ * ✅ FIXED: Convert an ActionStep to an Enso-compatible action object.
+ *
+ * IMPORTANT CHANGE: For flashloan, tokenIn and amountIn are now passed as
+ * **strings** (not arrays). The Enso API for aave-v3 requires these fields
+ * to be single strings when borrowing a single asset. Using arrays causes
+ * the validation error "aave-v3 requires tokenIn as input".
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // ✅ Validate required fields
       if (!step.token) {
         throw new Error('Flashloan step missing flashloan token');
       }
@@ -52,30 +49,27 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // ✅ Build args with flashloan token and amount
       const args: Record<string, any> = {
         flashloanToken: step.token,
         flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ Only include tokenIn if this flashloan has user-supplied input
-      // tokenIn is NOT the flashloan token – it's additional user collateral/input
+      // 🔥 FIX: Do NOT wrap tokenIn and amountIn in arrays – Enso expects strings.
       if (step.tokenIn) {
-        args.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn : [step.tokenIn];
+        // If tokenIn is already an array, take the first element (or join? but we assume string)
+        args.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
 
         if (step.amountIn === undefined) {
           throw new Error('Flashloan has tokenIn but no matching amountIn');
         }
-        args.amountIn = Array.isArray(step.amountIn) ? step.amountIn : [step.amountIn];
+        args.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
       }
 
-      // ✅ Only include tokenOut when the action plan specifies expected callback output
       if (step.tokenOut) {
-        args.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut : [step.tokenOut];
+        args.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
       }
 
-      // ✅ Optional fields
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress;
       }
