@@ -221,4 +221,24 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
   }
 
   if (allCandidates.length === 0) {
-    log.info('📭 Classic Incentive: No active incentive
+    log.info('📭 Classic Incentive: No active incentive programs found');
+  } else {
+    log.info(`📦 Classic Incentive found ${allCandidates.length} candidates`);
+  }
+
+  return allCandidates;
+}
+
+function getTokenPriceUsd(token: TokenInfo): number {
+  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) {
+    return 1.0;
+  }
+  const priceMap: Record<string, number> = {
+    'WMATIC': 0.1,
+    'WETH': 3000,
+    'WBTC': 60000,
+    'AAVE': 150,
+    'QUICK': 0.05,
+  };
+  return priceMap[token.symbol] || 0.01;
+}
