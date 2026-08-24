@@ -28,6 +28,14 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
+/**
+ * Convert an ActionStep to an Enso-compatible action object.
+ *
+ * 🔥 FIX: According to Enso's official Flashloan API specification [citation:2][citation:7],
+ * tokenIn and amountIn MUST be inside the `args` object, NOT at the root level.
+ * The error "aave-v3 requires tokenIn as input" occurs because Enso validates
+ * args.tokenIn and cannot find it.
+ */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
@@ -41,41 +49,39 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // Build args – these are specific to the flashloan protocol
+      // ✅ Build args with flashloan-specific parameters
       const args: Record<string, any> = {
         flashloanToken: step.token,
         flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // 🔥 Create the action object – tokenIn/amountIn go at ROOT, NOT in args
-      const action: any = {
+      // ✅ FIX: tokenIn and amountIn go INSIDE args (not at root)
+      // This matches Enso's FlashloanArgs type definition [citation:7]
+      if (step.tokenIn) {
+        args.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
+        if (step.amountIn === undefined) {
+          throw new Error('Flashloan has tokenIn but no matching amountIn');
+        }
+        args.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
+      }
+
+      if (step.tokenOut) {
+        args.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
+      }
+
+      if (step.primaryAddress) {
+        args.primaryAddress = step.primaryAddress;
+      }
+      if (step.receiver) {
+        args.receiver = step.receiver;
+      }
+
+      return {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
-
-      // ✅ Place tokenIn and amountIn at the root level (required by Enso)
-      if (step.tokenIn) {
-        action.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
-        if (step.amountIn === undefined) {
-          throw new Error('Flashloan has tokenIn but no matching amountIn');
-        }
-        action.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
-      }
-
-      if (step.tokenOut) {
-        action.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
-      }
-
-      if (step.primaryAddress) {
-        action.primaryAddress = step.primaryAddress;
-      }
-      if (step.receiver) {
-        action.receiver = step.receiver;
-      }
-
-      return action;
     }
     case 'swap':
       return {
@@ -150,7 +156,7 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
 
   const cacheKey = `${JSON.stringify(actions)}`;
 
-  // 🔥 Force clear cache to ensure stale malformed bundles are not reused
+  // 🔥 Clear cache to prevent stale malformed bundles
   bundleCache.delete(cacheKey);
 
   const cached = bundleCache.get(cacheKey);
