@@ -11,12 +11,6 @@ const PORT = Number(process.env.PORT) || 3000;
 let systemStartedAt = Date.now();
 let lastScanCycleAt: number | null = null;
 
-/**
- * Called by the scan loop after every cycle so /health can report
- * genuine liveness (not just "process is up") — if lastScanCycleAt
- * stops advancing, that's a real signal something is stuck even
- * though the HTTP server itself is still answering pings.
- */
 export function recordScanCycle(): void {
   lastScanCycleAt = Date.now();
 }
@@ -35,12 +29,6 @@ function buildStatus() {
   };
 }
 
-/**
- * Exists solely so Render's Web Service health checks (and an external
- * cron ping) have something to hit. This does not replace the scan
- * loop — it runs alongside it in the same process, purely as a liveness
- * signal. No trading logic lives here.
- */
 export function startHealthServer(): void {
   const server = http.createServer((req, res) => {
     if (req.url === '/health' || req.url === '/' ) {
