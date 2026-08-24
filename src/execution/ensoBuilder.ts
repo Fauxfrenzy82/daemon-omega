@@ -30,12 +30,14 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 
 /**
  * Convert an ActionStep to an Enso-compatible action object.
- * ✅ FIX: tokenIn and amountIn MUST be arrays for flashloan.
+ * ✅ FIX: tokenIn and amountIn are now arrays for flashloan.
+ * ✅ FIX: tokenIn is always included for Aave V3.
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
       // Enso requires tokenIn and amountIn as arrays
+      // If tokenIn is provided, use it; otherwise use the flashloan token
       const tokenIn = step.tokenIn ? [step.tokenIn] : [step.token];
       const amountIn = step.amountIn ? [step.amountIn] : [step.amount];
       const tokenOut = [step.token];
@@ -46,8 +48,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         protocol: step.protocol,
         action: 'flashloan',
         args: {
-          tokenIn: tokenIn,           // ✅ Array, not string
-          amountIn: amountIn,          // ✅ Array, not string
+          tokenIn: tokenIn,
+          amountIn: amountIn,
           tokenOut: tokenOut,
           flashloanToken: flashloanToken,
           flashloanAmount: flashloanAmount,
