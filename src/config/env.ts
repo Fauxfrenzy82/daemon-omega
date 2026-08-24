@@ -35,6 +35,9 @@ export const env = {
   RPC_WS_URL: optional('RPC_WS_URL', ''),
   CHAIN_ID: optionalNumber('CHAIN_ID', 137),
 
+  // Private Mempool for MEV protection
+  PRIVATE_MEMPOOL_URL: optional('PRIVATE_MEMPOOL_URL', 'https://private-mempool.polygon.technology'),
+
   // Wallets
   EXECUTION_PRIVATE_KEY: required('EXECUTION_PRIVATE_KEY'),
   TREASURY_ADDRESS: required('TREASURY_ADDRESS'),
@@ -107,4 +110,7 @@ export const env = {
 
   // LP Entry/Exit – max pairs per cycle
   LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
+
+  // Subgraph API Key (optional, for strategies that use subgraphs)
+  SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
 };
