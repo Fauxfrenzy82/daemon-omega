@@ -29,45 +29,64 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 ];
 
 /**
- * Convert an ActionStep to an Enso-compatible action object.
- *
- * Based on @ensofinance/sdk@2.5.0 expected flashloan schema:
- * {
- *   protocol: 'aave-v3',
- *   action: 'flashloan',
- *   args: {
- *     tokenIn: string[],      // array of token addresses
- *     amountIn: string[],     // array of amounts (same length as tokenIn)
- *     tokenOut: string[],     // array of token addresses
- *     flashloanToken: string, // the token being flashloaned
- *     flashloanAmount: string, // the amount being flashloaned
- *     callback: Action[]      // callback actions
- *   }
- * }
+ * ✅ CORRECTED: Convert an ActionStep to an Enso-compatible action object.
+ * 
+ * Based on Enso's official flashloan schema:
+ * - flashloanToken/flashloanAmount: the asset being flash-borrowed
+ * - tokenIn/amountIn: ADDITIONAL assets supplied by the user (NOT the flashloan token)
+ * - tokenOut: expected callback output
+ * 
+ * These are semantically different concepts and should NOT be conflated.
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // ✅ tokenIn and amountIn must be arrays
-      const tokenIn = step.tokenIn ? [step.tokenIn] : [step.token];
-      const amountIn = step.amountIn ? [step.amountIn] : [step.amount];
-      const tokenOut = [step.token];
-      const flashloanAmount = step.amount;
-      const flashloanToken = step.token;
+      // ✅ Validate required fields
+      if (!step.token) {
+        throw new Error('Flashloan step missing flashloan token');
+      }
+      if (!step.amount) {
+        throw new Error('Flashloan step missing flashloan amount');
+      }
+      if (!step.callback || step.callback.length === 0) {
+        throw new Error('Flashloan must contain at least one callback action');
+      }
 
-      // ✅ For Aave V3, tokenIn is required
-      // The flashloan token itself is the tokenIn
+      // ✅ Build args with flashloan token and amount
+      const args: Record<string, any> = {
+        flashloanToken: step.token,
+        flashloanAmount: step.amount,
+        callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
+      };
+
+      // ✅ Only include tokenIn if this flashloan has user-supplied input
+      // tokenIn is NOT the flashloan token – it's additional user collateral/input
+      if (step.tokenIn) {
+        args.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn : [step.tokenIn];
+
+        if (step.amountIn === undefined) {
+          throw new Error('Flashloan has tokenIn but no matching amountIn');
+        }
+        args.amountIn = Array.isArray(step.amountIn) ? step.amountIn : [step.amountIn];
+      }
+
+      // ✅ Only include tokenOut when the action plan specifies expected callback output
+      if (step.tokenOut) {
+        args.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut : [step.tokenOut];
+      }
+
+      // ✅ Optional fields
+      if (step.primaryAddress) {
+        args.primaryAddress = step.primaryAddress;
+      }
+      if (step.receiver) {
+        args.receiver = step.receiver;
+      }
+
       return {
         protocol: step.protocol,
         action: 'flashloan',
-        args: {
-          tokenIn: tokenIn,
-          amountIn: amountIn,
-          tokenOut: tokenOut,
-          flashloanToken: flashloanToken,
-          flashloanAmount: flashloanAmount,
-          callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
-        },
+        args,
       };
     }
     case 'swap':
