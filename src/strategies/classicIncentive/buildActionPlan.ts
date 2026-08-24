@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo, TOKENS } from '../../config/tokens';
+import { executionWallet } from '../../treasury/wallets';
 
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
@@ -52,7 +53,6 @@ async function buildAaveIncentivePlan(
   };
 
   // Step 2: Borrow asset (to earn incentives)
-  // ✅ FIX: Use proper onBehalfOf (not AddressZero)
   const borrowStep: ActionStep = {
     type: 'call',
     protocol: 'custom',
@@ -71,13 +71,14 @@ async function buildAaveIncentivePlan(
     slippage: '100',
   };
 
-  // ✅ Flashloan step: token is the flashloan asset, no user input required
+  // ✅ FIX: Aave V3 flashloan requires tokenIn and amountIn
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    // ✅ No tokenIn/amountIn here – this is a pure flashloan
+    tokenIn: flashLoanToken.address,   // ✅ Required for Aave V3
+    amountIn: flashLoanAmount,          // ✅ Required – matches tokenIn
     callback: [depositStep, borrowStep, swapStep],
   };
 
@@ -131,12 +132,14 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ Flashloan step with both swap steps in callback
+  // ✅ QuickSwap flashloan also needs tokenIn/amountIn for Aave V3
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
+    tokenIn: flashLoanToken.address,   // ✅ Required for Aave V3
+    amountIn: flashLoanAmount,          // ✅ Required – matches tokenIn
     callback: [buyStep, sellStep],
   };
 
@@ -157,7 +160,7 @@ function encodeBorrow(asset: string, amount: string, onBehalfOf: string): string
     amount,
     2, // Variable interest rate mode
     0, // No referral
-    onBehalfOf, // ✅ Valid onBehalfOf address (execution wallet)
+    onBehalfOf,
   ]);
 }
 
@@ -174,6 +177,3 @@ function getTokenPriceUsd(token: TokenInfo): number {
   };
   return priceMap[token.symbol] || 0.01;
 }
-
-// Import executionWallet for the onBehalfOf address
-import { executionWallet } from '../../treasury/wallets';
