@@ -21,6 +21,7 @@ const AAVE_POOL_ABI = [
 // ✅ Get position size from env var (default 5000)
 const CLASSIC_INCENTIVE_POSITION_SIZE_USD = env.CLASSIC_INCENTIVE_POSITION_SIZE_USD ?? 5000;
 
+// ✅ ONLY Aave V3 monitoring – NO SPOL function (removed permanently)
 async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
   const pool = new ethers.Contract(AAVE_POOL, AAVE_POOL_ABI, provider);
@@ -100,6 +101,7 @@ async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandida
   return candidates;
 }
 
+// ✅ QuickSwap V3 monitoring – uses env var for position size (NOT hardcoded 100)
 async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
 
@@ -112,7 +114,7 @@ async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCa
 
   for (const pool of pools) {
     try {
-      // ✅ Use env var for QuickSwap position size too
+      // ✅ Use env var for QuickSwap position size
       const positionSize = CLASSIC_INCENTIVE_POSITION_SIZE_USD;
       const testAmount = ethers.utils.parseUnits(
         (positionSize / getTokenPriceUsd(pool.token0)).toString(),
