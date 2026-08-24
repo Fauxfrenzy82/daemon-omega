@@ -18,8 +18,8 @@ const AAVE_POOL_ABI = [
   'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
 ];
 
-// NEW: Get position size from env var
-const CLASSIC_INCENTIVE_POSITION_SIZE_USD = env.CLASSIC_INCENTIVE_POSITION_SIZE_USD ?? 500;
+// ✅ Get position size from env var (default 5000)
+const CLASSIC_INCENTIVE_POSITION_SIZE_USD = env.CLASSIC_INCENTIVE_POSITION_SIZE_USD ?? 5000;
 
 async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
@@ -46,7 +46,6 @@ async function monitorAaveV3(nativePriceUsd: number): Promise<OpportunityCandida
       const variableBorrowRate = Number(reserveData.currentVariableBorrowRate) / 1e27 * 100;
 
       if (variableBorrowRate < 2 && liquidityRate > 0.5) {
-        // Use env var for position size
         const positionSize = CLASSIC_INCENTIVE_POSITION_SIZE_USD;
         const borrowAmount = ethers.utils.parseUnits(
           (positionSize / getTokenPriceUsd(asset.token)).toString(),
@@ -114,7 +113,7 @@ async function monitorQuickSwapV3(nativePriceUsd: number): Promise<OpportunityCa
   for (const pool of pools) {
     try {
       const testAmount = ethers.utils.parseUnits('100', TOKENS.USDC.decimals);
-      // Pass the token objects directly – they have .address
+      // ✅ Pass TokenInfo objects (they have .address)
       const quote = await getEnsoRouteQuote(pool.token0, pool.token1, testAmount.toString());
 
       if (!quote) continue;
