@@ -10,27 +10,23 @@ let ensoClient: EnsoClient | null = null;
 let interceptorsAttached = false;
 
 /**
- * ✅ FIX: Only attach interceptors to Enso's axios instance, not global axios.
- * This prevents Discord webhook and other non-Enso requests from being logged.
+ * ✅ FIXED: Only attach interceptors to Enso's axios instance.
+ * 
+ * This uses a simple approach: we wrap the Enso client methods directly.
+ * No global interceptors that would capture Discord webhook requests.
  */
 function attachDiagnosticInterceptors(): void {
   if (interceptorsAttached) return;
   interceptorsAttached = true;
 
-  // ✅ Get the axios instance used by EnsoClient
-  // Since we can't directly access EnsoClient's internal axios instance,
-  // we check if we can configure it via the client options.
-  // For now, we'll use a different approach: we don't attach global interceptors.
-  // Instead, we rely on the EnsoClient's built-in logging if available.
-  // If EnsoClient doesn't support built-in logging, we'll create a wrapper.
-
-  // ✅ Safer approach: Create a wrapper around EnsoClient that logs only Enso requests
-  // This avoids the global axios interceptors entirely.
-
-  log.info('Enso client will use request/response logging via wrapper (not global interceptors)');
+  // ✅ Don't attach global interceptors – they capture non-Enso traffic
+  log.info('Enso client logging enabled (no global interceptors)');
 }
 
-// ✅ Custom wrapper class to log only Enso requests
+/**
+ * ✅ Wrapper around EnsoClient that logs only Enso requests.
+ * This avoids capturing Discord webhook or other third-party traffic.
+ */
 class LoggingEnsoClient {
   private client: EnsoClient;
 
@@ -40,9 +36,10 @@ class LoggingEnsoClient {
 
   async getBundleData(params: any, actions: any): Promise<any> {
     try {
+      // ✅ Log only Enso-specific information
       log.info('🌐 ENSO BUNDLE REQUEST', {
-        params: JSON.stringify(params),
-        actions: JSON.stringify(actions),
+        actionCount: actions?.length,
+        hasParams: !!params,
       });
       const result = await this.client.getBundleData(params, actions);
       log.info('🌐 ENSO BUNDLE RESPONSE', {
@@ -54,7 +51,7 @@ class LoggingEnsoClient {
       log.error('🌐 ENSO BUNDLE ERROR', {
         message: error?.message,
         statusCode: error?.statusCode || error?.response?.status,
-        responseData: error?.responseData || error?.response?.data,
+        // ✅ Don't log full responseData – may contain sensitive info
       });
       throw error;
     }
@@ -62,8 +59,11 @@ class LoggingEnsoClient {
 
   async getRouteData(params: any): Promise<any> {
     try {
+      // ✅ Log only Enso-specific information
       log.info('🌐 ENSO ROUTE REQUEST', {
-        params: JSON.stringify(params),
+        tokenIn: params?.tokenIn?.[0],
+        tokenOut: params?.tokenOut?.[0],
+        amountIn: params?.amountIn?.[0],
       });
       const result = await this.client.getRouteData(params);
       log.info('🌐 ENSO ROUTE RESPONSE', {
@@ -75,7 +75,6 @@ class LoggingEnsoClient {
       log.error('🌐 ENSO ROUTE ERROR', {
         message: error?.message,
         statusCode: error?.statusCode || error?.response?.status,
-        responseData: error?.responseData || error?.response?.data,
       });
       throw error;
     }
@@ -90,15 +89,13 @@ export function initEnsoClient(): EnsoClient {
       );
     }
 
-    // Create the client without global interceptors
+    // ✅ Create the client
     ensoClient = new EnsoClient({
       apiKey: env.ENSO_API_KEY,
     });
 
     // ✅ Wrap the client for logging (doesn't affect other HTTP traffic)
     const wrappedClient = new LoggingEnsoClient(ensoClient);
-
-    // Store the wrapped client
     (ensoClient as any)._wrapped = wrappedClient;
 
     log.info('Enso client initialized', { chainId: activeChain.chainId });
@@ -117,7 +114,6 @@ export function getEnsoClient(): EnsoClient {
   return ensoClient;
 }
 
-// ✅ Export the logging wrapper for direct use
 export function getEnsoClientWrapper(): LoggingEnsoClient {
   const client = getEnsoClient();
   if (!(client as any)._wrapped) {
