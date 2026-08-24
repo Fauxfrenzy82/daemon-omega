@@ -28,16 +28,11 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
-/**
- * Convert an ActionStep to an Enso-compatible action object.
- * ✅ FIX: tokenIn and amountIn are now arrays for flashloan.
- * ✅ FIX: tokenIn is always included for Aave V3.
- */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // Enso requires tokenIn and amountIn as arrays
-      // If tokenIn is provided, use it; otherwise use the flashloan token
+      // ✅ FIX: tokenIn and amountIn must be arrays for flashloan
+      // ✅ FIX: tokenIn is required for Aave V3
       const tokenIn = step.tokenIn ? [step.tokenIn] : [step.token];
       const amountIn = step.amountIn ? [step.amountIn] : [step.amount];
       const tokenOut = [step.token];
