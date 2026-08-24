@@ -31,6 +31,7 @@ async function buildAaveIncentivePlan(
   const flashLoanToken = options?.flashLoanToken || asset;
   const flashLoanAmount = borrowAmount;
 
+  // Step 1: Deposit flashloan as collateral into Aave
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -39,14 +40,16 @@ async function buildAaveIncentivePlan(
     primaryAddress: AAVE_POOL,
   };
 
+  // ✅ FIX: Borrow with proper onBehalfOf (not AddressZero)
   const borrowStep: ActionStep = {
     type: 'call',
     protocol: 'custom',
     target: AAVE_POOL,
-    data: encodeBorrow(asset.address, borrowAmount),
+    data: encodeBorrowWithOnBehalf(asset.address, borrowAmount),
     useOutput: true,
   };
 
+  // Step 3: Swap borrowed asset back to flashloan token
   const swapStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -56,13 +59,13 @@ async function buildAaveIncentivePlan(
     slippage: '100',
   };
 
-  // ✅ FIX: Pass tokenIn and amountIn (ensoBuilder will convert to arrays)
+  // Step 4: Flashloan with proper params
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
-    tokenIn: flashLoanToken.address,   // ✅ Will be wrapped in array
-    amountIn: flashLoanAmount,          // ✅ Will be wrapped in array
+    tokenIn: flashLoanToken.address,
+    amountIn: flashLoanAmount,
     amount: flashLoanAmount,
     callback: [depositStep, borrowStep, swapStep],
   };
@@ -78,7 +81,7 @@ async function buildQuickSwapV3Plan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { token0, token1, positionSize } = candidate.params;
+  const { token0, token1, positionSize, quote, reverseQuote } = candidate.params;
 
   const flashLoanToken = options?.flashLoanToken || token0;
   const flashLoanAmount = ethers.utils.parseUnits(
@@ -86,7 +89,9 @@ async function buildQuickSwapV3Plan(
     token0.decimals
   ).toString();
 
-  const swapStep: ActionStep = {
+  // ✅ FIX: Complete round-trip with repayment path
+  // Step 1: Swap token0 → token1 (buy)
+  const buyStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
     tokenIn: flashLoanToken.address,
@@ -95,7 +100,17 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ FIX: Pass tokenIn and amountIn
+  // ✅ Step 2: Swap token1 → token0 (sell back to repay)
+  const sellStep: ActionStep = {
+    type: 'swap',
+    protocol: 'enso',
+    tokenIn: token1.address,
+    tokenOut: flashLoanToken.address,
+    amountIn: { useOutputOfCallAt: 0 }, // Use output of buy step
+    slippage: '100',
+  };
+
+  // Step 3: Flashloan with both swap steps in callback
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
@@ -103,7 +118,7 @@ async function buildQuickSwapV3Plan(
     tokenIn: flashLoanToken.address,
     amountIn: flashLoanAmount,
     amount: flashLoanAmount,
-    callback: [swapStep],
+    callback: [buyStep, sellStep], // ✅ Complete round-trip
   };
 
   return {
@@ -113,16 +128,18 @@ async function buildQuickSwapV3Plan(
   };
 }
 
-function encodeBorrow(asset: string, amount: string): string {
+// ✅ FIX: Proper borrow encoding with correct onBehalfOf
+function encodeBorrowWithOnBehalf(asset: string, amount: string): string {
   const iface = new ethers.utils.Interface([
     'function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf) external',
   ]);
+  // Use a valid address (the execution wallet) as onBehalfOf
   return iface.encodeFunctionData('borrow', [
     asset,
     amount,
-    2,
-    0,
-    ethers.constants.AddressZero,
+    2, // Variable interest rate mode
+    0, // No referral
+    '0xA714a014Db24b6b86e3f465be93736E019fCB47A', // ✅ Valid onBehalfOf address
   ]);
 }
 
