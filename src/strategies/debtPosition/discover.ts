@@ -7,7 +7,6 @@ import { withRetry, isTransientError } from '../../utils/retry';
 import { TOKENS } from '../../config/tokens';
 import { env } from '../../config/env';
 import { pushCandidate } from '../../execution/queue';
-import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('debtPosition');
 
@@ -17,9 +16,24 @@ const log = createLogger('debtPosition');
  */
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
+/**
+ * ✅ CORRECTED ABI: Includes both functions AND the Borrow event.
+ * The Borrow event is needed to decode event logs properly.
+ */
 const POOL_ABI = [
+  // Functions
   'function getUserAccountData(address user) external view returns (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)',
   'function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 variableBorrowIndex, uint128 currentLiquidityRate, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury)',
+  // ✅ Borrow event for log decoding
+  'event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 indexed referralCode)',
+];
+
+/**
+ * ✅ Separate interface for Borrow event decoding.
+ * This is cleaner than trying to use the full POOL_ABI for parsing.
+ */
+const BORROW_EVENT_ABI = [
+  'event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint8 interestRateMode, uint256 borrowRate, uint16 indexed referralCode)',
 ];
 
 interface AccountData {
@@ -32,59 +46,71 @@ interface AccountData {
 }
 
 /**
- * Encode getUserAccountData call data for Enso custom action.
+ * ✅ Fetch recent borrowers from Aave Borrow events.
+ * 
+ * FIXED:
+ * 1. Block range is now exactly `blocksBack` (inclusive range handled correctly).
+ * 2. Uses the correct Borrow event ABI for decoding.
+ * 3. Extracts `onBehalfOf` as the borrower (correct for Aave V3).
+ */
+async function fetchRecentBorrowers(blocksBack: number = 10): Promise<string[]> {
+  const currentBlock = await provider.getBlockNumber();
+  
+  // ✅ JSON-RPC ranges are inclusive.
+  // For exactly `blocksBack` blocks: fromBlock = currentBlock - blocksBack + 1
+  const fromBlock = Math.max(0, currentBlock - blocksBack + 1);
+  const toBlock = currentBlock;
+
+  log.debug(`Fetching Borrow events from blocks ${fromBlock} to ${toBlock} (${blocksBack} blocks)`);
+
+  // ✅ Correct event signature
+  const borrowEventTopic = ethers.utils.id(
+    'Borrow(address,address,address,uint256,uint8,uint256,uint16)'
+  );
+
+  try {
+    const logs = await provider.getLogs({
+      address: AAVE_POOL,
+      fromBlock,
+      toBlock,
+      topics: [borrowEventTopic],
+    });
+
+    // ✅ Use a dedicated interface for Borrow event parsing
+    const borrowInterface = new ethers.utils.Interface(BORROW_EVENT_ABI);
+    const borrowers = new Set<string>();
+
+    for (const eventLog of logs) {
+      try {
+        const parsed = borrowInterface.parseLog(eventLog);
+        // ✅ In Aave V3, `onBehalfOf` is the borrower (the one who owes debt)
+        const borrower = parsed.args.onBehalfOf as string;
+        if (ethers.utils.isAddress(borrower)) {
+          borrowers.add(borrower.toLowerCase());
+        }
+      } catch (err) {
+        log.debug('Failed to decode Aave Borrow event', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    log.debug(`Found ${borrowers.size} unique borrowers from recent Borrow events`);
+    return [...borrowers];
+  } catch (err) {
+    log.warn('Failed to fetch Borrow events', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
+/**
+ * ✅ Encode getUserAccountData call data for Enso custom action.
  */
 function encodeGetUserAccountData(user: string): string {
   const iface = new ethers.utils.Interface(POOL_ABI);
   return iface.encodeFunctionData('getUserAccountData', [user]);
-}
-
-/**
- * Fetch potential borrowers from recent Borrow events on Aave V3 Pool.
- * ✅ FIX: toBlock is set to currentBlock, not 'latest'.
- * This ensures Alchemy's 10-block limit is actually respected.
- */
-async function fetchRecentBorrowers(blocksBack: number = 10): Promise<string[]> {
-  const borrowers: string[] = [];
-  const currentBlock = await provider.getBlockNumber();
-  const fromBlock = Math.max(0, currentBlock - blocksBack);
-
-  const filter = {
-    address: AAVE_POOL,
-    fromBlock,
-    toBlock: currentBlock, // ✅ FIX: Use currentBlock, not 'latest'
-  };
-
-  const borrowEventSignature = 'Borrow(address,address,address,uint256,uint256,uint256,uint16)';
-  const borrowEventTopic = ethers.utils.id(borrowEventSignature);
-
-  try {
-    const logs = await provider.getLogs({
-      ...filter,
-      topics: [borrowEventTopic],
-    });
-
-    const iface = new ethers.utils.Interface(POOL_ABI);
-    for (const log of logs) {
-      try {
-        const parsed = iface.parseLog(log);
-        const user = parsed.args[1] as string;
-        if (user && !borrowers.includes(user)) {
-          borrowers.push(user);
-        }
-      } catch (err) {
-        // Skip unparseable logs
-      }
-    }
-
-    log.debug(`Found ${borrowers.length} unique borrowers from recent Borrow events`);
-  } catch (err) {
-    log.warn('Failed to fetch Borrow events, using fallback borrowers', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  return borrowers;
 }
 
 export async function discoverDebtPosition(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
@@ -92,16 +118,14 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
 
   log.info('🔍 Debt Position discovery started');
 
-  // Fetch borrowers from recent Borrow events (10 blocks = actual 10 blocks now)
   const borrowers = await fetchRecentBorrowers(10);
 
   if (borrowers.length === 0) {
-    log.info('📭 Debt Position: No recent borrowers found. This strategy requires active borrowing activity to find opportunities.');
+    log.info('📭 Debt Position: No recent borrowers found.');
     return [];
   }
 
   const pool = new ethers.Contract(AAVE_POOL, POOL_ABI, provider);
-  const enso = getEnsoClient();
 
   for (const borrower of borrowers) {
     try {
@@ -115,6 +139,16 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
       if (healthFactor >= 1) {
         continue;
       }
+
+      // ✅ FIX: We need to get the actual debt and collateral assets.
+      // For v1, we use a simplified approach: check the user's reserves.
+      // In production, you'd query the subgraph or use a more sophisticated method.
+      // For now, we'll use the same approach but log a warning.
+      log.debug(`Liquidatable borrower found: ${borrower}`, { healthFactor });
+
+      // ✅ FIX: Use a placeholder approach that logs the actual issue.
+      // This tells us what we need to fix next: getting real position data.
+      log.warn('Debt Position strategy needs real position data. Currently using placeholders.');
 
       const debtAsset = TOKENS.USDC;
       const collateralAsset = TOKENS.WETH;
@@ -151,12 +185,6 @@ export async function discoverDebtPosition(nativePriceUsd: number): Promise<Oppo
           healthFactor,
           grossProfitUsd: grossProfitUsd.toFixed(4),
           netProfitUsd: netProfitUsd.toFixed(4),
-        });
-      } else {
-        log.debug(`Debt position for ${borrower.slice(0, 10)} below profit threshold`, {
-          healthFactor,
-          netProfitUsd: netProfitUsd.toFixed(6),
-          threshold: env.DEFAULT_MIN_PROFIT_USD
         });
       }
     } catch (err) {
