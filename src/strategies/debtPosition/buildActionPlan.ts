@@ -39,7 +39,7 @@ export async function buildActionPlan(
     debtAsset.address,
     borrower,
     debtToCover,
-    false
+    false // receiveAToken = false (receive underlying collateral)
   );
 
   const liquidationStep: ActionStep = {
