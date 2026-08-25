@@ -18,7 +18,7 @@ export interface ActionPlan {
   steps: ActionStep[];
 }
 
-export type FlashloanProtocol = 
+export type FlashloanProtocol =
   | 'aave-v3'
   | 'morpho-markets-v1'
   | 'balancer-v3'
@@ -28,31 +28,61 @@ export type FlashloanProtocol =
   | 'hyperlend'
   | 'kodiak';
 
-/**
- * ✅ CORRECTED ActionStep model for flashloans.
- * 
- * The key distinction:
- * - token/amount: the flash-borrowed asset (flashloanToken/flashloanAmount)
- * - tokenIn/amountIn: USER-SUPPLIED input/collateral (optional, semantically different)
- * - tokenOut: expected callback output (optional)
- * 
- * These are NOT interchangeable.
- */
 export type ActionStep =
-  | { 
-      type: 'flashloan'; 
-      protocol: FlashloanProtocol; 
-      token: string;           // flashloanToken
-      amount: string;          // flashloanAmount
-      tokenIn?: string | string[];      // User-supplied input (optional)
-      amountIn?: string | string[] | { useOutputOfCallAt: number }; // Matching user input
-      tokenOut?: string | string[];     // Expected callback output (optional)
+  | {
+      type: 'flashloan';
+      protocol: FlashloanProtocol;
+      token: string;           // flashloanToken - the asset being flash-borrowed
+      amount: string;          // flashloanAmount - the amount being flash-borrowed
+      tokenIn?: string | string[];
+      amountIn?: string | string[] | { useOutputOfCallAt: number };
+      tokenOut?: string | string[];
       callback: ActionStep[];
       primaryAddress?: string;
       receiver?: string;
     }
-  | { type: 'swap'; protocol: 'enso'; tokenIn: string; tokenOut: string; amountIn: string | { useOutputOfCallAt: number }; slippage: string; primaryAddress?: string; poolFee?: number }
-  | { type: 'deposit'; protocol: 'aave-v3' | 'stata'; token: string; amount: string | { useOutputOfCallAt: number }; primaryAddress?: string }
-  | { type: 'withdraw'; protocol: 'aave-v3' | 'stata'; token: string; amount: string | { useOutputOfCallAt: number }; primaryAddress?: string }
-  | { type: 'harvest'; protocol: 'enso'; positionAddress: string; token?: string }
-  | { type: 'call'; protocol: 'custom'; target: string; data: string; value?: string; useOutput?: boolean };
+  | {
+      type: 'swap';
+      protocol: 'enso';
+      tokenIn: string;
+      tokenOut: string;
+      amountIn: string | { useOutputOfCallAt: number };
+      slippage: string;
+      primaryAddress?: string;
+      poolFee?: number;
+    }
+  | {
+      type: 'deposit';
+      protocol: 'aave-v3' | 'stata';
+      token: string;
+      amount: string | { useOutputOfCallAt: number };
+      primaryAddress?: string;
+    }
+  | {
+      type: 'withdraw';
+      protocol: 'aave-v3' | 'stata';
+      token: string;
+      amount: string | { useOutputOfCallAt: number };
+      primaryAddress?: string;
+    }
+  | {
+      type: 'borrow';
+      protocol: 'aave-v3';
+      token: string;
+      amount: string | { useOutputOfCallAt: number };
+      primaryAddress?: string;
+    }
+  | {
+      type: 'harvest';
+      protocol: 'enso';
+      positionAddress: string;
+      token?: string;
+    }
+  | {
+      type: 'call';
+      protocol: 'custom';
+      target: string;
+      data: string;
+      value?: string;
+      useOutput?: boolean;
+    };
