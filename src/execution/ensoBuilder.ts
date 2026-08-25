@@ -31,44 +31,52 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 /**
  * Convert an ActionStep to an Enso-compatible action object.
  *
- * 🔥 FIX: According to Enso's official Flashloan API specification [citation:2][citation:7],
- * tokenIn and amountIn MUST be inside the `args` object, NOT at the root level.
- * The error "aave-v3 requires tokenIn as input" occurs because Enso validates
- * args.tokenIn and cannot find it.
+ * Enso's bundle API schema for a flashloan action:
+ * {
+ *   protocol: 'aave-v3',
+ *   action: 'flashloan',
+ *   tokenIn: ['0x...'],   <-- ROOT level, array
+ *   amountIn: ['12345'],  <-- ROOT level, array
+ *   args: {
+ *     callback: [...]
+ *   }
+ * }
+ *
+ * tokenIn and amountIn are ROOT-level fields, NOT inside args.
+ * Placing them inside args causes Enso to return 422:
+ * "aave-v3 requires tokenIn as input"
  */
-function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
+function convertStepToEnsoAction(
+  step: ActionStep,
+  context: { flashLoanAmount: string }
+): any {
   switch (step.type) {
     case 'flashloan': {
       if (!step.token) {
-        throw new Error('Flashloan step missing flashloan token');
+        throw new Error('Flashloan step missing token');
       }
       if (!step.amount) {
-        throw new Error('Flashloan step missing flashloan amount');
+        throw new Error('Flashloan step missing amount');
       }
       if (!step.callback || step.callback.length === 0) {
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // ✅ Build args with flashloan-specific parameters
+      // tokenIn/amountIn default to the flash-borrowed token/amount if not explicitly set
+      const rawTokenIn = step.tokenIn ?? step.token;
+      const rawAmountIn = step.amountIn ?? step.amount;
+
+      // Enso requires these as arrays at the root level of the action object
+      const tokenIn: string[] = Array.isArray(rawTokenIn)
+        ? rawTokenIn
+        : [rawTokenIn as string];
+      const amountIn: string[] = Array.isArray(rawAmountIn)
+        ? rawAmountIn
+        : [rawAmountIn as string];
+
       const args: Record<string, any> = {
-        flashloanToken: step.token,
-        flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
-
-      // ✅ FIX: tokenIn and amountIn go INSIDE args (not at root)
-      // This matches Enso's FlashloanArgs type definition [citation:7]
-      if (step.tokenIn) {
-        args.tokenIn = Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn;
-        if (step.amountIn === undefined) {
-          throw new Error('Flashloan has tokenIn but no matching amountIn');
-        }
-        args.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
-      }
-
-      if (step.tokenOut) {
-        args.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
-      }
 
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress;
@@ -77,12 +85,16 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         args.receiver = step.receiver;
       }
 
+      // tokenIn and amountIn go at ROOT level, not inside args
       return {
         protocol: step.protocol,
         action: 'flashloan',
+        tokenIn,
+        amountIn,
         args,
       };
     }
+
     case 'swap':
       return {
         protocol: 'enso',
@@ -90,32 +102,58 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         args: {
           tokenIn: step.tokenIn,
           tokenOut: step.tokenOut,
-          amountIn: typeof step.amountIn === 'string' ? step.amountIn : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
+          amountIn:
+            typeof step.amountIn === 'string'
+              ? step.amountIn
+              : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
           slippage: step.slippage,
           ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
           ...(step.poolFee !== undefined ? { poolFee: step.poolFee } : {}),
         },
       };
+
     case 'deposit':
       return {
         protocol: step.protocol,
         action: 'deposit',
         args: {
           token: step.token,
-          amount: typeof step.amount === 'string' ? step.amount : { useOutputOfCallAt: step.amount.useOutputOfCallAt },
+          amount:
+            typeof step.amount === 'string'
+              ? step.amount
+              : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
           ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
         },
       };
+
     case 'withdraw':
       return {
         protocol: step.protocol,
         action: 'withdraw',
         args: {
           token: step.token,
-          amount: typeof step.amount === 'string' ? step.amount : { useOutputOfCallAt: step.amount.useOutputOfCallAt },
+          amount:
+            typeof step.amount === 'string'
+              ? step.amount
+              : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
           ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
         },
       };
+
+    case 'borrow':
+      return {
+        protocol: step.protocol,
+        action: 'borrow',
+        args: {
+          token: step.token,
+          amount:
+            typeof step.amount === 'string'
+              ? step.amount
+              : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
+          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+        },
+      };
+
     case 'harvest':
       return {
         protocol: 'enso',
@@ -125,6 +163,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
           ...(step.token ? { token: step.token } : {}),
         },
       };
+
     case 'call':
       return {
         protocol: 'custom',
@@ -136,6 +175,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
           useOutput: step.useOutput || false,
         },
       };
+
     default:
       throw new Error(`Unsupported action step type: ${(step as any).type}`);
   }
@@ -146,7 +186,9 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   const chainId = activeChain.chainId;
   const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
 
-  const actions = plan.steps.map(step => convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount }));
+  const actions = plan.steps.map(step =>
+    convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount })
+  );
 
   const bundleParams = {
     fromAddress,
@@ -154,14 +196,14 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
     routingStrategy: 'router' as const,
   };
 
-  const cacheKey = `${JSON.stringify(actions)}`;
+  const cacheKey = JSON.stringify(actions);
 
-  // 🔥 Clear cache to prevent stale malformed bundles
+  // Always clear cache before checking — stale malformed bundles must not be reused
   bundleCache.delete(cacheKey);
 
   const cached = bundleCache.get(cacheKey);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    log.info(`✅ Using cached bundle for plan`);
+    log.info('✅ Using cached bundle for plan');
     return {
       bundleData: cached.data,
       flashLoanAmount: plan.flashLoanAmount,
@@ -184,7 +226,7 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
       log.warn(`⏳ Rate limited, caching failure for ${CACHE_TTL_MS}ms`);
       bundleCache.set(cacheKey, { data: null, timestamp: Date.now() });
     } else {
-      log.error(`❌ Enso API error building bundle`, {
+      log.error('❌ Enso API error building bundle', {
         isEnsoApiError,
         statusCode: error?.statusCode || error?.response?.status,
         responseData: error?.responseData || error?.response?.data,
