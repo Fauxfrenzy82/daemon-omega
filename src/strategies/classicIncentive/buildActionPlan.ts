@@ -1,8 +1,7 @@
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
-import { TokenInfo, TOKENS } from '../../config/tokens';
-import { executionWallet } from '../../treasury/wallets';
+import { TokenInfo } from '../../config/tokens';
 
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
@@ -25,20 +24,15 @@ export async function buildActionPlan(
 /**
  * Aave V3 incentive plan.
  *
- * Flashloans the asset, deposits it as collateral, borrows the same
- * asset to earn incentive rewards, then repays the flashloan.
+ * Enso flashloan callback sequence:
+ *   1. deposit  — flashloaned asset into Aave as collateral
+ *                 args: { tokenIn, amountIn, primaryAddress }
+ *   2. borrow   — borrow same/different asset to earn incentives
+ *                 args: { collateral, tokenOut, amountOut, primaryAddress }
  *
- * Steps inside callback:
- *   1. deposit   — deposit flashloan proceeds as Aave collateral
- *   2. borrow    — borrow same asset to earn incentive spread
- *
- * Only adds a swap step if the borrowed asset differs from the
- * flashloan token (they are the same in standard aaveIncentive
- * candidates, so the swap is skipped).
- *
- * IMPORTANT: borrowStep uses type 'borrow' (an Enso-native action),
- * NOT type 'call' with raw ABI-encoded data. Raw calls to external
- * contracts are not supported inside Enso flashloan callbacks.
+ * The flashloan action args use flashloanToken / flashloanAmount
+ * (not tokenIn/amountIn — those are different Enso field names used
+ *  by deposit/swap actions).
  */
 async function buildAaveIncentivePlan(
   candidate: OpportunityCandidate,
@@ -50,30 +44,30 @@ async function buildAaveIncentivePlan(
   const flashLoanAmount: string = borrowAmount;
 
   // Step 1: deposit the flash-borrowed amount into Aave as collateral
+  // Enso deposit: args.tokenIn / args.amountIn / args.primaryAddress
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
-    token: flashLoanToken.address,
-    amount: flashLoanAmount,
+    token: flashLoanToken.address,   // becomes args.tokenIn in ensoBuilder
+    amount: flashLoanAmount,          // becomes args.amountIn in ensoBuilder
     primaryAddress: AAVE_POOL,
   };
 
-  // Step 2: borrow the incentive asset using Enso's native borrow action.
-  // Do NOT use type 'call' with encodeBorrow() — raw external calls are
-  // rejected inside Enso flashloan callbacks.
+  // Step 2: borrow the incentive asset.
+  // Enso borrow: args.collateral / args.tokenOut / args.amountOut / args.primaryAddress
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
-    token: asset.address,
-    amount: borrowAmount,
+    collateral: flashLoanToken.address,  // becomes args.collateral in ensoBuilder
+    token: asset.address,                // becomes args.tokenOut in ensoBuilder
+    amount: borrowAmount,                // becomes args.amountOut in ensoBuilder
     primaryAddress: AAVE_POOL,
   };
 
   const callback: ActionStep[] = [depositStep, borrowStep];
 
   // Only swap borrowed asset back if it differs from the flashloan token.
-  // When they are the same (standard case), skip the swap — including an
-  // unnecessary swap is what previously caused the Enso 422 validation error.
+  // When they are the same (standard aaveIncentive case) skip the swap.
   if (asset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
     const swapStep: ActionStep = {
       type: 'swap',
@@ -86,15 +80,12 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
+  // Flashloan action: args.flashloanToken / args.flashloanAmount / args.callback
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
-    token: flashLoanToken.address,
-    amount: flashLoanAmount,
-    // tokenIn/amountIn default to token/amount in ensoBuilder when not set,
-    // but set them explicitly here for clarity and to satisfy Enso validation.
-    tokenIn: flashLoanToken.address,
-    amountIn: flashLoanAmount,
+    token: flashLoanToken.address,   // becomes args.flashloanToken in ensoBuilder
+    amount: flashLoanAmount,          // becomes args.flashloanAmount in ensoBuilder
     callback,
   };
 
@@ -107,7 +98,7 @@ async function buildAaveIncentivePlan(
 
 /**
  * QuickSwap V3 round-trip arbitrage plan.
- * Flash-borrows token0, swaps to token1, swaps back to token0, repays.
+ * Flash-borrows token0, swaps to token1, swaps back, repays.
  */
 async function buildQuickSwapV3Plan(
   candidate: OpportunityCandidate,
@@ -123,7 +114,6 @@ async function buildQuickSwapV3Plan(
     )
     .toString();
 
-  // Step 1: swap token0 → token1
   const buyStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -133,13 +123,12 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // Step 2: swap token1 → token0 to repay flashloan
   const sellStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
     tokenIn: token1.address,
     tokenOut: flashLoanToken.address,
-    amountIn: { useOutputOfCallAt: 0 }, // output of buyStep (index 0)
+    amountIn: { useOutputOfCallAt: 0 },
     slippage: '100',
   };
 
@@ -148,8 +137,6 @@ async function buildQuickSwapV3Plan(
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    tokenIn: flashLoanToken.address,
-    amountIn: flashLoanAmount,
     callback: [buyStep, sellStep],
   };
 
