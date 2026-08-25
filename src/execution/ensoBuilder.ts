@@ -31,14 +31,14 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 /**
  * Convert an ActionStep to an Enso-compatible action object.
  *
- * Enso flashloan args schema (from official docs):
+ * Enso flashloan args schema (confirmed from official docs):
  * {
  *   protocol: 'aave-v3',
  *   action: 'flashloan',
  *   args: {
- *     flashloanToken: '0x...',    <-- token to borrow (inside args)
- *     flashloanAmount: '12345',   <-- amount to borrow (inside args)
- *     callback: [...]             <-- callback actions (inside args)
+ *     flashloanToken: ['0x...'],   <-- array inside args
+ *     flashloanAmount: ['12345'],  <-- array inside args
+ *     callback: [...]
  *   }
  * }
  *
@@ -46,29 +46,17 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
  * {
  *   protocol: 'aave-v3',
  *   action: 'deposit',
- *   args: {
- *     tokenIn: '0x...',
- *     amountIn: '12345',
- *     primaryAddress: '0x...'
- *   }
+ *   args: { tokenIn, amountIn, primaryAddress }
  * }
  *
  * Enso borrow args schema:
  * {
  *   protocol: 'aave-v3',
  *   action: 'borrow',
- *   args: {
- *     collateral: '0x...',
- *     tokenOut: '0x...',
- *     amountOut: '12345',
- *     primaryAddress: '0x...'
- *   }
+ *   args: { collateral, tokenOut, amountOut, primaryAddress }
  * }
  */
-function convertStepToEnsoAction(
-  step: ActionStep,
-  context: { flashLoanAmount: string }
-): any {
+function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
       if (!step.token) {
@@ -81,20 +69,15 @@ function convertStepToEnsoAction(
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // Enso flashloan args use flashloanToken / flashloanAmount
-      // inside the args object — NOT tokenIn/amountIn, NOT at root level.
       const args: Record<string, any> = {
-        flashloanToken: step.token,
-        flashloanAmount: step.amount,
+        // Enso requires arrays for flashloanToken and flashloanAmount
+        flashloanToken: [step.token],
+        flashloanAmount: [step.amount],
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      if (step.primaryAddress) {
-        args.primaryAddress = step.primaryAddress;
-      }
-      if (step.receiver) {
-        args.receiver = step.receiver;
-      }
+      if (step.primaryAddress) args.primaryAddress = step.primaryAddress;
+      if (step.receiver) args.receiver = step.receiver;
 
       return {
         protocol: step.protocol,
@@ -121,7 +104,7 @@ function convertStepToEnsoAction(
       };
 
     case 'deposit':
-      // Enso deposit uses tokenIn / amountIn (confirmed from official docs)
+      // Enso deposit: args.tokenIn / args.amountIn / args.primaryAddress
       return {
         protocol: step.protocol,
         action: 'deposit',
@@ -136,6 +119,7 @@ function convertStepToEnsoAction(
       };
 
     case 'withdraw':
+      // Enso uses 'redeem' not 'withdraw'
       return {
         protocol: step.protocol,
         action: 'redeem',
@@ -150,7 +134,7 @@ function convertStepToEnsoAction(
       };
 
     case 'borrow':
-      // Enso borrow uses collateral / tokenOut / amountOut (confirmed from official docs)
+      // Enso borrow: args.collateral / args.tokenOut / args.amountOut / args.primaryAddress
       return {
         protocol: step.protocol,
         action: 'borrow',
