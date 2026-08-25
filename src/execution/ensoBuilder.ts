@@ -31,20 +31,39 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 /**
  * Convert an ActionStep to an Enso-compatible action object.
  *
- * Enso's bundle API schema for a flashloan action:
+ * Enso flashloan args schema (from official docs):
  * {
  *   protocol: 'aave-v3',
  *   action: 'flashloan',
- *   tokenIn: ['0x...'],   <-- ROOT level, array
- *   amountIn: ['12345'],  <-- ROOT level, array
  *   args: {
- *     callback: [...]
+ *     flashloanToken: '0x...',    <-- token to borrow (inside args)
+ *     flashloanAmount: '12345',   <-- amount to borrow (inside args)
+ *     callback: [...]             <-- callback actions (inside args)
  *   }
  * }
  *
- * tokenIn and amountIn are ROOT-level fields, NOT inside args.
- * Placing them inside args causes Enso to return 422:
- * "aave-v3 requires tokenIn as input"
+ * Enso deposit args schema:
+ * {
+ *   protocol: 'aave-v3',
+ *   action: 'deposit',
+ *   args: {
+ *     tokenIn: '0x...',
+ *     amountIn: '12345',
+ *     primaryAddress: '0x...'
+ *   }
+ * }
+ *
+ * Enso borrow args schema:
+ * {
+ *   protocol: 'aave-v3',
+ *   action: 'borrow',
+ *   args: {
+ *     collateral: '0x...',
+ *     tokenOut: '0x...',
+ *     amountOut: '12345',
+ *     primaryAddress: '0x...'
+ *   }
+ * }
  */
 function convertStepToEnsoAction(
   step: ActionStep,
@@ -62,19 +81,11 @@ function convertStepToEnsoAction(
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // tokenIn/amountIn default to the flash-borrowed token/amount if not explicitly set
-      const rawTokenIn = step.tokenIn ?? step.token;
-      const rawAmountIn = step.amountIn ?? step.amount;
-
-      // Enso requires these as arrays at the root level of the action object
-      const tokenIn: string[] = Array.isArray(rawTokenIn)
-        ? rawTokenIn
-        : [rawTokenIn as string];
-      const amountIn: string[] = Array.isArray(rawAmountIn)
-        ? rawAmountIn
-        : [rawAmountIn as string];
-
+      // Enso flashloan args use flashloanToken / flashloanAmount
+      // inside the args object — NOT tokenIn/amountIn, NOT at root level.
       const args: Record<string, any> = {
+        flashloanToken: step.token,
+        flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
@@ -85,12 +96,9 @@ function convertStepToEnsoAction(
         args.receiver = step.receiver;
       }
 
-      // tokenIn and amountIn go at ROOT level, not inside args
       return {
         protocol: step.protocol,
         action: 'flashloan',
-        tokenIn,
-        amountIn,
         args,
       };
     }
@@ -113,12 +121,13 @@ function convertStepToEnsoAction(
       };
 
     case 'deposit':
+      // Enso deposit uses tokenIn / amountIn (confirmed from official docs)
       return {
         protocol: step.protocol,
         action: 'deposit',
         args: {
-          token: step.token,
-          amount:
+          tokenIn: step.token,
+          amountIn:
             typeof step.amount === 'string'
               ? step.amount
               : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -129,10 +138,10 @@ function convertStepToEnsoAction(
     case 'withdraw':
       return {
         protocol: step.protocol,
-        action: 'withdraw',
+        action: 'redeem',
         args: {
-          token: step.token,
-          amount:
+          tokenIn: step.token,
+          amountIn:
             typeof step.amount === 'string'
               ? step.amount
               : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -141,12 +150,14 @@ function convertStepToEnsoAction(
       };
 
     case 'borrow':
+      // Enso borrow uses collateral / tokenOut / amountOut (confirmed from official docs)
       return {
         protocol: step.protocol,
         action: 'borrow',
         args: {
-          token: step.token,
-          amount:
+          collateral: step.collateral,
+          tokenOut: step.token,
+          amountOut:
             typeof step.amount === 'string'
               ? step.amount
               : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -197,8 +208,6 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   };
 
   const cacheKey = JSON.stringify(actions);
-
-  // Always clear cache before checking — stale malformed bundles must not be reused
   bundleCache.delete(cacheKey);
 
   const cached = bundleCache.get(cacheKey);
