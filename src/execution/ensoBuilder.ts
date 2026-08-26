@@ -29,50 +29,42 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 ];
 
 /**
- * Convert an ActionStep to an Enso-compatible action object.
- *
- * Enso flashloan args schema (confirmed from official docs):
+ * Enso flashloan args schema (from official docs):
  * {
- *   protocol: 'aave-v3',
- *   action: 'flashloan',
+ *   protocol: "aave-v3",
+ *   action: "flashloan",
  *   args: {
- *     flashloanToken: ['0x...'],   <-- array inside args
- *     flashloanAmount: ['12345'],  <-- array inside args
+ *     flashloanToken: "0x...",   <-- SCALAR string for single token
+ *     flashloanAmount: "12345",  <-- SCALAR string for single token
  *     callback: [...]
  *   }
  * }
  *
- * Enso deposit args schema:
- * {
- *   protocol: 'aave-v3',
- *   action: 'deposit',
- *   args: { tokenIn, amountIn, primaryAddress }
- * }
+ * Arrays (string[]) are only used for multi-token flashloans.
+ * Passing an array for a single token causes Enso to throw
+ * "Invalid address type" because the address parser receives
+ * an array where it expects a string.
  *
- * Enso borrow args schema:
- * {
- *   protocol: 'aave-v3',
- *   action: 'borrow',
- *   args: { collateral, tokenOut, amountOut, primaryAddress }
- * }
+ * Enso deposit args:
+ * { tokenIn, amountIn, primaryAddress }
+ *
+ * Enso borrow args:
+ * { collateral, tokenOut, amountOut, primaryAddress }
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      if (!step.token) {
-        throw new Error('Flashloan step missing token');
-      }
-      if (!step.amount) {
-        throw new Error('Flashloan step missing amount');
-      }
+      if (!step.token) throw new Error('Flashloan step missing token');
+      if (!step.amount) throw new Error('Flashloan step missing amount');
       if (!step.callback || step.callback.length === 0) {
         throw new Error('Flashloan must contain at least one callback action');
       }
 
       const args: Record<string, any> = {
-        // Enso requires arrays for flashloanToken and flashloanAmount
-        flashloanToken: [step.token],
-        flashloanAmount: [step.amount],
+        // Scalar strings for single-token flashloan — NOT arrays.
+        // Arrays are only valid when borrowing multiple tokens simultaneously.
+        flashloanToken: step.token,
+        flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
@@ -104,7 +96,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       };
 
     case 'deposit':
-      // Enso deposit: args.tokenIn / args.amountIn / args.primaryAddress
       return {
         protocol: step.protocol,
         action: 'deposit',
@@ -119,7 +110,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       };
 
     case 'withdraw':
-      // Enso uses 'redeem' not 'withdraw'
       return {
         protocol: step.protocol,
         action: 'redeem',
@@ -134,7 +124,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       };
 
     case 'borrow':
-      // Enso borrow: args.collateral / args.tokenOut / args.amountOut / args.primaryAddress
       return {
         protocol: step.protocol,
         action: 'borrow',
@@ -184,6 +173,10 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   const actions = plan.steps.map(step =>
     convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount })
   );
+
+  log.info('ENSO FLASHLOAN ACTION PAYLOAD', {
+    action: JSON.stringify(actions[0], null, 2),
+  });
 
   const bundleParams = {
     fromAddress,
