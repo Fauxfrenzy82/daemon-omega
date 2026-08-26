@@ -36,7 +36,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // FIXED: Strictly matching the explicit single-asset non-array Enso layout parameters
       const args: Record<string, any> = {
         flashloanToken: ethers.utils.getAddress(step.token),
         flashloanAmount: step.amount.toString(),
