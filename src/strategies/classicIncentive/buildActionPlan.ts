@@ -1,3 +1,4 @@
+// src/strategies/classicIncentive/buildActionPlan.ts
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
@@ -7,7 +8,6 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('buildActionPlan');
 
-// The formal contract bridge target required by Enso for Aave V3 interactions
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
 export async function buildActionPlan(
@@ -29,70 +29,87 @@ async function buildAaveIncentivePlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { asset, borrowAmount } = candidate.params;
+  // FIX: discover now sets asset=collateral, borrowAsset=USDC (separate token).
+  // The flashloan is taken in the collateral token, deposited into Aave, then
+  // USDC is borrowed against it. If collateral !== flashloan token we add a swap.
+  const { asset, borrowAsset, borrowAmount } = candidate.params;
 
   log.info('BUILDING AAVE INCENTIVE PLAN', {
-    asset: asset.symbol,
-    assetAddress: asset.address,
+    collateral: asset.symbol,
+    collateralAddress: asset.address,
+    borrowAsset: borrowAsset.symbol,
+    borrowAssetAddress: borrowAsset.address,
     borrowAmount,
     executionWalletAddress: executionWallet.address,
   });
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
-  const ltvCaps: Record<string, number> = {
-    USDC: 0.78,
-    DAI: 0.78,
-    WETH: 0.78,
+  const LTV_CAPS: Record<string, number> = {
+    USDC:   0.78,
+    DAI:    0.78,
+    WETH:   0.78,
     WMATIC: 0.65,
-    WBTC: 0.73,
-    AAVE: 0.60, 
+    WBTC:   0.73,
+    AAVE:   0.60,
   };
-  const safeLtv = ltvCaps[flashLoanToken.symbol] || 0.65;
+  const safeLtv = LTV_CAPS[flashLoanToken.symbol] || 0.65;
 
   const borrowBig = ethers.BigNumber.from(borrowAmount);
   const ltvMultiplier = ethers.BigNumber.from(Math.floor(safeLtv * 10000));
   const flashLoanAmountBig = borrowBig.mul(10000).div(ltvMultiplier);
   const flashLoanAmount: string = flashLoanAmountBig.toString();
 
+  // Step 0: deposit the flashloaned collateral into Aave
+  // primaryAddress required on deposit callback steps for aave-v3
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
+    primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
   };
 
   log.info('DEPOSIT STEP CREATED', {
-    step: JSON.stringify(depositStep, null, 2),
-    hasOnBehalfOf: !!depositStep.onBehalfOf,
-    onBehalfOfValue: depositStep.onBehalfOf,
+    token: flashLoanToken.symbol,
+    amount: flashLoanAmount,
+    primaryAddress: AAVE_POOL,
+    onBehalfOf: executionWallet.address,
   });
 
+  // Step 1: borrow USDC (or borrowAsset) against the deposited collateral
+  // FIX: collateral field = what we deposited (flashLoanToken), token = what we borrow (borrowAsset)
+  // primaryAddress required on borrow callback steps for aave-v3
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
-    collateral: flashLoanToken.address,
-    token: asset.address,
+    collateral: flashLoanToken.address,   // what's locked as collateral
+    token: borrowAsset.address,            // what we're borrowing
     amount: borrowAmount,
+    primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
   };
 
   log.info('BORROW STEP CREATED', {
-    step: JSON.stringify(borrowStep, null, 2),
-    hasOnBehalfOf: !!borrowStep.onBehalfOf,
-    onBehalfOfValue: borrowStep.onBehalfOf,
+    collateral: flashLoanToken.symbol,
+    borrowToken: borrowAsset.symbol,
+    amount: borrowAmount,
+    primaryAddress: AAVE_POOL,
+    onBehalfOf: executionWallet.address,
   });
 
   const callback: ActionStep[] = [depositStep, borrowStep];
 
-  if (asset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
+  // If we borrowed something other than the flashloan token, swap borrowed asset → flashloan token
+  // so we can repay the flashloan
+  if (borrowAsset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
     const swapStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
-      tokenIn: asset.address,
+      tokenIn: borrowAsset.address,
       tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 1 },
+      amountIn: { useOutputOfCallAt: 1 }, // output of the borrow step (index 1)
       slippage: '100',
     };
     callback.push(swapStep);
@@ -103,7 +120,7 @@ async function buildAaveIncentivePlan(
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL, // ✅ Bound strictly to the parent layer to satisfy layout rules
+    primaryAddress: AAVE_POOL,
     callback,
   };
 
@@ -169,10 +186,10 @@ function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
   const priceMap: Record<string, number> = {
     WMATIC: 0.1,
-    WETH: 3000,
-    WBTC: 60000,
-    AAVE: 150,
-    QUICK: 0.05,
+    WETH:   3000,
+    WBTC:   60000,
+    AAVE:   150,
+    QUICK:  0.05,
   };
   return priceMap[token.symbol] ?? 0.01;
 }
