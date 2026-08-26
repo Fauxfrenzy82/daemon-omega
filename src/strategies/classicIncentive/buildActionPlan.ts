@@ -39,7 +39,6 @@ async function buildAaveIncentivePlan(
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
-  // Added AAVE to ltvCaps to avoid over-leveraging assets during loop initialization
   const ltvCaps: Record<string, number> = {
     USDC: 0.78,
     DAI: 0.78,
