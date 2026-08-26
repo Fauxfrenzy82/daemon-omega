@@ -36,16 +36,17 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
+      // FIXED: Adjusted property naming to match Enso parameters
       const args: Record<string, any> = {
-        flashloanToken: ethers.utils.getAddress(step.token),
-        flashloanAmount: step.amount.toString(),
+        token: ethers.utils.getAddress(step.token),
+        amount: step.amount.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
       if (step.primaryAddress) args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
       if (step.receiver) args.receiver = ethers.utils.getAddress(step.receiver);
 
-      log.info(`FLASHLOAN PARSED - Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
+      log.info(`FLASHLOAN PARSED - Token: ${args.token} | Amount: ${args.amount}`);
 
       return {
         protocol: step.protocol,
