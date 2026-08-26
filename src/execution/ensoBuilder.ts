@@ -46,10 +46,10 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
  * an array where it expects a string.
  *
  * Enso deposit args:
- * { tokenIn, amountIn, primaryAddress }
+ * { tokenIn, amountIn, primaryAddress, onBehalfOf }
  *
  * Enso borrow args:
- * { collateral, tokenOut, amountOut, primaryAddress }
+ * { collateral, tokenOut, amountOut, primaryAddress, onBehalfOf }
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
@@ -61,8 +61,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       }
 
       const args: Record<string, any> = {
-        // Scalar strings for single-token flashloan — NOT arrays.
-        // Arrays are only valid when borrowing multiple tokens simultaneously.
         flashloanToken: step.token,
         flashloanAmount: step.amount,
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
@@ -71,6 +69,10 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (step.primaryAddress) args.primaryAddress = step.primaryAddress;
       if (step.receiver) args.receiver = step.receiver;
 
+      log.info('FLASHLOAN STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+      });
+
       return {
         protocol: step.protocol,
         action: 'flashloan',
@@ -78,89 +80,135 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       };
     }
 
-    case 'swap':
+    case 'swap': {
+      const args = {
+        tokenIn: step.tokenIn,
+        tokenOut: step.tokenOut,
+        amountIn:
+          typeof step.amountIn === 'string'
+            ? step.amountIn
+            : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
+        slippage: step.slippage,
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+        ...(step.poolFee !== undefined ? { poolFee: step.poolFee } : {}),
+      };
+
+      log.info('SWAP STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+      });
+
       return {
         protocol: 'enso',
         action: 'route',
-        args: {
-          tokenIn: step.tokenIn,
-          tokenOut: step.tokenOut,
-          amountIn:
-            typeof step.amountIn === 'string'
-              ? step.amountIn
-              : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
-          slippage: step.slippage,
-          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
-          ...(step.poolFee !== undefined ? { poolFee: step.poolFee } : {}),
-        },
+        args,
+      };
+    }
+
+    case 'deposit': {
+      const args = {
+        tokenIn: step.token,
+        amountIn:
+          typeof step.amount === 'string'
+            ? step.amount
+            : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf } : {}),
       };
 
-    case 'deposit':
+      log.info('DEPOSIT STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+        hasOnBehalfOf: !!step.onBehalfOf,
+        onBehalfOfValue: step.onBehalfOf,
+      });
+
       return {
         protocol: step.protocol,
         action: 'deposit',
-        args: {
-          tokenIn: step.token,
-          amountIn:
-            typeof step.amount === 'string'
-              ? step.amount
-              : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
-          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
-          ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf } : {}), // <-- ADDED
-        },
+        args,
+      };
+    }
+
+    case 'withdraw': {
+      const args = {
+        tokenIn: step.token,
+        amountIn:
+          typeof step.amount === 'string'
+            ? step.amount
+            : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
       };
 
-    case 'withdraw':
+      log.info('WITHDRAW STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+      });
+
       return {
         protocol: step.protocol,
         action: 'redeem',
-        args: {
-          tokenIn: step.token,
-          amountIn:
-            typeof step.amount === 'string'
-              ? step.amount
-              : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
-          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
-        },
+        args,
+      };
+    }
+
+    case 'borrow': {
+      const args = {
+        collateral: step.collateral,
+        tokenOut: step.token,
+        amountOut:
+          typeof step.amount === 'string'
+            ? step.amount
+            : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf } : {}),
       };
 
-    case 'borrow':
+      log.info('BORROW STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+        hasOnBehalfOf: !!step.onBehalfOf,
+        onBehalfOfValue: step.onBehalfOf,
+      });
+
       return {
         protocol: step.protocol,
         action: 'borrow',
-        args: {
-          collateral: step.collateral,
-          tokenOut: step.token,
-          amountOut:
-            typeof step.amount === 'string'
-              ? step.amount
-              : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
-          ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
-          ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf } : {}), // <-- ADDED
-        },
+        args,
+      };
+    }
+
+    case 'harvest': {
+      const args = {
+        positionAddress: step.positionAddress,
+        ...(step.token ? { token: step.token } : {}),
       };
 
-    case 'harvest':
+      log.info('HARVEST STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+      });
+
       return {
         protocol: 'enso',
         action: 'harvest',
-        args: {
-          positionAddress: step.positionAddress,
-          ...(step.token ? { token: step.token } : {}),
-        },
+        args,
+      };
+    }
+
+    case 'call': {
+      const args = {
+        target: step.target,
+        data: step.data,
+        value: step.value || '0',
+        useOutput: step.useOutput || false,
       };
 
-    case 'call':
+      log.info('CALL STEP CONVERTED', {
+        args: JSON.stringify(args, null, 2),
+      });
+
       return {
         protocol: 'custom',
         action: 'call',
-        args: {
-          target: step.target,
-          data: step.data,
-          value: step.value || '0',
-          useOutput: step.useOutput || false,
-        },
+        args,
       };
+    }
 
     default:
       throw new Error(`Unsupported action step type: ${(step as any).type}`);
@@ -172,12 +220,19 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   const chainId = activeChain.chainId;
   const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
 
+  log.info('BUILDING BUNDLE FROM PLAN', {
+    executionWalletAddress: executionWallet.address,
+    flashLoanToken: plan.flashLoanToken.address,
+    flashLoanAmount: plan.flashLoanAmount,
+    stepCount: plan.steps.length,
+  });
+
   const actions = plan.steps.map(step =>
     convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount })
   );
 
-  log.info('ENSO FLASHLOAN ACTION PAYLOAD', {
-    action: JSON.stringify(actions[0], null, 2),
+  log.info('FINAL ACTIONS ARRAY TO SEND', {
+    actions: JSON.stringify(actions, null, 2),
   });
 
   const bundleParams = {
@@ -200,6 +255,12 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   }
 
   try {
+    log.info('SENDING BUNDLE REQUEST TO ENSO', {
+      bundleParams,
+      actionCount: actions.length,
+      firstAction: actions[0] ? { protocol: actions[0].protocol, action: actions[0].action } : null,
+    });
+
     const bundleData = await enso.getBundleData(bundleParams, actions as any);
     bundleCache.set(cacheKey, { data: bundleData, timestamp: Date.now() });
     log.info('✅ Enso bundle created from plan');
@@ -219,6 +280,8 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
         statusCode: error?.statusCode || error?.response?.status,
         responseData: error?.responseData || error?.response?.data,
         message: error?.message,
+        actionsPayload: JSON.stringify(actions, null, 2),
+        fullError: JSON.stringify(error, null, 2),
       });
     }
     throw error;
