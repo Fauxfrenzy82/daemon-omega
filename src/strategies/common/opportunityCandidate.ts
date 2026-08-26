@@ -57,7 +57,7 @@ export type ActionStep =
       token: string;
       amount: string | { useOutputOfCallAt: number };
       primaryAddress?: string;
-      onBehalfOf?: string; // <-- ADDED
+      onBehalfOf?: string;
     }
   | {
       type: 'withdraw';
@@ -73,7 +73,7 @@ export type ActionStep =
       token: string;
       amount: string | { useOutputOfCallAt: number };
       primaryAddress?: string;
-      onBehalfOf?: string; // <-- ADDED
+      onBehalfOf?: string;
     }
   | {
       type: 'harvest';
