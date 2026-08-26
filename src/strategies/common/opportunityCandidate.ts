@@ -32,13 +32,11 @@ export type ActionStep =
   | {
       type: 'flashloan';
       protocol: FlashloanProtocol;
-      // token/amount = what gets flash-borrowed
       token: string;
       amount: string;
       callback: ActionStep[];
       primaryAddress?: string;
       receiver?: string;
-      // legacy fields no longer sent to Enso — kept for internal reference only
       tokenIn?: string | string[];
       amountIn?: string | string[] | { useOutputOfCallAt: number };
       tokenOut?: string | string[];
@@ -54,7 +52,6 @@ export type ActionStep =
       poolFee?: number;
     }
   | {
-      // Maps to Enso's deposit action: args.tokenIn / args.amountIn
       type: 'deposit';
       protocol: 'aave-v3' | 'stata';
       token: string;
@@ -62,7 +59,6 @@ export type ActionStep =
       primaryAddress?: string;
     }
   | {
-      // Maps to Enso's redeem action: args.tokenIn / args.amountIn
       type: 'withdraw';
       protocol: 'aave-v3' | 'stata';
       token: string;
@@ -70,12 +66,11 @@ export type ActionStep =
       primaryAddress?: string;
     }
   | {
-      // Maps to Enso's borrow action: args.collateral / args.tokenOut / args.amountOut
       type: 'borrow';
       protocol: 'aave-v3';
-      collateral: string;   // address of token used as collateral
-      token: string;        // address of token to borrow (maps to tokenOut)
-      amount: string | { useOutputOfCallAt: number }; // amount to borrow (maps to amountOut)
+      collateral: string;
+      token: string;
+      amount: string | { useOutputOfCallAt: number };
       primaryAddress?: string;
     }
   | {
