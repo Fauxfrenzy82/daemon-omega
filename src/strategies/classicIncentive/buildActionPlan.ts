@@ -1,4 +1,3 @@
-// src/strategies/classicIncentive/buildActionPlan.ts
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
@@ -9,6 +8,20 @@ import { createLogger } from '../../utils/logger';
 const log = createLogger('buildActionPlan');
 
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+
+// Hardcoded price map — same as discover.ts.
+// Used to convert positionSizeUsd → collateral token units.
+function getTokenPriceUsd(token: TokenInfo): number {
+  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
+  const priceMap: Record<string, number> = {
+    WMATIC: 0.1,
+    WETH:   3000,
+    WBTC:   60000,
+    AAVE:   150,
+    QUICK:  0.05,
+  };
+  return priceMap[token.symbol] ?? 0.01;
+}
 
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
@@ -29,39 +42,38 @@ async function buildAaveIncentivePlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  // FIX: discover now sets asset=collateral, borrowAsset=USDC (separate token).
-  // The flashloan is taken in the collateral token, deposited into Aave, then
-  // USDC is borrowed against it. If collateral !== flashloan token we add a swap.
-  const { asset, borrowAsset, borrowAmount } = candidate.params;
+  const { asset, borrowAsset, borrowAmount, positionSize } = candidate.params;
+
+  const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
+
+  // FIX: Calculate flashloan amount directly from positionSizeUsd in the
+  // collateral token's own decimals. Do NOT derive it from the USDC borrow
+  // amount — borrowAmount is in USDC wei (6 decimals) and the flashloan token
+  // has different decimals (e.g. WETH=18, WBTC=8). Mixing them produces
+  // amounts that are off by many orders of magnitude, causing Enso 422
+  // "Invalid address type" because the amount fails plausibility validation.
+  const collateralPriceUsd = getTokenPriceUsd(flashLoanToken);
+  const collateralUnits = positionSize / collateralPriceUsd;
+  const flashLoanAmount: string = ethers.utils
+    .parseUnits(
+      collateralUnits.toFixed(flashLoanToken.decimals),
+      flashLoanToken.decimals
+    )
+    .toString();
 
   log.info('BUILDING AAVE INCENTIVE PLAN', {
-    collateral: asset.symbol,
-    collateralAddress: asset.address,
+    collateral: flashLoanToken.symbol,
+    collateralAddress: flashLoanToken.address,
     borrowAsset: borrowAsset.symbol,
     borrowAssetAddress: borrowAsset.address,
+    positionSizeUsd: positionSize,
+    collateralPriceUsd,
+    flashLoanAmount,
     borrowAmount,
     executionWalletAddress: executionWallet.address,
   });
 
-  const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
-
-  const LTV_CAPS: Record<string, number> = {
-    USDC:   0.78,
-    DAI:    0.78,
-    WETH:   0.78,
-    WMATIC: 0.65,
-    WBTC:   0.73,
-    AAVE:   0.60,
-  };
-  const safeLtv = LTV_CAPS[flashLoanToken.symbol] || 0.65;
-
-  const borrowBig = ethers.BigNumber.from(borrowAmount);
-  const ltvMultiplier = ethers.BigNumber.from(Math.floor(safeLtv * 10000));
-  const flashLoanAmountBig = borrowBig.mul(10000).div(ltvMultiplier);
-  const flashLoanAmount: string = flashLoanAmountBig.toString();
-
   // Step 0: deposit the flashloaned collateral into Aave
-  // primaryAddress required on deposit callback steps for aave-v3
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -78,14 +90,13 @@ async function buildAaveIncentivePlan(
     onBehalfOf: executionWallet.address,
   });
 
-  // Step 1: borrow USDC (or borrowAsset) against the deposited collateral
-  // FIX: collateral field = what we deposited (flashLoanToken), token = what we borrow (borrowAsset)
-  // primaryAddress required on borrow callback steps for aave-v3
+  // Step 1: borrow USDC against the deposited collateral
+  // borrowAmount is correct — it came from discover.ts as USDC wei
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
-    collateral: flashLoanToken.address,   // what's locked as collateral
-    token: borrowAsset.address,            // what we're borrowing
+    collateral: flashLoanToken.address,
+    token: borrowAsset.address,
     amount: borrowAmount,
     primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
@@ -101,15 +112,16 @@ async function buildAaveIncentivePlan(
 
   const callback: ActionStep[] = [depositStep, borrowStep];
 
-  // If we borrowed something other than the flashloan token, swap borrowed asset → flashloan token
-  // so we can repay the flashloan
+  // Step 2: swap borrowed USDC back to collateral token to repay the flashloan
+  // borrowAsset is always USDC and flashLoanToken is always non-stablecoin,
+  // so this swap is always needed. Guard anyway for correctness.
   if (borrowAsset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
     const swapStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
       tokenIn: borrowAsset.address,
       tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 1 }, // output of the borrow step (index 1)
+      amountIn: { useOutputOfCallAt: 1 }, // output of borrow step (index 1)
       slippage: '100',
     };
     callback.push(swapStep);
@@ -180,16 +192,4 @@ async function buildQuickSwapV3Plan(
     flashLoanAmount,
     steps: [flashloanStep],
   };
-}
-
-function getTokenPriceUsd(token: TokenInfo): number {
-  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
-  const priceMap: Record<string, number> = {
-    WMATIC: 0.1,
-    WETH:   3000,
-    WBTC:   60000,
-    AAVE:   150,
-    QUICK:  0.05,
-  };
-  return priceMap[token.symbol] ?? 0.01;
 }
