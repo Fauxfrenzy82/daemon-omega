@@ -2,7 +2,10 @@ import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo } from '../../config/tokens';
-import { executionWallet } from '../../treasury/wallets'; // <-- ADDED IMPORT
+import { executionWallet } from '../../treasury/wallets';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('buildActionPlan');
 
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
@@ -27,6 +30,13 @@ async function buildAaveIncentivePlan(
 ): Promise<ActionPlan> {
   const { asset, borrowAmount } = candidate.params;
 
+  log.info('BUILDING AAVE INCENTIVE PLAN', {
+    asset: asset.symbol,
+    assetAddress: asset.address,
+    borrowAmount,
+    executionWalletAddress: executionWallet.address,
+  });
+
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
   const flashLoanAmount: string = borrowAmount;
 
@@ -36,8 +46,14 @@ async function buildAaveIncentivePlan(
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     primaryAddress: AAVE_POOL,
-    onBehalfOf: executionWallet.address, // <-- ADDED
+    onBehalfOf: executionWallet.address,
   };
+
+  log.info('DEPOSIT STEP CREATED', {
+    step: JSON.stringify(depositStep, null, 2),
+    hasOnBehalfOf: !!depositStep.onBehalfOf,
+    onBehalfOfValue: depositStep.onBehalfOf,
+  });
 
   const borrowStep: ActionStep = {
     type: 'borrow',
@@ -46,8 +62,14 @@ async function buildAaveIncentivePlan(
     token: asset.address,
     amount: borrowAmount,
     primaryAddress: AAVE_POOL,
-    onBehalfOf: executionWallet.address, // <-- ADDED
+    onBehalfOf: executionWallet.address,
   };
+
+  log.info('BORROW STEP CREATED', {
+    step: JSON.stringify(borrowStep, null, 2),
+    hasOnBehalfOf: !!borrowStep.onBehalfOf,
+    onBehalfOfValue: borrowStep.onBehalfOf,
+  });
 
   const callback: ActionStep[] = [depositStep, borrowStep];
 
@@ -70,6 +92,10 @@ async function buildAaveIncentivePlan(
     amount: flashLoanAmount,
     callback,
   };
+
+  log.info('FULL ACTION PLAN CREATED', {
+    plan: JSON.stringify({ flashLoanToken, flashLoanAmount, steps: [flashloanStep] }, null, 2),
+  });
 
   return {
     flashLoanToken,
