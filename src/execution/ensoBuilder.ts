@@ -106,6 +106,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
               ? step.amount
               : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
           ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+          ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf } : {}), // <-- ADDED
         },
       };
 
@@ -135,6 +136,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
               ? step.amount
               : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
           ...(step.primaryAddress ? { primaryAddress: step.primaryAddress } : {}),
+          ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf } : {}), // <-- ADDED
         },
       };
 
