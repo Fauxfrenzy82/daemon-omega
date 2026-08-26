@@ -82,7 +82,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         amountIn: typeof step.amount === 'string' 
           ? step.amount 
           : (step.amount as any).amount.toString(),
-        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
@@ -101,7 +100,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         amountIn: typeof step.amount === 'string' 
           ? step.amount 
           : (step.amount as any).amount.toString(),
-        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
