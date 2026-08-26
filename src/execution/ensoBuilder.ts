@@ -1,3 +1,4 @@
+// src/execution/ensoBuilder.ts
 import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
 import { executionWallet } from '../treasury/wallets';
@@ -77,15 +78,18 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
-      const args = {
+      // FIX: propagate primaryAddress (required by Enso for protocol-specific deposits
+      // e.g. aave-v3 pool address on Aave deposits, stataToken address on stata deposits)
+      const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(step.token),
-        amountIn: typeof step.amount === 'string' 
-          ? step.amount 
+        amountIn: typeof step.amount === 'string'
+          ? step.amount
           : (step.amount as any).amount.toString(),
+        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
-      log.info(`DEPOSIT PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn}`);
+      log.info(`DEPOSIT PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn} | PrimaryAddress: ${args.primaryAddress ?? 'none'}`);
 
       return {
         protocol: step.protocol,
@@ -95,15 +99,20 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      const args = {
-        tokenIn: ethers.utils.getAddress(step.token),
-        amountIn: typeof step.amount === 'string' 
-          ? step.amount 
+      // FIX: borrow action requires tokenIn=collateral, tokenOut=asset being borrowed.
+      // Previously this sent tokenIn=step.token (the borrow asset) with no tokenOut,
+      // which is backwards — Enso rejected every bundle with 422.
+      const args: Record<string, any> = {
+        tokenIn: ethers.utils.getAddress(step.collateral),   // collateral being locked
+        tokenOut: ethers.utils.getAddress(step.token),        // asset being borrowed
+        amountIn: typeof step.amount === 'string'
+          ? step.amount
           : (step.amount as any).amount.toString(),
+        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
-      log.info(`BORROW PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn}`);
+      log.info(`BORROW PARSED - Collateral (tokenIn): ${args.tokenIn} | Borrow (tokenOut): ${args.tokenOut} | AmountIn: ${args.amountIn}`);
 
       return {
         protocol: step.protocol,
@@ -113,7 +122,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'withdraw': {
-      const args = {
+      // FIX: propagate primaryAddress (required for stata/aave-v3 redeems)
+      const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: typeof step.amount === 'string'
             ? step.amount
@@ -121,7 +131,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
       };
 
-      log.info(`WITHDRAW PARSED - TokenIn: ${args.tokenIn}`);
+      log.info(`WITHDRAW PARSED - TokenIn: ${args.tokenIn} | PrimaryAddress: ${args.primaryAddress ?? 'none'}`);
 
       return {
         protocol: step.protocol,
