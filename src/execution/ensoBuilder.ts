@@ -78,17 +78,17 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
-      // FIX: Align property mapping arguments with Enso's official lending shortcuts schema (token/amount)
+      // OFFICIAL SPEC: Maps input values directly to tokenIn and amountIn
       const args = {
-        token: ethers.utils.getAddress(step.token),
-        amount: typeof step.amount === 'string' 
+        tokenIn: ethers.utils.getAddress(step.token),
+        amountIn: typeof step.amount === 'string' 
           ? step.amount 
           : (step.amount as any).amount.toString(),
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
-      log.info(`DEPOSIT PARSED - Token: ${args.token} | Amount: ${args.amount}`);
+      log.info(`DEPOSIT PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn}`);
 
       return {
         protocol: step.protocol,
@@ -98,17 +98,17 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      // FIX: Align property mapping arguments with Enso's official lending shortcuts schema (token/amount)
+      // OFFICIAL SPEC: Maps borrow variables to tokenIn and amountIn for parameter consistency
       const args = {
-        token: ethers.utils.getAddress(step.token),
-        amount: typeof step.amount === 'string' 
+        tokenIn: ethers.utils.getAddress(step.token),
+        amountIn: typeof step.amount === 'string' 
           ? step.amount 
           : (step.amount as any).amount.toString(),
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
-      log.info(`BORROW PARSED - Token: ${args.token} | Amount: ${args.amount}`);
+      log.info(`BORROW PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn}`);
 
       return {
         protocol: step.protocol,
@@ -119,14 +119,14 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 
     case 'withdraw': {
       const args = {
-        token: ethers.utils.getAddress(step.token),
-        amount: typeof step.amount === 'string'
+        tokenIn: ethers.utils.getAddress(step.token),
+        amountIn: typeof step.amount === 'string'
             ? step.amount
             : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
       };
 
-      log.info(`WITHDRAW PARSED - Token: ${args.token}`);
+      log.info(`WITHDRAW PARSED - TokenIn: ${args.tokenIn}`);
 
       return {
         protocol: step.protocol,
