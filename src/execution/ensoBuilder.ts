@@ -36,10 +36,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // FIXED: Adjusted property naming to match Enso parameters
+      // FIXED: We provide both standard and legacy naming options side-by-side
+      // to cleanly pass the Enso router validation constraints.
       const args: Record<string, any> = {
         token: ethers.utils.getAddress(step.token),
+        flashloanToken: ethers.utils.getAddress(step.token),
         amount: step.amount.toString(),
+        flashloanAmount: step.amount.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
