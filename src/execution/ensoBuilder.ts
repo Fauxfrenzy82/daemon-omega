@@ -28,6 +28,18 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
+/**
+ * Enso flashloan args schema (from official docs):
+ * {
+ *   protocol: "aave-v3",
+ *   action: "flashloan",
+ *   args: {
+ *     flashloanToken: "0x...",   
+ *     flashloanAmount: "12345",  
+ *     callback: [...]
+ *   }
+ * }
+ */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
@@ -37,8 +49,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // FIX: Revert back to the singular parameter names required by Enso,
-      // but enforce a strict Ethers address verification checksum to prevent the "Invalid address type" error.
       const args: Record<string, any> = {
         flashloanToken: ethers.utils.getAddress(step.token),
         flashloanAmount: step.amount.toString(),
@@ -84,10 +94,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
+      const isNestedInFlashloan = context.flashLoanAmount !== '';
+
       const args = {
         tokenIn: ethers.utils.getAddress(step.token),
-        amountIn:
-          typeof step.amount === 'string'
+        amountIn: isNestedInFlashloan
+          ? { useOutputOfCallAt: 0 } // Dynamically targets the parent flashloan token output index
+          : typeof step.amount === 'string'
             ? step.amount
             : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
@@ -129,11 +142,14 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
+      const isNestedInFlashloan = context.flashLoanAmount !== '';
+
       const args = {
         collateral: ethers.utils.getAddress(step.collateral),
         tokenOut: ethers.utils.getAddress(step.token),
-        amountOut:
-          typeof step.amount === 'string'
+        amountOut: isNestedInFlashloan
+          ? { useOutputOfCallAt: 0 } // Links this step directly to the flashloan balance output sequence
+          : typeof step.amount === 'string'
             ? step.amount
             : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
