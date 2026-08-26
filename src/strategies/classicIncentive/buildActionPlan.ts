@@ -7,6 +7,9 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('buildActionPlan');
 
+// The formal contract bridge target required by Enso for Aave V3 interactions
+const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
@@ -90,7 +93,7 @@ async function buildAaveIncentivePlan(
       tokenIn: asset.address,
       tokenOut: flashLoanToken.address,
       amountIn: { useOutputOfCallAt: 1 },
-      slippage: '100', // ✅ FIXED: Added mandatory slippage property to resolve compilation crash
+      slippage: '100',
     };
     callback.push(swapStep);
   }
@@ -100,6 +103,7 @@ async function buildAaveIncentivePlan(
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
+    primaryAddress: AAVE_POOL, // ✅ Bound strictly to the parent layer to satisfy layout rules
     callback,
   };
 
