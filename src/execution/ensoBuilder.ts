@@ -1,6 +1,5 @@
 import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
-import { EvaluatedOpportunity } from '../profitability/evaluator';
 import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
@@ -78,7 +77,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
-      // OFFICIAL SPEC: Maps input values directly to tokenIn and amountIn
       const args = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: typeof step.amount === 'string' 
@@ -98,7 +96,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      // OFFICIAL SPEC: Maps borrow variables to tokenIn and amountIn for parameter consistency
       const args = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: typeof step.amount === 'string' 
@@ -174,7 +171,8 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
     log.info('SENDING BUNDLE REQUEST TO ENSO', {
       fromAddress: bundleParams.fromAddress,
       chainId: bundleParams.chainId,
-      actionCount: actions.length
+      actionCount: actions.length,
+      payload: JSON.stringify(actions, null, 2)
     });
 
     const bundleData = await enso.getBundleData(bundleParams, actions as any);
@@ -187,8 +185,8 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
     };
   } catch (error: any) {
     log.error('❌ Enso API error building bundle', {
-      statusCode: error?.statusCode || error?.response?.status,
-      responseData: error?.response?.data || error?.data,
+      statusCode: error?.statusCode || error?.response?.status || error?.status,
+      responseData: error?.response?.data || error?.data || (error?.toString ? error.toString() : error),
       message: error?.message,
     });
     throw error;
