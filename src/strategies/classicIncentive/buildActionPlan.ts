@@ -7,8 +7,6 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('buildActionPlan');
 
-const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
-
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
@@ -59,7 +57,6 @@ async function buildAaveIncentivePlan(
     protocol: 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
   };
 
@@ -75,7 +72,6 @@ async function buildAaveIncentivePlan(
     collateral: flashLoanToken.address,
     token: asset.address,
     amount: borrowAmount,
-    primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
   };
 
@@ -147,7 +143,6 @@ async function buildQuickSwapV3Plan(
     tokenIn: token1.address,
     tokenOut: flashLoanToken.address,
     amountIn: { useOutputOfCallAt: 0 },
-    slippage: '100',
   };
 
   const flashloanStep: ActionStep = {
