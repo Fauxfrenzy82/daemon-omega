@@ -28,18 +28,6 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
-/**
- * Enso flashloan args schema (from official docs):
- * {
- *   protocol: "aave-v3",
- *   action: "flashloan",
- *   args: {
- *     flashloanToken: "0x...",   <-- Case-validated string
- *     flashloanAmount: "12345",  <-- Raw uint256 string
- *     callback: [...]            <-- Context index referenced steps
- *   }
- * }
- */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }, stepIndex: number = 0): any {
   switch (step.type) {
     case 'flashloan': {
@@ -49,7 +37,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
-      // Fix: Trace and increment child step execution context indices sequentially
       const args: Record<string, any> = {
         flashloanToken: ethers.utils.getAddress(step.token),
         flashloanAmount: step.amount.toString(),
@@ -59,7 +46,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (step.primaryAddress) args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
       if (step.receiver) args.receiver = ethers.utils.getAddress(step.receiver);
 
-      // Safe flat log string to bypass Render log cutoff boundaries
       log.info(`FLASHLOAN PARSED - Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount} | Callbacks: ${args.callback.length}`);
 
       return {
@@ -97,7 +83,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const args = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: isNestedInFlashloan
-          ? { useOutputOfCallAt: 0 } // Takes raw asset balance emitted by parent flashloan (index 0)
+          ? { useOutputOfCallAt: 0 } 
           : typeof step.amount === 'string'
             ? step.amount
             : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -121,7 +107,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         collateral: ethers.utils.getAddress(step.collateral),
         tokenOut: ethers.utils.getAddress(step.token),
         amountOut: isNestedInFlashloan
-          ? { useOutputOfCallAt: 1 } // Fix: Points directly to deposit position outputs (index 1) to pass validation loops
+          ? { useOutputOfCallAt: 1 } 
           : typeof step.amount === 'string'
             ? step.amount
             : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -203,10 +189,11 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
   }
 
   try {
+    // FIX: Safely parse index position 0 from the actions array to prevent unhandled crashing inside the logger
     log.info('SENDING BUNDLE REQUEST TO ENSO', {
-      fromAddress: bundleParams.fromAddress,
-      chainId: bundleParams.chainId,
-      actionCount: actions.length
+      bundleParams,
+      actionCount: actions.length,
+      firstAction: actions && actions[0] ? { protocol: actions[0].protocol, action: actions[0].action } : null,
     });
 
     const bundleData = await enso.getBundleData(bundleParams, actions as any);
