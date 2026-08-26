@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo } from '../../config/tokens';
+import { executionWallet } from '../../treasury/wallets'; // <-- ADDED IMPORT
 
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
@@ -35,6 +36,7 @@ async function buildAaveIncentivePlan(
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     primaryAddress: AAVE_POOL,
+    onBehalfOf: executionWallet.address, // <-- ADDED
   };
 
   const borrowStep: ActionStep = {
@@ -44,6 +46,7 @@ async function buildAaveIncentivePlan(
     token: asset.address,
     amount: borrowAmount,
     primaryAddress: AAVE_POOL,
+    onBehalfOf: executionWallet.address, // <-- ADDED
   };
 
   const callback: ActionStep[] = [depositStep, borrowStep];
