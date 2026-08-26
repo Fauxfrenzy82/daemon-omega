@@ -90,7 +90,7 @@ async function buildAaveIncentivePlan(
       tokenIn: asset.address,
       tokenOut: flashLoanToken.address,
       amountIn: { useOutputOfCallAt: 1 },
-      slippage: '100',
+      slippage: '100', // ✅ FIXED: Added mandatory slippage property to resolve compilation crash
     };
     callback.push(swapStep);
   }
@@ -143,6 +143,7 @@ async function buildQuickSwapV3Plan(
     tokenIn: token1.address,
     tokenOut: flashLoanToken.address,
     amountIn: { useOutputOfCallAt: 0 },
+    slippage: '100',
   };
 
   const flashloanStep: ActionStep = {
