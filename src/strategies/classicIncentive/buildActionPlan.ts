@@ -39,18 +39,17 @@ async function buildAaveIncentivePlan(
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
-  // Safe conservative LTV limits to satisfy Aave validation and avoid liquidation
+  // Added AAVE to ltvCaps to avoid over-leveraging assets during loop initialization
   const ltvCaps: Record<string, number> = {
     USDC: 0.78,
     DAI: 0.78,
     WETH: 0.78,
     WMATIC: 0.65,
     WBTC: 0.73,
+    AAVE: 0.60, 
   };
-  const safeLtv = ltvCaps[flashLoanToken.symbol] || 0.70;
+  const safeLtv = ltvCaps[flashLoanToken.symbol] || 0.65;
 
-  // Flash loan amount must equal the total desired position collateral.
-  // Formula: FlashLoanAmount = BorrowAmount / SafeLTV
   const borrowBig = ethers.BigNumber.from(borrowAmount);
   const ltvMultiplier = ethers.BigNumber.from(Math.floor(safeLtv * 10000));
   const flashLoanAmountBig = borrowBig.mul(10000).div(ltvMultiplier);
