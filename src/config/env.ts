@@ -29,9 +29,6 @@ function optionalBool(key: string, fallback: boolean): boolean {
   return val.toLowerCase() === 'true';
 }
 
-/**
- * Normalize ENSO_BASE_URL to always include /api
- */
 function normalizeEnsoBaseUrl(url: string): string {
   let normalized = url.replace(/\/+$/, '');
   if (!normalized.endsWith('/api')) {
@@ -117,5 +114,9 @@ export const env = {
   // Subgraph
   SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
 
+  // Classic Incentive position size
   CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
+
+  // 🔥 NEW: Harvest + Spot Sell flashloan amount in USD
+  HARVEST_FLASHLOAN_AMOUNT_USD: optionalNumber('HARVEST_FLASHLOAN_AMOUNT_USD', 500),
 };
