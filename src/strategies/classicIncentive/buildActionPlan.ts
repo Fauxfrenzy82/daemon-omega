@@ -1,4 +1,3 @@
-// src/strategies/classicIncentive/buildActionPlan.ts
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
@@ -12,7 +11,7 @@ const log = createLogger('buildActionPlan');
 // NOT placed on the flashloan outer step (that caused "Invalid address type").
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
-// Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
+// 🔥 Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
 // The flashloan itself comes from Morpho; the collateral actions inside the
 // callback still target Aave V3. This sidesteps the Enso aave-v3 flashloan
 // schema validation that has been blocking execution.
@@ -56,7 +55,7 @@ async function buildAaveIncentivePlan(
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
-  // Always use Morpho as the flashloan provider unless explicitly overridden.
+  // 🔥 FIX: Always use Morpho as the flashloan provider unless explicitly overridden.
   // Morpho's flashloan schema is simpler and avoids the Enso aave-v3 validator
   // issue that has blocked execution for weeks.
   const flashLoanProvider = options?.flashLoanProvider || MORPHO_FLASHLOAN_PROVIDER;
@@ -142,11 +141,11 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // Morpho flashloan outer step — no primaryAddress on this level.
+  // 🔥 FIX: Morpho flashloan outer step — no primaryAddress on this level.
   // The Aave pool address belongs only on the inner deposit/borrow steps.
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashLoanProvider.protocol,
+    protocol: flashLoanProvider.protocol, // morpho-markets-v1
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback,
