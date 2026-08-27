@@ -1,5 +1,9 @@
 import { TokenInfo } from './tokens';
 import { TOKENS } from './tokens';
+import { createLogger } from '../utils/logger';
+import { generateRewardPositions, discoverGammaFarms } from './farmDiscovery';
+
+const log = createLogger('farms');
 
 export interface RewardPosition {
   id: string;
@@ -7,102 +11,71 @@ export interface RewardPosition {
   rewardToken: TokenInfo;
   entryToken: TokenInfo;
   protocol: string;
-  /** Optional: specify reward token if different from the farm's primary reward */
-  secondaryRewardToken?: TokenInfo;
 }
 
 /**
- * 🔥 HIGH-VALUE FARMS ON POLYGON
+ * 🔥 DYNAMIC REWARD POSITIONS
  * 
- * These farms reward tokens with significant USD value:
- * - AAVE: ~$150/token
- * - WETH: ~$3000/token
- * - WBTC: ~$60000/token
- * - WMATIC: ~$0.11/token (high volume, good liquidity)
+ * These are generated at runtime by discovering active Gamma farms
+ * and combining with hardcoded farms (Aave, Beefy, Balancer).
  * 
- * Sources:
- * - QuickSwap V3 Farms: https://docs.quickswap.exchange
- * - Aave Rewards: Aave distributes MATIC to active users
- * - Beefy Finance: Auto-compounding vaults
- * 
- * NOTE: Some addresses are placeholders. Verify on PolygonScan before deployment.
+ * This eliminates the need to manually update farm addresses.
  */
-export const REWARD_POSITIONS: RewardPosition[] = [
-  // ============================================================
-  // 🔥 TIER 1: VERY HIGH VALUE (> $100/token)
-  // ============================================================
+let cachedRewardPositions: RewardPosition[] | null = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 60000; // 1 minute
 
-  // AAVE Token Rewards (via Aave Safety Module or stkAAVE)
-  // Aave distributes AAVE rewards to stakers in the Safety Module
-  // Contract: Aave Staked Aave (stkAAVE) on Polygon
-  // Address: 0x4da27a545c0c5b758a6ba100e3a049001de870f5
-  // Source: Aave documentation [reference:0]
-  {
-    id: 'aave-stkAAVE',
-    positionAddress: '0x4da27a545c0c5b758a6ba100e3a049001de870f5',
-    rewardToken: TOKENS.AAVE,      // ~$150/token
-    entryToken: TOKENS.USDC,
-    protocol: 'aave',
-  },
+/**
+ * Get reward positions – auto-discovers farms on first call
+ */
+export async function getRewardPositions(): Promise<RewardPosition[]> {
+  const now = Date.now();
+  
+  // Use cached positions if still fresh
+  if (cachedRewardPositions && now - cacheTimestamp < CACHE_TTL_MS) {
+    return cachedRewardPositions;
+  }
+  
+  log.info('🔄 Refreshing reward positions...');
+  
+  try {
+    const positions = await generateRewardPositions();
+    cachedRewardPositions = positions;
+    cacheTimestamp = now;
+    return positions;
+  } catch (err) {
+    log.error('Failed to generate reward positions', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    
+    // Return empty array if discovery fails
+    return [];
+  }
+}
 
-  // ============================================================
-  // 🔥 TIER 2: HIGH VALUE (> $1/token)
-  // ============================================================
+/**
+ * Clear the cache (useful for testing)
+ */
+export function clearFarmCache(): void {
+  cachedRewardPositions = null;
+  cacheTimestamp = 0;
+}
 
-  // QuickSwap V3 WMATIC-USDC Farm
-  // AlgebraEternalFarming contract for WMATIC-USDC V3 pool
-  // Verified address from QuickSwap documentation [reference:1]
-  {
-    id: 'quickswap-v3-wmatic-usdc',
-    positionAddress: '0x8a26436e41d0b5fc4c6ed36c1976fafbe173444e',
-    rewardToken: TOKENS.WMATIC,    // ~$0.11/token with high volume
-    entryToken: TOKENS.USDC,
-    protocol: 'quickswap',
-  },
+// 🔥 Legacy static export for backward compatibility
+// This will be populated dynamically at runtime
+export let REWARD_POSITIONS: RewardPosition[] = [];
 
-  // QuickSwap V3 WETH-USDC Farm
-  // AlgebraEternalFarming for WETH-USDC V3 pool
-  {
-    id: 'quickswap-v3-weth-usdc',
-    positionAddress: '0x8a26436e41d0b5fc4c6ed36c1976fafbe173444e',
-    rewardToken: TOKENS.WETH,      // ~$3000/token
-    entryToken: TOKENS.USDC,
-    protocol: 'quickswap',
-  },
-
-  // QuickSwap V3 WBTC-USDC Farm
-  // AlgebraEternalFarming for WBTC-USDC V3 pool
-  {
-    id: 'quickswap-v3-wbtc-usdc',
-    positionAddress: '0x8a26436e41d0b5fc4c6ed36c1976fafbe173444e',
-    rewardToken: TOKENS.WBTC,      // ~$60000/token
-    entryToken: TOKENS.USDC,
-    protocol: 'quickswap',
-  },
-
-  // ============================================================
-  // 🔥 TIER 3: LIQUIDITY REWARDS (via Beefy or Balancer)
-  // ============================================================
-
-  // Beefy WBTC-WPOL CLM Pool
-  // Source: Beefy app [reference:2]
-  // NOTE: Verify this address on Beefy app before using
-  {
-    id: 'beefy-wbtc-wmatic',
-    positionAddress: '0x...', // 🔥 REPLACE WITH BEEFY VAULT ADDRESS
-    rewardToken: TOKENS.WBTC,
-    entryToken: TOKENS.USDC,
-    protocol: 'beefy',
-  },
-
-  // Balancer Weighted Pool with BAL rewards
-  // Balancer multi-token pools offer 10-30% APY [reference:3]
-  // NOTE: Verify pool address on Balancer app
-  {
-    id: 'balancer-wmatic-usdc',
-    positionAddress: '0x...', // 🔥 REPLACE WITH BALANCER POOL ADDRESS
-    rewardToken: TOKENS.WMATIC,
-    entryToken: TOKENS.USDC,
-    protocol: 'balancer',
-  },
-];
+// 🔥 Initialize REWARD_POSITIONS asynchronously
+// This function should be called during system startup
+export async function initializeFarms(): Promise<void> {
+  try {
+    REWARD_POSITIONS = await getRewardPositions();
+    log.info(`✅ Farms initialized: ${REWARD_POSITIONS.length} positions`, {
+      farms: REWARD_POSITIONS.map(f => f.id),
+    });
+  } catch (err) {
+    log.error('Failed to initialize farms', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
