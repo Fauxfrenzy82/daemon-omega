@@ -115,6 +115,11 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
+      // ✅ ADDED: include interestRateMode if provided
+      if (step.interestRateMode !== undefined) {
+        args.interestRateMode = step.interestRateMode;
+      }
+
       log.info(`BORROW PARSED - Collateral (tokenIn): ${args.tokenIn} | Borrow (tokenOut): ${args.tokenOut} | AmountOut: ${args.amountOut}`);
 
       return {
