@@ -74,6 +74,7 @@ export type ActionStep =
       amount: string | { useOutputOfCallAt: number };
       primaryAddress?: string;
       onBehalfOf?: string;
+      interestRateMode?: number;   // ✅ ADDED – required for Enso Aave V3 borrows
     }
   | {
       type: 'harvest';
