@@ -29,31 +29,24 @@ export type FlashloanProtocol =
   | 'kodiak';
 
 /**
- * ✅ FIXED: Added refundReceiver to flashloan ActionStep
- * 
- * Address type rules for flashloan actions:
- * - token / amount: The flash-borrowed asset (ERC-20 token address)
- * - tokenIn / amountIn: Additional user-supplied input (optional)
- * - tokenOut: Expected callback output (optional)
- * - receiver: EOA or Smart Contract Wallet receiving the flash-borrowed funds
- * - refundReceiver: EOA or Smart Contract Wallet receiving surplus/dust
- * - primaryAddress: Protocol contract address (e.g., Aave Pool)
- * - onBehalfOf: EOA or Smart Contract Wallet (for Aave actions)
+ * ActionStep types – receiver and refundReceiver are optional
+ * but should NOT be used in the flashloan action root.
+ * They are handled at the bundle level via fromAddress.
  */
 export type ActionStep =
   | { 
       type: 'flashloan'; 
       protocol: FlashloanProtocol; 
-      token: string;           // flashloanToken (ERC-20 address)
-      amount: string;          // flashloanAmount
-      tokenIn?: string | string[];      // User-supplied input (optional)
+      token: string;
+      amount: string;
+      tokenIn?: string | string[];
       amountIn?: string | string[] | { useOutputOfCallAt: number };
-      tokenOut?: string | string[];     // Expected callback output (optional)
+      tokenOut?: string | string[];
       callback: ActionStep[];
-      primaryAddress?: string; // Protocol address (e.g., Aave Pool)
-      receiver?: string;       // EOA / Smart Contract Wallet (receives flash-borrowed funds)
-      refundReceiver?: string; // EOA / Smart Contract Wallet (receives surplus/dust) 
-      onBehalfOf?: string;     // EOA / Smart Contract Wallet (for Aave actions)
+      primaryAddress?: string;
+      // 🔥 These are NOT used in the action – handled at bundle level
+      receiver?: string;
+      refundReceiver?: string;
     }
   | { type: 'swap'; protocol: 'enso'; tokenIn: string; tokenOut: string; amountIn: string | { useOutputOfCallAt: number }; slippage: string; primaryAddress?: string; poolFee?: number }
   | { type: 'deposit'; protocol: 'aave-v3' | 'stata'; token: string; amount: string | { useOutputOfCallAt: number }; primaryAddress?: string; onBehalfOf?: string }
