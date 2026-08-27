@@ -11,7 +11,7 @@ const log = createLogger('buildActionPlan');
 // NOT placed on the flashloan outer step (that caused "Invalid address type").
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
-// 🔥 Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
+// Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
 // The flashloan itself comes from Morpho; the collateral actions inside the
 // callback still target Aave V3. This sidesteps the Enso aave-v3 flashloan
 // schema validation that has been blocking execution.
@@ -55,9 +55,7 @@ async function buildAaveIncentivePlan(
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
-  // 🔥 FIX: Always use Morpho as the flashloan provider unless explicitly overridden.
-  // Morpho's flashloan schema is simpler and avoids the Enso aave-v3 validator
-  // issue that has blocked execution for weeks.
+  // Always use Morpho as the flashloan provider unless explicitly overridden.
   const flashLoanProvider = options?.flashLoanProvider || MORPHO_FLASHLOAN_PROVIDER;
 
   // Calculate flashloan amount from position size in collateral token's decimals.
@@ -84,7 +82,6 @@ async function buildAaveIncentivePlan(
   });
 
   // Step 0: deposit flashloaned collateral into Aave V3.
-  // primaryAddress = Aave pool, required for aave-v3 deposit action in Enso.
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -102,9 +99,6 @@ async function buildAaveIncentivePlan(
   });
 
   // Step 1: borrow USDC against the deposited collateral.
-  // primaryAddress = Aave pool, required for aave-v3 borrow action in Enso.
-  // collateral field (not tokenIn) per confirmed Enso docs schema.
-  // amountOut (not amountIn) per confirmed Enso docs schema.
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
@@ -127,27 +121,28 @@ async function buildAaveIncentivePlan(
   const callback: ActionStep[] = [depositStep, borrowStep];
 
   // Step 2: swap borrowed USDC back to collateral token to repay Morpho flashloan.
-  // borrowAsset is always USDC, flashLoanToken is always non-stablecoin, so this
-  // swap is always needed.
   if (borrowAsset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
     const swapStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
       tokenIn: borrowAsset.address,
       tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 1 }, // output of borrow step at index 1
+      amountIn: { useOutputOfCallAt: 1 },
       slippage: '100',
     };
     callback.push(swapStep);
   }
 
   // 🔥 FIX: Morpho flashloan outer step — no primaryAddress on this level.
-  // The Aave pool address belongs only on the inner deposit/borrow steps.
+  // BUT: tokenIn and amountIn are required at the root level for the flashloan action.
+  // This matches the Enso flashloan schema and the Harvest strategy's working pattern.
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashLoanProvider.protocol, // morpho-markets-v1
+    protocol: flashLoanProvider.protocol,
     token: flashLoanToken.address,
     amount: flashLoanAmount,
+    tokenIn: flashLoanToken.address,   // ✅ REQUIRED: Enso flashloan schema
+    amountIn: flashLoanAmount,          // ✅ REQUIRED: Enso flashloan schema
     callback,
   };
 
@@ -197,11 +192,14 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
+  // 🔥 FIX: Add tokenIn and amountIn to the flashloan step
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
     token: flashLoanToken.address,
     amount: flashLoanAmount,
+    tokenIn: flashLoanToken.address,   // ✅ REQUIRED: Enso flashloan schema
+    amountIn: flashLoanAmount,          // ✅ REQUIRED: Enso flashloan schema
     callback: [buyStep, sellStep],
   };
 
