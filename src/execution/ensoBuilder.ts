@@ -21,11 +21,10 @@ export interface FlashLoanProvider {
 }
 
 const bundleCache = new Map<string, { data: any; timestamp: number }>();
-const CACHE_TTL_MS = 10000;
 
 export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
-  { name: 'Aave V3', protocol: 'aave-v3' },
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
+  { name: 'Aave V3', protocol: 'aave-v3' },
 ];
 
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
@@ -43,10 +42,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
+      // Only add primaryAddress if explicitly set on the flashloan step itself.
+      // For Morpho flashloans this is omitted. For Aave-as-flashloan-provider
+      // it would be the pool, but we are moving away from that.
       if (step.primaryAddress) args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
       if (step.receiver) args.receiver = ethers.utils.getAddress(step.receiver);
 
-      log.info(`FLASHLOAN PARSED - Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
+      log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
 
       return {
         protocol: step.protocol,
@@ -78,8 +80,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
-      // primaryAddress is required by Enso for protocol-specific deposits:
-      // aave-v3 pool address for Aave deposits, stataToken address for stata deposits.
+      // primaryAddress = Aave V3 pool address, required for aave-v3 deposits.
       const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: typeof step.amount === 'string'
@@ -99,14 +100,11 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      // Enso borrow schema (confirmed from official docs):
-      //   collateral   = address of the token used as collateral — field is named "collateral", NOT "tokenIn"
+      // Enso aave-v3 borrow schema:
+      //   collateral   = token locked as collateral (field name is "collateral", NOT "tokenIn")
       //   tokenOut     = asset being borrowed
-      //   amountOut    = how much of tokenOut to borrow — NOT amountIn
-      //   primaryAddress = Aave pool address
-      //
-      // Previous bug: was sending args.tokenIn instead of args.collateral.
-      // Enso docs show the field must literally be named "collateral".
+      //   amountOut    = how much to borrow (NOT amountIn)
+      //   primaryAddress = Aave V3 pool address
       const args: Record<string, any> = {
         collateral: ethers.utils.getAddress(step.collateral),
         tokenOut: ethers.utils.getAddress(step.token),
@@ -131,7 +129,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'withdraw': {
-      // primaryAddress is required for stata/aave-v3 redeems.
       const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: typeof step.amount === 'string'
