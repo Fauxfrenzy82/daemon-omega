@@ -5,9 +5,21 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('wallets');
 
+// 🔥 Public RPC for reads
 export const provider = new ethers.providers.JsonRpcProvider(activeChain.rpcUrl);
 
-export const executionWallet = new ethers.Wallet(env.EXECUTION_PRIVATE_KEY, provider);
+// 🔥 Private Mempool RPC for transaction submission (MEV protection)
+// Polygon Private Mempool routes transactions directly to block producers,
+// bypassing the public mempool and eliminating frontrunning/sandwich attacks[reference:5]
+export const privateMempoolProvider = new ethers.providers.JsonRpcProvider(
+  env.PRIVATE_MEMPOOL_RPC || 'https://private-mempool.polygon.technology'
+);
+
+// 🔥 Execution wallet using private mempool for submission
+export const executionWallet = new ethers.Wallet(env.EXECUTION_PRIVATE_KEY, privateMempoolProvider);
+
+// 🔥 Also expose the execution wallet with public provider for read operations
+export const executionWalletRead = new ethers.Wallet(env.EXECUTION_PRIVATE_KEY, provider);
 
 export function getTreasuryAddress(): string {
   if (!ethers.utils.isAddress(env.TREASURY_ADDRESS)) {
