@@ -1,4 +1,3 @@
-// src/execution/ensoBuilder.ts
 import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
 import { executionWallet } from '../treasury/wallets';
@@ -21,6 +20,7 @@ export interface FlashLoanProvider {
 }
 
 const bundleCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL_MS = 10000;
 
 export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
@@ -42,7 +42,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // Only add primaryAddress if explicitly set on the flashloan step itself.
+      // 🔥 FIX: Only add primaryAddress if explicitly set on the flashloan step itself.
       // For Morpho flashloans this is omitted. For Aave-as-flashloan-provider
       // it would be the pool, but we are moving away from that.
       if (step.primaryAddress) args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
