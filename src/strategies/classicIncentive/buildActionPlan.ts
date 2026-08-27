@@ -1,3 +1,4 @@
+// src/strategies/classicIncentive/buildActionPlan.ts
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
@@ -7,7 +8,18 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('buildActionPlan');
 
+// Aave V3 pool on Polygon — used on deposit and borrow callback steps only.
+// NOT placed on the flashloan outer step (that caused "Invalid address type").
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+
+// Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
+// The flashloan itself comes from Morpho; the collateral actions inside the
+// callback still target Aave V3. This sidesteps the Enso aave-v3 flashloan
+// schema validation that has been blocking execution.
+const MORPHO_FLASHLOAN_PROVIDER: FlashLoanProvider = {
+  name: 'Morpho',
+  protocol: 'morpho-markets-v1',
+};
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
@@ -44,6 +56,12 @@ async function buildAaveIncentivePlan(
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
+  // Always use Morpho as the flashloan provider unless explicitly overridden.
+  // Morpho's flashloan schema is simpler and avoids the Enso aave-v3 validator
+  // issue that has blocked execution for weeks.
+  const flashLoanProvider = options?.flashLoanProvider || MORPHO_FLASHLOAN_PROVIDER;
+
+  // Calculate flashloan amount from position size in collateral token's decimals.
   const collateralPriceUsd = getTokenPriceUsd(flashLoanToken);
   const collateralUnits = positionSize / collateralPriceUsd;
   const flashLoanAmount: string = ethers.utils
@@ -62,9 +80,12 @@ async function buildAaveIncentivePlan(
     collateralPriceUsd,
     flashLoanAmount,
     borrowAmount,
+    flashLoanProvider: flashLoanProvider.protocol,
     executionWalletAddress: executionWallet.address,
   });
 
+  // Step 0: deposit flashloaned collateral into Aave V3.
+  // primaryAddress = Aave pool, required for aave-v3 deposit action in Enso.
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -81,6 +102,10 @@ async function buildAaveIncentivePlan(
     onBehalfOf: executionWallet.address,
   });
 
+  // Step 1: borrow USDC against the deposited collateral.
+  // primaryAddress = Aave pool, required for aave-v3 borrow action in Enso.
+  // collateral field (not tokenIn) per confirmed Enso docs schema.
+  // amountOut (not amountIn) per confirmed Enso docs schema.
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
@@ -102,29 +127,33 @@ async function buildAaveIncentivePlan(
 
   const callback: ActionStep[] = [depositStep, borrowStep];
 
+  // Step 2: swap borrowed USDC back to collateral token to repay Morpho flashloan.
+  // borrowAsset is always USDC, flashLoanToken is always non-stablecoin, so this
+  // swap is always needed.
   if (borrowAsset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
     const swapStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
       tokenIn: borrowAsset.address,
       tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 1 },
+      amountIn: { useOutputOfCallAt: 1 }, // output of borrow step at index 1
       slippage: '100',
     };
     callback.push(swapStep);
   }
 
-  // ✅ FIXED: primaryAddress is NOT included on the outer flashloan step.
-  // It belongs only inside the callback actions, where it is already provided.
+  // Morpho flashloan outer step — no primaryAddress on this level.
+  // The Aave pool address belongs only on the inner deposit/borrow steps.
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
+    protocol: flashLoanProvider.protocol,
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback,
   };
 
   log.info('FULL ACTION PLAN CREATED', {
+    flashLoanProvider: flashLoanProvider.protocol,
     plan: JSON.stringify({ flashLoanToken, flashLoanAmount, steps: [flashloanStep] }, null, 2),
   });
 
@@ -142,6 +171,8 @@ async function buildQuickSwapV3Plan(
   const { token0, token1, positionSize } = candidate.params;
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || token0;
+  const flashLoanProvider = options?.flashLoanProvider || MORPHO_FLASHLOAN_PROVIDER;
+
   const flashLoanAmount: string = ethers.utils
     .parseUnits(
       (positionSize / getTokenPriceUsd(token0)).toFixed(token0.decimals),
@@ -169,7 +200,7 @@ async function buildQuickSwapV3Plan(
 
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
+    protocol: flashLoanProvider.protocol,
     token: flashLoanToken.address,
     amount: flashLoanAmount,
     callback: [buyStep, sellStep],
