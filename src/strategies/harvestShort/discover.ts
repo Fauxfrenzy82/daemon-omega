@@ -3,7 +3,7 @@ import { TokenInfo } from '../../config/tokens';
 import { OpportunityCandidate } from '../common/opportunityCandidate';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
-import { REWARD_POSITIONS } from '../../config/farms';
+import { getRewardPositions } from '../../config/farms';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { pushCandidate } from '../../execution/queue';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
