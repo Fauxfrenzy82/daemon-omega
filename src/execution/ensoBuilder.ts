@@ -99,14 +99,16 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      // Enso borrow schema:
-      //   tokenIn  = collateral being locked
-      //   tokenOut = asset being borrowed
-      //   amountOut = how much of tokenOut (the borrow asset) you want — NOT amountIn.
-      // Sending amountIn here causes Enso to parse it as a reference/pointer type,
-      // fail on a plain numeric string, and surface "Invalid address type".
+      // Enso borrow schema (confirmed from official docs):
+      //   collateral   = address of the token used as collateral — field is named "collateral", NOT "tokenIn"
+      //   tokenOut     = asset being borrowed
+      //   amountOut    = how much of tokenOut to borrow — NOT amountIn
+      //   primaryAddress = Aave pool address
+      //
+      // Previous bug: was sending args.tokenIn instead of args.collateral.
+      // Enso docs show the field must literally be named "collateral".
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(step.collateral),
+        collateral: ethers.utils.getAddress(step.collateral),
         tokenOut: ethers.utils.getAddress(step.token),
         amountOut: typeof step.amount === 'string'
           ? step.amount
@@ -115,12 +117,11 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
-      // ✅ ADDED: include interestRateMode if provided
       if (step.interestRateMode !== undefined) {
         args.interestRateMode = step.interestRateMode;
       }
 
-      log.info(`BORROW PARSED - Collateral (tokenIn): ${args.tokenIn} | Borrow (tokenOut): ${args.tokenOut} | AmountOut: ${args.amountOut}`);
+      log.info(`BORROW PARSED - Collateral: ${args.collateral} | Borrow (tokenOut): ${args.tokenOut} | AmountOut: ${args.amountOut}`);
 
       return {
         protocol: step.protocol,
