@@ -66,9 +66,6 @@ async function buildAaveIncentivePlan(
   });
 
   // primaryAddress: AAVE_POOL is required on deposit and borrow callback steps.
-  // It must NOT be set on the outer flashloan step — that field on the flashloan
-  // action refers to the Enso router, not the Aave pool, and sending the pool
-  // address there causes Enso to reject with "Invalid address type".
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -93,6 +90,7 @@ async function buildAaveIncentivePlan(
     amount: borrowAmount,
     primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
+    interestRateMode: 2,   // ✅ ADDED: variable rate
   };
 
   log.info('BORROW STEP CREATED', {
@@ -117,13 +115,13 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // primaryAddress intentionally omitted on the flashloan outer step.
-  // The Aave pool address is only valid on the inner callback actions.
+  // ✅ ADDED: primaryAddress on the flashloan step (required by Enso for Aave V3)
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
+    primaryAddress: AAVE_POOL,   // ✅ FIX: added missing field
     callback,
   };
 
