@@ -11,6 +11,12 @@ import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('harvestShort');
 
+// 🔥 Add this ABI for checking pending rewards
+const FARM_ABI = [
+  'function pendingRewards(address user) view returns (uint256)',
+  'function rewardToken() view returns (address)',
+];
+
 export async function discoverHarvestShort(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
 
@@ -25,12 +31,65 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
 
   for (const position of REWARD_POSITIONS) {
     try {
-      // For v1, we assume rewards are claimable.
-      // In production, call the contract's pendingRewards function.
-      // Here we use a fixed amount for demo (1 token).
-      const rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
+      log.info(`📊 Checking farm: ${position.id}`, {
+        rewardToken: position.rewardToken.symbol,
+        entryToken: position.entryToken.symbol,
+        positionAddress: position.positionAddress,
+      });
 
-      // Use Enso route instead of direct DEX quoter
+      // 🔥 Try to get actual pending rewards
+      let rewardAmount: ethers.BigNumber;
+      let rewardSource = 'hardcoded';
+
+      try {
+        const farmContract = new ethers.Contract(
+          position.positionAddress,
+          FARM_ABI,
+          (await import('../../treasury/wallets')).provider
+        );
+        
+        // Try to get pending rewards
+        const pending = await farmContract.pendingRewards(
+          (await import('../../treasury/wallets')).executionWallet.address
+        );
+        
+        if (pending && pending.gt(0)) {
+          rewardAmount = pending;
+          rewardSource = 'contract';
+          log.info(`✅ Pending rewards from contract`, {
+            positionId: position.id,
+            rewardAmount: ethers.utils.formatUnits(pending, position.rewardToken.decimals),
+            source: rewardSource,
+          });
+        } else {
+          // Fallback to 1 token if no pending rewards
+          rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
+          log.debug(`No pending rewards found, using fallback amount (1 token)`, {
+            positionId: position.id,
+          });
+        }
+      } catch (err) {
+        // Fallback if contract call fails
+        rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
+        log.debug(`Contract call failed, using fallback amount (1 token)`, {
+          positionId: position.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      // Get reward token price
+      const rewardPrice = await getLiveTokenPriceUsd(position.rewardToken);
+      const rewardValue = (Number(rewardAmount) / 10 ** position.rewardToken.decimals) * rewardPrice;
+
+      log.info(`💰 Reward value calculated`, {
+        positionId: position.id,
+        rewardToken: position.rewardToken.symbol,
+        rewardAmountHuman: ethers.utils.formatUnits(rewardAmount, position.rewardToken.decimals),
+        rewardPriceUsd: rewardPrice,
+        rewardValueUsd: rewardValue,
+      });
+
+      // 🔥 Use Enso route for the sell quote
       const sellQuote = await getEnsoRouteQuote(
         position.rewardToken,
         position.entryToken,
@@ -42,12 +101,67 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
         continue;
       }
 
-      const rewardPrice = await getLiveTokenPriceUsd(position.rewardToken);
-      const rewardValue = (Number(rewardAmount) / 10 ** position.rewardToken.decimals) * rewardPrice;
       const estimatedGasUsd = 0.05 * nativePriceUsd;
       const netProfitUsd = rewardValue - estimatedGasUsd;
 
-      if (netProfitUsd > env.DEFAULT_MIN_PROFIT_USD) {
+      // 🔥 Also calculate potential flashloan arbitrage profit
+      const flashloanSizeUsd = env.HARVEST_FLASHLOAN_AMOUNT_USD || 500;
+      const entryTokenPrice = await getLiveTokenPriceUsd(position.entryToken);
+      const flashloanAmount = ethers.utils.parseUnits(
+        (flashloanSizeUsd / entryTokenPrice).toFixed(position.entryToken.decimals),
+        position.entryToken.decimals
+      ).toString();
+
+      // Get quote for flashloan arbitrage (entryToken → rewardToken → entryToken)
+      const buyQuote = await getEnsoRouteQuote(
+        position.entryToken,
+        position.rewardToken,
+        flashloanAmount
+      );
+
+      let arbitrageNetProfitUsd = 0;
+      let arbitrageGrossProfitUsd = 0;
+
+      if (buyQuote) {
+        // Calculate round-trip profit
+        const boughtRewardAmount = buyQuote.amountOut;
+        const sellBackQuote = await getEnsoRouteQuote(
+          position.rewardToken,
+          position.entryToken,
+          boughtRewardAmount
+        );
+
+        if (sellBackQuote) {
+          const amountInHuman = Number(flashloanAmount) / 10 ** position.entryToken.decimals;
+          const amountOutHuman = Number(sellBackQuote.amountOut) / 10 ** position.entryToken.decimals;
+          arbitrageGrossProfitUsd = (amountOutHuman - amountInHuman) * entryTokenPrice;
+          arbitrageNetProfitUsd = arbitrageGrossProfitUsd - estimatedGasUsd - (flashloanSizeUsd * 0.0009); // Aave flashloan fee
+
+          log.info(`🔄 Flashloan arbitrage potential`, {
+            positionId: position.id,
+            flashloanSizeUsd,
+            flashloanAmount,
+            buyQuoteAmountOut: boughtRewardAmount,
+            sellBackAmountOut: sellBackQuote.amountOut,
+            arbitrageGrossProfitUsd: arbitrageGrossProfitUsd.toFixed(4),
+            arbitrageNetProfitUsd: arbitrageNetProfitUsd.toFixed(4),
+          });
+        }
+      }
+
+      // Use the higher of the two profits
+      const totalNetProfitUsd = Math.max(netProfitUsd, arbitrageNetProfitUsd);
+
+      log.info(`📈 Final profit calculation`, {
+        positionId: position.id,
+        harvestNetProfitUsd: netProfitUsd.toFixed(4),
+        arbitrageNetProfitUsd: arbitrageNetProfitUsd.toFixed(4),
+        totalNetProfitUsd: totalNetProfitUsd.toFixed(4),
+        threshold: env.DEFAULT_MIN_PROFIT_USD,
+        isProfitable: totalNetProfitUsd > env.DEFAULT_MIN_PROFIT_USD,
+      });
+
+      if (totalNetProfitUsd > env.DEFAULT_MIN_PROFIT_USD) {
         const candidate: OpportunityCandidate = {
           id: `harvest-${position.id}-${Date.now()}`,
           strategy: 'harvestShort',
@@ -58,28 +172,33 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
             entryToken: position.entryToken,
             rewardAmount: rewardAmount.toString(),
             sellQuote,
+            // 🔥 Add flashloan arbitrage params
+            useFlashloanArbitrage: arbitrageNetProfitUsd > netProfitUsd,
+            flashloanSizeUsd: flashloanSizeUsd,
+            flashloanAmount: flashloanAmount,
+            buyQuote: buyQuote || null,
             rewardValue,
             nativePriceUsd,
           },
-          estimatedGrossProfitUsd: rewardValue,
-          estimatedNetProfitUsd: netProfitUsd,
-          estimatedCostUsd: rewardValue - netProfitUsd,
+          estimatedGrossProfitUsd: Math.max(rewardValue, arbitrageGrossProfitUsd),
+          estimatedNetProfitUsd: totalNetProfitUsd,
+          estimatedCostUsd: (rewardValue > arbitrageGrossProfitUsd ? rewardValue : arbitrageGrossProfitUsd) - totalNetProfitUsd,
           actionPlan: null,
           sourceTimestamp: Date.now(),
         };
 
-        // STREAM: push immediately
         pushCandidate(candidate);
         candidates.push(candidate);
-        log.info(`Found harvest opportunity for ${position.id}`, {
+        log.info(`✅ Found harvest opportunity for ${position.id}`, {
           rewardValue: rewardValue.toFixed(4),
-          netProfitUsd: netProfitUsd.toFixed(4),
+          netProfitUsd: totalNetProfitUsd.toFixed(4),
+          usingArbitrage: arbitrageNetProfitUsd > netProfitUsd,
+          flashloanSize: flashloanSizeUsd,
         });
       } else {
-        log.debug(`Harvest opportunity below threshold for ${position.id}`, {
-          rewardValue,
-          netProfitUsd: netProfitUsd.toFixed(6),
-          threshold: env.DEFAULT_MIN_PROFIT_USD
+        log.debug(`❌ Below threshold for ${position.id}`, {
+          netProfitUsd: totalNetProfitUsd.toFixed(6),
+          threshold: env.DEFAULT_MIN_PROFIT_USD,
         });
       }
     } catch (err) {
@@ -89,6 +208,6 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
     }
   }
 
-  log.info(`Harvest + Spot Sell found ${candidates.length} candidates`);
+  log.info(`📊 Harvest + Spot Sell found ${candidates.length} candidates`);
   return candidates;
 }
