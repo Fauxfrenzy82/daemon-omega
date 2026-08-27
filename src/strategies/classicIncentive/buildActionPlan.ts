@@ -65,7 +65,6 @@ async function buildAaveIncentivePlan(
     executionWalletAddress: executionWallet.address,
   });
 
-  // primaryAddress: AAVE_POOL is required on deposit and borrow callback steps.
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
@@ -90,7 +89,7 @@ async function buildAaveIncentivePlan(
     amount: borrowAmount,
     primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
-    interestRateMode: 2,   // ✅ ADDED: variable rate
+    interestRateMode: 2,
   };
 
   log.info('BORROW STEP CREATED', {
@@ -115,13 +114,13 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // ✅ ADDED: primaryAddress on the flashloan step (required by Enso for Aave V3)
+  // ✅ FIXED: primaryAddress is NOT included on the outer flashloan step.
+  // It belongs only inside the callback actions, where it is already provided.
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: options?.flashLoanProvider?.protocol || 'aave-v3',
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL,   // ✅ FIX: added missing field
     callback,
   };
 
