@@ -43,6 +43,9 @@ export const env = {
   RPC_WS_URL: optional('RPC_WS_URL', ''),
   CHAIN_ID: optionalNumber('CHAIN_ID', 137),
 
+  // 🔥 NEW: Polygon Private Mempool RPC for transaction submission
+  PRIVATE_MEMPOOL_RPC: optional('PRIVATE_MEMPOOL_RPC', 'https://private-mempool.polygon.technology'),
+
   // Private Mempool
   PRIVATE_MEMPOOL_URL: optional('PRIVATE_MEMPOOL_URL', 'https://private-mempool.polygon.technology'),
 
@@ -63,9 +66,9 @@ export const env = {
   DATABASE_URL: required('DATABASE_URL'),
 
   // Risk / thresholds
-  DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.01),
+  DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.05),
   DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
-  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 10000),
+  MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 25000),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
   MAX_PRICE_IMPACT_BPS: optionalNumber('MAX_PRICE_IMPACT_BPS', 300),
@@ -118,5 +121,11 @@ export const env = {
   CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
 
   // 🔥 NEW: Harvest + Spot Sell flashloan amount in USD
-  HARVEST_FLASHLOAN_AMOUNT_USD: optionalNumber('HARVEST_FLASHLOAN_AMOUNT_USD', 500),
+  HARVEST_FLASHLOAN_AMOUNT_USD: optionalNumber('HARVEST_FLASHLOAN_AMOUNT_USD', 5000),
+
+  // 🔥 NEW: Maximum safe % of pool depth for flashloan (1-2%)
+  HARVEST_MAX_POOL_DEPTH_PCT: optionalNumber('HARVEST_MAX_POOL_DEPTH_PCT', 1.5),
+
+  // 🔥 NEW: Flashloan protocol to use (morpho-markets-v1, aave-v3, balancer-v3)
+  HARVEST_FLASHLOAN_PROTOCOL: optional('HARVEST_FLASHLOAN_PROTOCOL', 'morpho-markets-v1'),
 };
