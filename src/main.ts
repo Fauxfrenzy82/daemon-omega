@@ -10,6 +10,7 @@ import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 import { fetchNativePriceUsd } from './config/priceFeeds';
+import { initializeFarms } from './config/farms';
 
 const log = createLogger('main');
 
@@ -25,9 +26,10 @@ async function bootstrap(): Promise<void> {
     gasReserveUsd: env.SWEEP_KEEP_GAS_RESERVE_USD,
   });
 
+  // ✅ Initialize database schema
   await initSchema();
 
-  // ✅ Step 1: Initialize Enso first
+  // ✅ Step 1: Initialize Enso client
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
@@ -38,21 +40,34 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
+  // ✅ Step 2: Initialize farms (auto-discovers Gamma farms)
+  try {
+    await initializeFarms();
+    log.info('Farms initialized successfully');
+  } catch (err) {
+    log.error('Failed to initialize farms', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Non-fatal: continue without farms
+  }
+
+  // ✅ Step 3: Start health server
   startHealthServer();
 
-  // ✅ Step 2: Get initial native price BEFORE starting scan loop
+  // ✅ Step 4: Get initial native price BEFORE starting scan loop
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // ✅ Step 3: Start worker pool (so workers are ready for candidates)
+  // ✅ Step 5: Start worker pool (so workers are ready for candidates)
   startWorkerPool();
 
-  // ✅ Step 4: Start scan loop (workers are already waiting)
+  // ✅ Step 6: Start scan loop (workers are already waiting)
   startScanLoop();
 
+  // ✅ Step 7: Send system started alert
   await alertSystemStarted(executionWallet.address);
 
-  // Sweep interval
+  // ✅ Step 8: Sweep interval (profit collection)
   setInterval(async () => {
     try {
       const currentPrice = await fetchNativePriceUsd();
@@ -62,7 +77,7 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
-  // Hourly summary
+  // ✅ Step 9: Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -72,7 +87,7 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
-  // Daily summary
+  // ✅ Step 10: Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
@@ -92,12 +107,16 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
+// ✅ Process signal handlers
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// ✅ Unhandled rejection handler
 process.on('unhandledRejection', (reason) => {
   log.error('Unhandled promise rejection', { reason: String(reason) });
 });
 
+// ✅ Bootstrap the system
 bootstrap().catch((err) => {
   log.error('Fatal bootstrap error', {
     error: err instanceof Error ? err.message : String(err),
