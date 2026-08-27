@@ -1,0 +1,275 @@
+import axios from 'axios';
+import * as dotenv from 'dotenv';
+dotenv.config();
+
+const API_KEY = process.env.ENSO_API_KEY!;
+const FROM = '0xA714a014Db24b6b86e3f465be93736E019fCB47A';
+const BASE = 'https://api.enso.build/api/v1/shortcuts/bundle';
+
+async function probe(label: string, body: any[], queryParams: string = '') {
+  const url = `${BASE}?chainId=137&fromAddress=${FROM}&routingStrategy=router${queryParams}`;
+  try {
+    const r = await axios.post(url, body, {
+      headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+      timeout: 10000,
+    });
+    console.log(`✅ ${label}:`, JSON.stringify(r.data, null, 2));
+  } catch (e: any) {
+    console.log(`❌ ${label}:`, JSON.stringify(e.response?.data || e.message, null, 2));
+  }
+}
+
+async function main() {
+  console.log('=== PROBE 1: bare flashloan, no callback ===');
+  await probe('bare flashloan no callback', [{
+    protocol: 'aave-v3',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [],
+    },
+  }]);
+
+  console.log('\n=== PROBE 2: flashloan + deposit only ===');
+  await probe('flashloan + deposit only', [{
+    protocol: 'aave-v3',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [{
+        protocol: 'aave-v3',
+        action: 'deposit',
+        args: {
+          tokenIn: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+          amountIn: '1000000000000000000',
+          primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+          onBehalfOf: FROM,
+        },
+      }],
+    },
+  }]);
+
+  console.log('\n=== PROBE 3: flashloan + deposit + borrow ===');
+  await probe('flashloan + deposit + borrow', [{
+    protocol: 'aave-v3',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [
+        {
+          protocol: 'aave-v3',
+          action: 'deposit',
+          args: {
+            tokenIn: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            amountIn: '1000000000000000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+          },
+        },
+        {
+          protocol: 'aave-v3',
+          action: 'borrow',
+          args: {
+            collateral: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            tokenOut: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+            amountOut: '780000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+            interestRateMode: 2,
+          },
+        },
+      ],
+    },
+  }]);
+
+  console.log('\n=== PROBE 4: full bundle (flashloan + deposit + borrow + swap) ===');
+  await probe('full bundle', [{
+    protocol: 'aave-v3',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [
+        {
+          protocol: 'aave-v3',
+          action: 'deposit',
+          args: {
+            tokenIn: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            amountIn: '1000000000000000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+          },
+        },
+        {
+          protocol: 'aave-v3',
+          action: 'borrow',
+          args: {
+            collateral: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            tokenOut: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+            amountOut: '780000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+            interestRateMode: 2,
+          },
+        },
+        {
+          protocol: 'enso',
+          action: 'route',
+          args: {
+            tokenIn: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+            tokenOut: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            amountIn: { useOutputOfCallAt: 1 },
+            slippage: '100',
+          },
+        },
+      ],
+    },
+  }]);
+
+  console.log('\n=== PROBE 5: full bundle with DELEGATE strategy ===');
+  const delegateUrl = `${BASE}?chainId=137&fromAddress=${FROM}&routingStrategy=delegate`;
+  try {
+    const r = await axios.post(delegateUrl, [{
+      protocol: 'aave-v3',
+      action: 'flashloan',
+      args: {
+        flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+        flashloanAmount: '1000000000000000000',
+        callback: [
+          {
+            protocol: 'aave-v3',
+            action: 'deposit',
+            args: {
+              tokenIn: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+              amountIn: '1000000000000000000',
+              primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+              onBehalfOf: FROM,
+            },
+          },
+          {
+            protocol: 'aave-v3',
+            action: 'borrow',
+            args: {
+              collateral: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+              tokenOut: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+              amountOut: '780000000',
+              primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+              onBehalfOf: FROM,
+              interestRateMode: 2,
+            },
+          },
+          {
+            protocol: 'enso',
+            action: 'route',
+            args: {
+              tokenIn: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+              tokenOut: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+              amountIn: { useOutputOfCallAt: 1 },
+              slippage: '100',
+            },
+          },
+        ],
+      },
+    }], {
+      headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
+      timeout: 10000,
+    });
+    console.log('✅ delegate strategy:', JSON.stringify(r.data, null, 2));
+  } catch (e: any) {
+    console.log('❌ delegate strategy:', JSON.stringify(e.response?.data || e.message, null, 2));
+  }
+
+  console.log('\n=== PROBE 6: Morpho flashloan (no primaryAddress) ===');
+  await probe('Morpho flashloan', [{
+    protocol: 'morpho-markets-v1',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [],
+    },
+  }]);
+
+  console.log('\n=== PROBE 7: Morpho flashloan + deposit + borrow ===');
+  await probe('Morpho flashloan + deposit + borrow', [{
+    protocol: 'morpho-markets-v1',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [
+        {
+          protocol: 'aave-v3',
+          action: 'deposit',
+          args: {
+            tokenIn: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            amountIn: '1000000000000000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+          },
+        },
+        {
+          protocol: 'aave-v3',
+          action: 'borrow',
+          args: {
+            collateral: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            tokenOut: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+            amountOut: '780000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+            interestRateMode: 2,
+          },
+        },
+      ],
+    },
+  }]);
+
+  console.log('\n=== PROBE 8: Morpho full bundle ===');
+  await probe('Morpho full bundle', [{
+    protocol: 'morpho-markets-v1',
+    action: 'flashloan',
+    args: {
+      flashloanToken: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+      flashloanAmount: '1000000000000000000',
+      callback: [
+        {
+          protocol: 'aave-v3',
+          action: 'deposit',
+          args: {
+            tokenIn: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            amountIn: '1000000000000000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+          },
+        },
+        {
+          protocol: 'aave-v3',
+          action: 'borrow',
+          args: {
+            collateral: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            tokenOut: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+            amountOut: '780000000',
+            primaryAddress: '0x794a61358D6845594F94dc1DB02A252b5b4814aD',
+            onBehalfOf: FROM,
+            interestRateMode: 2,
+          },
+        },
+        {
+          protocol: 'enso',
+          action: 'route',
+          args: {
+            tokenIn: '0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359',
+            tokenOut: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
+            amountIn: '780000000', // static amount instead of useOutputOfCallAt
+            slippage: '100',
+          },
+        },
+      ],
+    },
+  }]);
+}
+
+main().catch(console.error);
