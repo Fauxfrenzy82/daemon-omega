@@ -13,7 +13,6 @@ import { provider } from '../../treasury/wallets';
 const log = createLogger('harvestShort');
 
 // 🔥 Minimal ABI for checking if a contract has rewards
-// We use Enso's harvest action for actual claiming, so we only need basic checks
 const MINIMAL_FARM_ABI = [
   'function rewardToken() view returns (address)',
   'function totalSupply() view returns (uint256)',
@@ -33,7 +32,6 @@ async function calculateMaxSafeFlashloan(
 ): Promise<{ maxSafeUsd: number; poolDepthUsd: number; priceImpactBps: number }> {
   try {
     // Simplified pool depth estimation using token price and known liquidity
-    // For V3 pools, we'd need slot0 and liquidity; for simplicity, use fallback
     const tokenPrice = await getLiveTokenPriceUsd(tokenIn);
     const estimatedDepthUsd = 1000000; // Conservative default for Polygon pools
     
@@ -64,16 +62,16 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
 
   log.info('🔍 Harvest + Spot Sell discovery started');
 
-  if (REWARD_POSITIONS.length === 0) {
-    log.info('📭 Harvest + Spot Sell: No reward positions configured. Add farms to src/config/farms.ts');
+  // 🔥 Get reward positions dynamically
+  const rewardPositions = await getRewardPositions();
+  
+  if (rewardPositions.length === 0) {
+    log.info('📭 Harvest + Spot Sell: No reward positions found. Run initializeFarms() first.');
     return [];
   }
 
-  const enso = getEnsoClient();
-
-  // Log all configured farms
-  log.info(`📋 Configured farms: ${REWARD_POSITIONS.length}`, {
-    farms: REWARD_POSITIONS.map(f => ({
+  log.info(`📋 Configured farms: ${rewardPositions.length}`, {
+    farms: rewardPositions.map((f: any) => ({
       id: f.id,
       rewardToken: f.rewardToken.symbol,
       entryToken: f.entryToken.symbol,
@@ -81,7 +79,7 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
     })),
   });
 
-  for (const position of REWARD_POSITIONS) {
+  for (const position of rewardPositions) {
     const startTime = Date.now();
     let stepLog: string[] = [];
 
@@ -159,7 +157,6 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
         stepLog.push(`Reward price: $${rewardPrice}`);
         
         // Use a reasonable amount for evaluation – Enso will handle the actual harvest
-        // We use 0.01 tokens as a baseline for evaluation
         const evalAmount = ethers.utils.parseUnits(
           '0.01',
           position.rewardToken.decimals
