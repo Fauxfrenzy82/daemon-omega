@@ -29,6 +29,14 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 
 /**
  * Convert an ActionStep to an Enso-compatible action object.
+ * 
+ * 🔥 FIX: receiver and refundReceiver are NOT action-level fields.
+ * They are handled at the bundle level via fromAddress in bundleParams.
+ * 
+ * For Morpho flashloans:
+ * - tokenIn / amountIn go at the ROOT level
+ * - flashloanToken / flashloanAmount go inside args
+ * - callback goes inside args
  */
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
@@ -39,22 +47,26 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error('Flashloan must contain at least one callback action');
       }
 
+      // ✅ Build args with flashloan-specific parameters
       const args: Record<string, any> = {
         flashloanToken: ethers.utils.getAddress(step.token),
         flashloanAmount: step.amount.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
+      // ✅ Add primaryAddress to args if provided (protocol-specific)
       if (step.primaryAddress) {
         args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
       }
 
+      // ✅ Build the action – tokenIn/amountIn at root, receiver removed
       const action: any = {
         protocol: step.protocol,
         action: 'flashloan',
         args,
       };
 
+      // ✅ tokenIn and amountIn at the root level (required by Enso flashloan schema)
       if (step.tokenIn) {
         action.tokenIn = ethers.utils.getAddress(
           Array.isArray(step.tokenIn) ? step.tokenIn[0] : step.tokenIn
@@ -65,25 +77,16 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         action.amountIn = Array.isArray(step.amountIn) ? step.amountIn[0] : step.amountIn;
       }
 
+      // ✅ tokenOut at the root level (if provided)
       if (step.tokenOut) {
         action.tokenOut = Array.isArray(step.tokenOut) ? step.tokenOut[0] : step.tokenOut;
       }
 
-      // ✅ receiver – EOA or Smart Contract Wallet
-      if (step.receiver) {
-        action.receiver = ethers.utils.getAddress(step.receiver);
-      } else {
-        action.receiver = ethers.utils.getAddress(executionWallet.address);
-      }
+      // 🔥 FIX: Do NOT add receiver or refundReceiver to the action.
+      // These are handled at the bundle level via fromAddress in bundleParams.
+      // Adding them here causes "Invalid address type" error.
 
-      // ✅ refundReceiver – EOA or Smart Contract Wallet
-      if (step.refundReceiver) {
-        action.refundReceiver = ethers.utils.getAddress(step.refundReceiver);
-      } else {
-        action.refundReceiver = ethers.utils.getAddress(executionWallet.address);
-      }
-
-      log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount} | Receiver: ${action.receiver}`);
+      log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
 
       return action;
     }
@@ -197,6 +200,7 @@ export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle
     convertStepToEnsoAction(step, { flashLoanAmount: plan.flashLoanAmount })
   );
 
+  // ✅ receiver and refundReceiver are handled via fromAddress here
   const bundleParams = {
     fromAddress,
     chainId,
