@@ -1,3 +1,4 @@
+// src/execution/ensoClient.ts
 import axios from 'axios';
 import { env } from '../config/env';
 import { activeChain } from '../config/chains';
@@ -5,9 +6,11 @@ import { createLogger } from '../utils/logger';
 
 const log = createLogger('ensoClient');
 
-// ✅ FIX: Base URL includes /api – already corrected in env.ts
 const BASE_URL = env.ENSO_BASE_URL || 'https://api.enso.build/api';
 const API_KEY = env.ENSO_API_KEY;
+
+// Log at module load so it appears in boot logs
+log.info('EnsoClient BASE_URL resolved', { BASE_URL });
 
 export interface EnsoBundleParams {
   fromAddress: string;
@@ -47,6 +50,8 @@ export class EnsoClient {
         protocol: actions[0].protocol,
         action: actions[0].action,
       } : null,
+      // Full body logged so we can diff against what Enso actually receives
+      fullBody: JSON.stringify(actions, null, 2),
     });
 
     try {
@@ -65,6 +70,7 @@ export class EnsoClient {
       log.info('🌐 ENSO BUNDLE RESPONSE (DIRECT)', {
         status: response.status,
         hasData: !!response.data,
+        fullResponse: JSON.stringify(response.data, null, 2),
       });
 
       return response.data;
@@ -76,26 +82,49 @@ export class EnsoClient {
         message: error.message,
         url: error.config?.url,
         method: error.config?.method,
+        // Log exactly what was sent so we can see what Enso received
+        sentBody: error.config?.data,
+        sentHeaders: {
+          contentType: error.config?.headers?.['Content-Type'],
+          hasAuth: !!error.config?.headers?.['Authorization'],
+        },
       });
       throw error;
     }
   }
 
   async getRouteData(params: any): Promise<any> {
-    const payload = { ...params };
+    // Route API is GET with query params, not POST with body
+    const queryParams = new URLSearchParams();
+    if (params.chainId) queryParams.append('chainId', String(params.chainId));
+    if (params.fromAddress) queryParams.append('fromAddress', params.fromAddress);
+    if (params.routingStrategy) queryParams.append('routingStrategy', params.routingStrategy || 'router');
+    if (params.receiver) queryParams.append('receiver', params.receiver);
+    if (params.spender) queryParams.append('spender', params.spender);
+    if (params.slippage) queryParams.append('slippage', String(params.slippage));
+
+    // Handle array params
+    const tokenIn = Array.isArray(params.tokenIn) ? params.tokenIn : [params.tokenIn];
+    const tokenOut = Array.isArray(params.tokenOut) ? params.tokenOut : [params.tokenOut];
+    const amountIn = Array.isArray(params.amountIn) ? params.amountIn : [params.amountIn];
+
+    tokenIn.forEach((t: string) => queryParams.append('tokenIn', t));
+    tokenOut.forEach((t: string) => queryParams.append('tokenOut', t));
+    amountIn.forEach((a: string) => queryParams.append('amountIn', String(a)));
+
+    const url = `${BASE_URL}/v1/shortcuts/route?${queryParams.toString()}`;
 
     log.info('🌐 ENSO ROUTE REQUEST (DIRECT)', {
-      tokenIn: params?.tokenIn?.[0],
-      tokenOut: params?.tokenOut?.[0],
-      amountIn: params?.amountIn?.[0],
+      tokenIn: tokenIn[0],
+      tokenOut: tokenOut[0],
+      amountIn: amountIn[0],
       fromAddress: params?.fromAddress,
       chainId: params?.chainId,
     });
 
     try {
-      const response = await axios.post(
-        `${BASE_URL}/v1/shortcuts/route`,
-        payload,
+      const response = await axios.get(
+        url,
         {
           headers: {
             'Content-Type': 'application/json',
