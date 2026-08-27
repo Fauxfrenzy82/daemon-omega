@@ -25,11 +25,11 @@ export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { 
-    positionAddress, 
-    rewardToken, 
-    entryToken, 
-    rewardAmount, 
+  const {
+    positionAddress,
+    rewardToken,
+    entryToken,
+    rewardAmount,
     sellQuote,
     useFlashloanArbitrage,
     flashloanSizeUsd,
@@ -42,7 +42,7 @@ export async function buildActionPlan(
   const flashLoanToken = options?.flashLoanToken || entryToken;
 
   const flashloanProtocol = (env.HARVEST_FLASHLOAN_PROTOCOL || 'morpho-markets-v1') as FlashloanProtocol;
-  
+
   if (!SUPPORTED_FLASHLOAN_PROTOCOLS.includes(flashloanProtocol)) {
     log.warn(`Unsupported flashloan protocol: ${flashloanProtocol}, falling back to morpho-markets-v1`);
   }
@@ -73,7 +73,8 @@ export async function buildActionPlan(
     });
   }
 
-  // 🔥 Harvest rewards using Enso's native harvest action
+  // 🔥 Step 1: Harvest rewards using Enso's native harvest action
+  // Enso handles the ABI automatically – no custom contract calls needed
   const harvestStep: ActionStep = {
     type: 'harvest',
     protocol: 'enso',
@@ -81,9 +82,12 @@ export async function buildActionPlan(
     token: rewardToken.address,
   };
 
+  // 🔥 Build the callback actions
   const callbackActions: ActionStep[] = [harvestStep];
 
+  // 🔥 Step 2: If using arbitrage, add the flashloan swap logic
   if (useArbitrage && buyQuote) {
+    // Swap entryToken → rewardToken (buy reward token with flashloaned funds)
     const buyStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
@@ -96,12 +100,14 @@ export async function buildActionPlan(
     };
     callbackActions.push(buyStep);
 
+    // 🔥 FIX: After harvesting, sell all rewards back to entryToken
+    // Use the actual rewardAmount from discovery (not useOutputOfCallAt)
     const sellStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
       tokenIn: rewardToken.address,
-      tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 0 },
+      tokenOut: entryToken.address,
+      amountIn: rewardAmount,  // ✅ FIX: Use direct amount from discovery
       slippage: '100',
       primaryAddress: sellQuote?.raw?.primaryAddress || undefined,
       poolFee: sellQuote?.raw?.poolFee,
@@ -112,15 +118,18 @@ export async function buildActionPlan(
       buyStep: `${flashLoanToken.symbol} → ${rewardToken.symbol}`,
       sellStep: `${rewardToken.symbol} → ${flashLoanToken.symbol}`,
       flashloanAmount: flashloanAmountHuman,
+      rewardAmount: rewardAmount,
       protocol: flashloanProtocol,
     });
   } else {
+    // 🔥 Standard harvest + spot sell
+    // Use the actual rewardAmount from discovery (not useOutputOfCallAt)
     const sellStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
       tokenIn: rewardToken.address,
       tokenOut: entryToken.address,
-      amountIn: { useOutputOfCallAt: 0 },
+      amountIn: rewardAmount,  // ✅ FIX: Use direct amount from discovery
       slippage: '100',
       primaryAddress: sellQuote?.raw?.primaryAddress || undefined,
       poolFee: sellQuote?.raw?.poolFee,
@@ -128,6 +137,7 @@ export async function buildActionPlan(
     callbackActions.push(sellStep);
   }
 
+  // 🔥 Flashloan step with configurable protocol
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashloanProtocol,
@@ -146,6 +156,7 @@ export async function buildActionPlan(
     flashloanProtocol,
     callbackActionCount: callbackActions.length,
     usingArbitrage: useArbitrage,
+    rewardAmount: rewardAmount,
     steps: callbackActions.map(a => a.type).join(' → '),
   });
 
