@@ -8,17 +8,15 @@ import { createLogger } from '../../utils/logger';
 const log = createLogger('buildActionPlan');
 
 /**
- * 🔥 Supported flashloan protocols on Polygon (confirmed by Enso docs)[reference:3]
+ * 🔥 Supported flashloan protocols on Polygon (confirmed by Enso docs)
  * - morpho-markets-v1: 0% fee (BEST for arbitrage)
  * - aave-v3: Dynamic fee (5-9 bps)
  * - balancer-v3: Pool-specific fee
- * - uniswap-v3: Pool-specific fee (0.05%, 0.3%, or 1%)
  */
 const SUPPORTED_FLASHLOAN_PROTOCOLS = [
   'morpho-markets-v1',
   'aave-v3',
   'balancer-v3',
-  'uniswap-v3',
 ] as const;
 
 type FlashloanProtocol = typeof SUPPORTED_FLASHLOAN_PROTOCOLS[number];
@@ -38,19 +36,18 @@ export async function buildActionPlan(
     flashloanAmount,
     buyQuote,
     priceImpactBps,
+    _debugSteps,
   } = candidate.params;
 
   const flashLoanToken = options?.flashLoanToken || entryToken;
 
-  // 🔥 Get the flashloan protocol from env or use default
+  // Get the flashloan protocol from env or use default (Morpho = 0% fee)
   const flashloanProtocol = (env.HARVEST_FLASHLOAN_PROTOCOL || 'morpho-markets-v1') as FlashloanProtocol;
   
-  // Validate the protocol is supported
   if (!SUPPORTED_FLASHLOAN_PROTOCOLS.includes(flashloanProtocol)) {
     log.warn(`Unsupported flashloan protocol: ${flashloanProtocol}, falling back to morpho-markets-v1`);
   }
 
-  // 🔥 Determine if we should use flashloan arbitrage
   const useArbitrage = useFlashloanArbitrage === true && flashloanAmount && buyQuote;
 
   let actualFlashloanAmount: string;
@@ -67,15 +64,19 @@ export async function buildActionPlan(
       protocol: flashloanProtocol,
       priceImpactBps,
       feePercent: flashloanProtocol === 'morpho-markets-v1' ? '0%' : 'variable',
+      debugSteps: _debugSteps?.length || 0,
     });
   } else {
     // Fallback: minimal flashloan (just to pay gas)
     actualFlashloanAmount = '1';
     flashloanAmountHuman = '1 (minimal)';
-    log.info(`🪣 Using minimal flashloan (gas only) for harvest`);
+    log.info(`🪣 Using minimal flashloan (gas only) for harvest`, {
+      protocol: flashloanProtocol,
+    });
   }
 
-  // Step 1: Harvest rewards
+  // 🔥 Step 1: Harvest rewards using Enso's native harvest action
+  // Enso handles the ABI automatically – no custom contract calls needed
   const harvestStep: ActionStep = {
     type: 'harvest',
     protocol: 'enso',
@@ -86,9 +87,9 @@ export async function buildActionPlan(
   // 🔥 Build the callback actions
   const callbackActions: ActionStep[] = [harvestStep];
 
-  // Step 2: If using arbitrage, add the flashloan swap logic
+  // 🔥 Step 2: If using arbitrage, add the flashloan swap logic
   if (useArbitrage && buyQuote) {
-    // Swap entryToken → rewardToken (buy QUICK with flashloaned USDC)
+    // Swap entryToken → rewardToken (buy reward token with flashloaned funds)
     const buyStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
@@ -107,7 +108,7 @@ export async function buildActionPlan(
       protocol: 'enso',
       tokenIn: rewardToken.address,
       tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 0 }, // Use the output from the last step
+      amountIn: { useOutputOfCallAt: 0 },
       slippage: '100',
       primaryAddress: sellQuote?.raw?.primaryAddress || undefined,
       poolFee: sellQuote?.raw?.poolFee,
@@ -136,10 +137,9 @@ export async function buildActionPlan(
   }
 
   // 🔥 Flashloan step with configurable protocol
-  // According to Enso docs, flashloan protocol is set via the protocol field[reference:4]
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashloanProtocol, // morpho-markets-v1 (0% fee), aave-v3, balancer-v3, uniswap-v3
+    protocol: flashloanProtocol,
     token: flashLoanToken.address,
     amount: actualFlashloanAmount,
     tokenIn: flashLoanToken.address,
@@ -155,6 +155,7 @@ export async function buildActionPlan(
     flashloanProtocol,
     callbackActionCount: callbackActions.length,
     usingArbitrage: useArbitrage,
+    steps: callbackActions.map(a => a.type).join(' → '),
   });
 
   return {
