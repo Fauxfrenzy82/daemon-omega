@@ -8,7 +8,7 @@ import { createLogger } from '../../utils/logger';
 const log = createLogger('buildActionPlan');
 
 /**
- * 🔥 Supported flashloan protocols on Polygon (confirmed by Enso docs)
+ * 🔥 Supported flashloan protocols on Polygon
  * - morpho-markets-v1: 0% fee (BEST for arbitrage)
  * - aave-v3: Dynamic fee (5-9 bps)
  * - balancer-v3: Pool-specific fee
@@ -41,7 +41,6 @@ export async function buildActionPlan(
 
   const flashLoanToken = options?.flashLoanToken || entryToken;
 
-  // Get the flashloan protocol from env or use default (Morpho = 0% fee)
   const flashloanProtocol = (env.HARVEST_FLASHLOAN_PROTOCOL || 'morpho-markets-v1') as FlashloanProtocol;
   
   if (!SUPPORTED_FLASHLOAN_PROTOCOLS.includes(flashloanProtocol)) {
@@ -67,7 +66,6 @@ export async function buildActionPlan(
       debugSteps: _debugSteps?.length || 0,
     });
   } else {
-    // Fallback: minimal flashloan (just to pay gas)
     actualFlashloanAmount = '1';
     flashloanAmountHuman = '1 (minimal)';
     log.info(`🪣 Using minimal flashloan (gas only) for harvest`, {
@@ -75,8 +73,7 @@ export async function buildActionPlan(
     });
   }
 
-  // 🔥 Step 1: Harvest rewards using Enso's native harvest action
-  // Enso handles the ABI automatically – no custom contract calls needed
+  // 🔥 Harvest rewards using Enso's native harvest action
   const harvestStep: ActionStep = {
     type: 'harvest',
     protocol: 'enso',
@@ -84,12 +81,9 @@ export async function buildActionPlan(
     token: rewardToken.address,
   };
 
-  // 🔥 Build the callback actions
   const callbackActions: ActionStep[] = [harvestStep];
 
-  // 🔥 Step 2: If using arbitrage, add the flashloan swap logic
   if (useArbitrage && buyQuote) {
-    // Swap entryToken → rewardToken (buy reward token with flashloaned funds)
     const buyStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
@@ -102,7 +96,6 @@ export async function buildActionPlan(
     };
     callbackActions.push(buyStep);
 
-    // After harvesting, sell all rewards back to entryToken
     const sellStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
@@ -122,7 +115,6 @@ export async function buildActionPlan(
       protocol: flashloanProtocol,
     });
   } else {
-    // Standard harvest + spot sell
     const sellStep: ActionStep = {
       type: 'swap',
       protocol: 'enso',
@@ -136,7 +128,6 @@ export async function buildActionPlan(
     callbackActions.push(sellStep);
   }
 
-  // 🔥 Flashloan step with configurable protocol
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashloanProtocol,
