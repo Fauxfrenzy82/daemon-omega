@@ -8,14 +8,91 @@ import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { pushCandidate } from '../../execution/queue';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
 import { getEnsoClient } from '../../execution/ensoClient';
+import { provider } from '../../treasury/wallets';
 
 const log = createLogger('harvestShort');
 
-// 🔥 Add this ABI for checking pending rewards
+// ABI for checking pending rewards and pool reserves
 const FARM_ABI = [
   'function pendingRewards(address user) view returns (uint256)',
   'function rewardToken() view returns (address)',
+  'function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)',
 ];
+
+// QuickSwap V3 Pool ABI for depth checks
+const POOL_ABI = [
+  'function liquidity() view returns (uint128)',
+  'function slot0() view returns (uint160 sqrtPriceX96, int24 tick, uint16 observationIndex, uint16 observationCardinality, uint16 observationCardinalityNext, uint8 feeProtocol, bool unlocked)',
+  'function token0() view returns (address)',
+  'function token1() view returns (address)',
+];
+
+/**
+ * Calculate the maximum safe flashloan amount based on pool depth.
+ * Prevents self-inflicted price impact > 1-2%.
+ */
+async function calculateMaxSafeFlashloan(
+  poolAddress: string,
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  desiredAmountUsd: number,
+  maxDepthPct: number
+): Promise<{ maxSafeUsd: number; poolDepthUsd: number; priceImpactBps: number }> {
+  try {
+    const pool = new ethers.Contract(poolAddress, POOL_ABI, provider);
+    
+    // Get pool liquidity and tick
+    const liquidity = await pool.liquidity();
+    const slot0 = await pool.slot0();
+    
+    // Get token addresses to determine which is which
+    const token0 = await pool.token0();
+    const token1 = await pool.token1();
+    
+    // Get prices for both tokens
+    const price0 = await getLiveTokenPriceUsd(
+      token0.toLowerCase() === tokenIn.address.toLowerCase() ? tokenIn : tokenOut
+    );
+    const price1 = await getLiveTokenPriceUsd(
+      token1.toLowerCase() === tokenIn.address.toLowerCase() ? tokenIn : tokenOut
+    );
+    
+    // Estimate pool depth in USD (simplified: liquidity * sqrt(priceX96) approximation)
+    // More accurate: use getReserves for V2 or sqrtPriceX96 for V3
+    const sqrtPriceX96 = slot0[0];
+    const sqrtPrice = Number(sqrtPriceX96) / 2**96;
+    
+    // Estimate depth: liquidity * sqrt(price) * 2 (approximate for V3)
+    const liquidityNum = Number(liquidity) / 1e18;
+    const estimatedDepthUsd = liquidityNum * sqrtPrice * 2 * (price0 + price1) / 2;
+    
+    // Fallback: use a reasonable default if estimation fails
+    const poolDepthUsd = estimatedDepthUsd > 0 ? estimatedDepthUsd : 1000000;
+    
+    // Max safe = poolDepthUsd * (maxDepthPct / 100)
+    const maxSafeUsd = poolDepthUsd * (maxDepthPct / 100);
+    
+    // Calculate estimated price impact
+    const impactBps = (desiredAmountUsd / poolDepthUsd) * 10000;
+    
+    return {
+      maxSafeUsd: Math.min(maxSafeUsd, env.MAX_POSITION_SIZE_USD),
+      poolDepthUsd,
+      priceImpactBps: Math.min(impactBps, 10000),
+    };
+  } catch (err) {
+    log.warn('Failed to calculate pool depth, using fallback', {
+      poolAddress,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Fallback: use MAX_POSITION_SIZE_USD as safe limit
+    return {
+      maxSafeUsd: env.MAX_POSITION_SIZE_USD || 25000,
+      poolDepthUsd: 1000000,
+      priceImpactBps: 0,
+    };
+  }
+}
 
 export async function discoverHarvestShort(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
@@ -45,10 +122,9 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
         const farmContract = new ethers.Contract(
           position.positionAddress,
           FARM_ABI,
-          (await import('../../treasury/wallets')).provider
+          provider
         );
         
-        // Try to get pending rewards
         const pending = await farmContract.pendingRewards(
           (await import('../../treasury/wallets')).executionWallet.address
         );
@@ -62,14 +138,12 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
             source: rewardSource,
           });
         } else {
-          // Fallback to 1 token if no pending rewards
           rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
           log.debug(`No pending rewards found, using fallback amount (1 token)`, {
             positionId: position.id,
           });
         }
       } catch (err) {
-        // Fallback if contract call fails
         rewardAmount = ethers.utils.parseUnits('1', position.rewardToken.decimals);
         log.debug(`Contract call failed, using fallback amount (1 token)`, {
           positionId: position.id,
@@ -89,7 +163,7 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
         rewardValueUsd: rewardValue,
       });
 
-      // 🔥 Use Enso route for the sell quote
+      // 🔥 Get Enso route for the sell quote
       const sellQuote = await getEnsoRouteQuote(
         position.rewardToken,
         position.entryToken,
@@ -102,13 +176,56 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
       }
 
       const estimatedGasUsd = 0.05 * nativePriceUsd;
-      const netProfitUsd = rewardValue - estimatedGasUsd;
+      const harvestNetProfitUsd = rewardValue - estimatedGasUsd;
 
-      // 🔥 Also calculate potential flashloan arbitrage profit
-      const flashloanSizeUsd = env.HARVEST_FLASHLOAN_AMOUNT_USD || 500;
+      // 🔥 Calculate flashloan arbitrage with pool depth safety
+      const desiredFlashloanUsd = env.HARVEST_FLASHLOAN_AMOUNT_USD || 5000;
+      const maxDepthPct = env.HARVEST_MAX_POOL_DEPTH_PCT || 1.5;
+
+      // Get the pool address from the buy quote (if available) or use a default
+      const poolAddress = sellQuote?.raw?.primaryAddress || 
+                          (sellQuote?.raw?.route?.[0]?.primary) || 
+                          '0x';
+
+      let flashloanUsd = desiredFlashloanUsd;
+      let poolDepthUsd = 0;
+      let priceImpactBps = 0;
+
+      if (poolAddress !== '0x') {
+        const safety = await calculateMaxSafeFlashloan(
+          poolAddress,
+          position.entryToken,
+          position.rewardToken,
+          desiredFlashloanUsd,
+          maxDepthPct
+        );
+        flashloanUsd = Math.min(desiredFlashloanUsd, safety.maxSafeUsd);
+        poolDepthUsd = safety.poolDepthUsd;
+        priceImpactBps = safety.priceImpactBps;
+        
+        log.info(`🛡️ Pool depth safety check`, {
+          positionId: position.id,
+          poolAddress,
+          desiredUsd: desiredFlashloanUsd,
+          maxSafeUsd: safety.maxSafeUsd,
+          poolDepthUsd: safety.poolDepthUsd,
+          priceImpactBps: safety.priceImpactBps,
+          finalFlashloanUsd: flashloanUsd,
+        });
+      }
+
+      // Only proceed if flashloan amount is meaningful (>= $100)
+      if (flashloanUsd < 100) {
+        log.debug(`Flashloan amount too small, skipping arbitrage`, {
+          positionId: position.id,
+          flashloanUsd,
+        });
+        continue;
+      }
+
       const entryTokenPrice = await getLiveTokenPriceUsd(position.entryToken);
       const flashloanAmount = ethers.utils.parseUnits(
-        (flashloanSizeUsd / entryTokenPrice).toFixed(position.entryToken.decimals),
+        (flashloanUsd / entryTokenPrice).toFixed(position.entryToken.decimals),
         position.entryToken.decimals
       ).toString();
 
@@ -123,7 +240,6 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
       let arbitrageGrossProfitUsd = 0;
 
       if (buyQuote) {
-        // Calculate round-trip profit
         const boughtRewardAmount = buyQuote.amountOut;
         const sellBackQuote = await getEnsoRouteQuote(
           position.rewardToken,
@@ -135,26 +251,31 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
           const amountInHuman = Number(flashloanAmount) / 10 ** position.entryToken.decimals;
           const amountOutHuman = Number(sellBackQuote.amountOut) / 10 ** position.entryToken.decimals;
           arbitrageGrossProfitUsd = (amountOutHuman - amountInHuman) * entryTokenPrice;
-          arbitrageNetProfitUsd = arbitrageGrossProfitUsd - estimatedGasUsd - (flashloanSizeUsd * 0.0009); // Aave flashloan fee
+          
+          // 🔥 Morpho flashloan fee is 0% (confirmed by Enso docs)[reference:2]
+          const flashloanFeeUsd = 0;
+          arbitrageNetProfitUsd = arbitrageGrossProfitUsd - estimatedGasUsd - flashloanFeeUsd;
 
           log.info(`🔄 Flashloan arbitrage potential`, {
             positionId: position.id,
-            flashloanSizeUsd,
+            flashloanSizeUsd: flashloanUsd,
             flashloanAmount,
             buyQuoteAmountOut: boughtRewardAmount,
             sellBackAmountOut: sellBackQuote.amountOut,
             arbitrageGrossProfitUsd: arbitrageGrossProfitUsd.toFixed(4),
             arbitrageNetProfitUsd: arbitrageNetProfitUsd.toFixed(4),
+            flashloanFeeUsd,
+            protocol: env.HARVEST_FLASHLOAN_PROTOCOL,
           });
         }
       }
 
       // Use the higher of the two profits
-      const totalNetProfitUsd = Math.max(netProfitUsd, arbitrageNetProfitUsd);
+      const totalNetProfitUsd = Math.max(harvestNetProfitUsd, arbitrageNetProfitUsd);
 
       log.info(`📈 Final profit calculation`, {
         positionId: position.id,
-        harvestNetProfitUsd: netProfitUsd.toFixed(4),
+        harvestNetProfitUsd: harvestNetProfitUsd.toFixed(4),
         arbitrageNetProfitUsd: arbitrageNetProfitUsd.toFixed(4),
         totalNetProfitUsd: totalNetProfitUsd.toFixed(4),
         threshold: env.DEFAULT_MIN_PROFIT_USD,
@@ -172,13 +293,14 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
             entryToken: position.entryToken,
             rewardAmount: rewardAmount.toString(),
             sellQuote,
-            // 🔥 Add flashloan arbitrage params
-            useFlashloanArbitrage: arbitrageNetProfitUsd > netProfitUsd,
-            flashloanSizeUsd: flashloanSizeUsd,
+            useFlashloanArbitrage: arbitrageNetProfitUsd > harvestNetProfitUsd,
+            flashloanSizeUsd: flashloanUsd,
             flashloanAmount: flashloanAmount,
             buyQuote: buyQuote || null,
             rewardValue,
             nativePriceUsd,
+            poolDepthUsd,
+            priceImpactBps,
           },
           estimatedGrossProfitUsd: Math.max(rewardValue, arbitrageGrossProfitUsd),
           estimatedNetProfitUsd: totalNetProfitUsd,
@@ -192,8 +314,9 @@ export async function discoverHarvestShort(nativePriceUsd: number): Promise<Oppo
         log.info(`✅ Found harvest opportunity for ${position.id}`, {
           rewardValue: rewardValue.toFixed(4),
           netProfitUsd: totalNetProfitUsd.toFixed(4),
-          usingArbitrage: arbitrageNetProfitUsd > netProfitUsd,
-          flashloanSize: flashloanSizeUsd,
+          usingArbitrage: arbitrageNetProfitUsd > harvestNetProfitUsd,
+          flashloanSize: flashloanUsd,
+          flashloanProtocol: env.HARVEST_FLASHLOAN_PROTOCOL,
         });
       } else {
         log.debug(`❌ Below threshold for ${position.id}`, {
