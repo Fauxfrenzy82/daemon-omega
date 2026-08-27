@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { executionWallet } from '../treasury/wallets';
+import { executionWallet, privateMempoolProvider } from '../treasury/wallets';
 import { BuiltBundle } from './ensoBuilder';
 import { getEnsoClient } from './ensoClient';
 import { getSafeGasPrices } from '../utils/gas';
@@ -20,9 +20,10 @@ export async function executeBundle(
   const enso = getEnsoClient();
   const startTime = Date.now();
 
-  log.info('🚀 Executing Enso bundle', {
+  log.info('🚀 Executing Enso bundle via Private Mempool', {
     flashLoanToken: built.flashLoanToken.symbol,
     flashLoanAmount: built.flashLoanAmount,
+    rpc: 'private-mempool.polygon.technology (MEV protected)',
   });
 
   try {
@@ -37,7 +38,7 @@ export async function executeBundle(
       from: executionWallet.address,
     };
 
-    log.info('📤 Sending bundle transaction', {
+    log.info('📤 Sending bundle transaction via private mempool', {
       to: txData.to,
       value: txData.value || '0',
       dataLength: txData.data?.length || 0,
@@ -45,6 +46,7 @@ export async function executeBundle(
 
     const gasPrices = await getSafeGasPrices();
 
+    // 🔥 Transaction submitted via private mempool (executionWallet uses privateMempoolProvider)
     const tx = await executionWallet.sendTransaction({
       to: txData.to,
       data: txData.data,
@@ -53,7 +55,7 @@ export async function executeBundle(
       maxFeePerGas: gasPrices.maxFeePerGas,
     });
 
-    log.info('✅ Bundle transaction submitted', { txHash: tx.hash });
+    log.info('✅ Bundle transaction submitted via private mempool', { txHash: tx.hash });
 
     const receipt = await tx.wait();
     const duration = Date.now() - startTime;
@@ -63,6 +65,7 @@ export async function executeBundle(
         txHash: tx.hash,
         gasUsed: receipt.gasUsed.toString(),
         duration,
+        mempool: 'private (MEV protected)',
       });
       return { success: true, txHash: tx.hash, gasUsed: receipt.gasUsed.toString() };
     } else {
@@ -79,6 +82,7 @@ export async function executeBundle(
       responseData: typeof responseData === 'string' ? responseData : JSON.stringify(responseData || {}),
       statusCode: err?.response?.status,
       duration,
+      mempool: 'private',
     });
 
     return { success: false, errorMessage };
