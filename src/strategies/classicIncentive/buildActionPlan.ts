@@ -7,22 +7,11 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('buildActionPlan');
 
-// Aave V3 pool on Polygon — used on deposit and borrow callback steps only.
-// NOT placed on the flashloan outer step (that caused "Invalid address type").
+// Aave V3 Pool on Polygon (for flashloan, deposit, borrow)
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
-// Morpho Blue contract address on Polygon
-// Required as primaryAddress for morpho-markets-v1 flashloans
-const MORPHO_BLUE = '0x1bF0c2541F820E775182832f06c0B7Fc27A25f67';
-
-// Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
-// The flashloan itself comes from Morpho; the collateral actions inside the
-// callback still target Aave V3. This sidesteps the Enso aave-v3 flashloan
-// schema validation that has been blocking execution.
-const MORPHO_FLASHLOAN_PROVIDER: FlashLoanProvider = {
-  name: 'Morpho',
-  protocol: 'morpho-markets-v1',
-};
+// Aave V3 Pool Address Provider on Polygon (for primaryAddress in flashloan)
+const AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
@@ -59,8 +48,8 @@ async function buildAaveIncentivePlan(
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
 
-  // Always use Morpho as the flashloan provider unless explicitly overridden.
-  const flashLoanProvider = options?.flashLoanProvider || MORPHO_FLASHLOAN_PROVIDER;
+  // ✅ Force Aave V3 as the flashloan provider on Polygon
+  const flashLoanProvider = { protocol: 'aave-v3' as const };
 
   // Calculate flashloan amount from position size in collateral token's decimals.
   const collateralPriceUsd = getTokenPriceUsd(flashLoanToken);
@@ -124,7 +113,7 @@ async function buildAaveIncentivePlan(
 
   const callback: ActionStep[] = [depositStep, borrowStep];
 
-  // Step 2: swap borrowed USDC back to collateral token to repay Morpho flashloan.
+  // Step 2: swap borrowed USDC back to collateral token to repay flashloan.
   if (borrowAsset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
     const swapStep: ActionStep = {
       type: 'swap',
@@ -137,16 +126,17 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // ✅ FIXED: Morpho flashloan requires primaryAddress (the Morpho Blue contract)
-  // Also requires tokenIn and amountIn at the root level for the flashloan action.
+  // ✅ CORRECTED: Aave V3 flashloan with correct parameter names and primaryAddress
+  // Uses tokenIn/amountIn (not flashloanToken/flashloanAmount) at the root level
+  // primaryAddress is the Pool Address Provider
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashLoanProvider.protocol,
+    protocol: flashLoanProvider.protocol, // 'aave-v3'
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    tokenIn: flashLoanToken.address,   // ✅ REQUIRED: Enso flashloan schema
-    amountIn: flashLoanAmount,          // ✅ REQUIRED: Enso flashloan schema
-    primaryAddress: MORPHO_BLUE,        // ✅ REQUIRED: Morpho Blue contract address
+    tokenIn: flashLoanToken.address,      // ✅ Correct param name for flashloan
+    amountIn: flashLoanAmount,             // ✅ Correct param name for flashloan
+    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider (not token)
     callback,
   };
 
@@ -169,7 +159,7 @@ async function buildQuickSwapV3Plan(
   const { token0, token1, positionSize } = candidate.params;
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || token0;
-  const flashLoanProvider = options?.flashLoanProvider || MORPHO_FLASHLOAN_PROVIDER;
+  const flashLoanProvider = { protocol: 'aave-v3' as const };
 
   const flashLoanAmount: string = ethers.utils
     .parseUnits(
@@ -196,15 +186,15 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ FIXED: Morpho flashloan requires primaryAddress
+  // ✅ CORRECTED: Aave V3 flashloan with correct parameter names
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashLoanProvider.protocol,
+    protocol: flashLoanProvider.protocol, // 'aave-v3'
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    tokenIn: flashLoanToken.address,   // ✅ REQUIRED: Enso flashloan schema
-    amountIn: flashLoanAmount,          // ✅ REQUIRED: Enso flashloan schema
-    primaryAddress: MORPHO_BLUE,        // ✅ REQUIRED: Morpho Blue contract address
+    tokenIn: flashLoanToken.address,      // ✅ Correct param name
+    amountIn: flashLoanAmount,             // ✅ Correct param name
+    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider
     callback: [buyStep, sellStep],
   };
 
