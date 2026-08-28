@@ -18,7 +18,7 @@ export interface ActionPlan {
   steps: ActionStep[];
 }
 
-export type FlashloanProtocol = 
+export type FlashloanProtocol =
   | 'aave-v3'
   | 'morpho-markets-v1'
   | 'balancer-v3'
@@ -28,29 +28,73 @@ export type FlashloanProtocol =
   | 'hyperlend'
   | 'kodiak';
 
-/**
- * ActionStep types – receiver and refundReceiver are optional
- * but should NOT be used in the flashloan action root.
- * They are handled at the bundle level via fromAddress.
- */
 export type ActionStep =
-  | { 
-      type: 'flashloan'; 
-      protocol: FlashloanProtocol; 
-      token: string;
-      amount: string;
-      tokenIn?: string | string[];
-      amountIn?: string | string[] | { useOutputOfCallAt: number };
-      tokenOut?: string | string[];
+  | {
+      type: 'flashloan';
+      protocol: FlashloanProtocol;
+      // ✅ Support both schemas
+      token?: string;                    // Legacy
+      amount?: string;                   // Legacy
+      tokenIn: string;                   // ✅ Unified schema
+      amountIn: string;                  // ✅ Unified schema
       callback: ActionStep[];
       primaryAddress?: string;
-      // 🔥 These are NOT used in the action – handled at bundle level
       receiver?: string;
       refundReceiver?: string;
     }
-  | { type: 'swap'; protocol: 'enso'; tokenIn: string; tokenOut: string; amountIn: string | { useOutputOfCallAt: number }; slippage: string; primaryAddress?: string; poolFee?: number }
-  | { type: 'deposit'; protocol: 'aave-v3' | 'stata'; token: string; amount: string | { useOutputOfCallAt: number }; primaryAddress?: string; onBehalfOf?: string }
-  | { type: 'withdraw'; protocol: 'aave-v3' | 'stata'; token: string; amount: string | { useOutputOfCallAt: number }; primaryAddress?: string }
-  | { type: 'harvest'; protocol: 'enso'; positionAddress: string; token?: string }
-  | { type: 'borrow'; protocol: 'aave-v3'; collateral: string; token: string; amount: string; primaryAddress?: string; onBehalfOf?: string; interestRateMode?: number }
-  | { type: 'call'; protocol: 'custom'; target: string; data: string; value?: string; useOutput?: boolean };
+  | {
+      type: 'swap';
+      protocol: 'enso';
+      tokenIn: string;
+      tokenOut: string;
+      amountIn: string | { useOutputOfCallAt: number };
+      slippage: string;
+      primaryAddress?: string;
+      poolFee?: number;
+    }
+  | {
+      type: 'deposit';
+      protocol: 'aave-v3' | 'stata';
+      // ✅ Support both schemas
+      token?: string;                    // Legacy
+      amount?: string | { useOutputOfCallAt: number }; // Legacy
+      tokenIn: string;                   // ✅ Unified schema
+      amountIn: string | { useOutputOfCallAt: number }; // ✅ Unified schema
+      primaryAddress?: string;
+      onBehalfOf?: string;
+    }
+  | {
+      type: 'withdraw';
+      protocol: 'aave-v3' | 'stata';
+      token: string;
+      amount: string | { useOutputOfCallAt: number };
+      primaryAddress?: string;
+    }
+  | {
+      type: 'borrow';
+      protocol: 'aave-v3';
+      // ✅ Support both schemas
+      collateral?: string;               // Legacy
+      token?: string;                    // Legacy
+      amount?: string | { useOutputOfCallAt: number }; // Legacy
+      tokenIn?: string;                  // ✅ Unified schema (collateral)
+      tokenOut: string;                  // ✅ Unified schema (borrow asset)
+      amountOut: string | { useOutputOfCallAt: number }; // ✅ Unified schema
+      primaryAddress?: string;
+      onBehalfOf?: string;
+      interestRateMode?: number;
+    }
+  | {
+      type: 'harvest';
+      protocol: 'enso';
+      positionAddress: string;
+      token?: string;
+    }
+  | {
+      type: 'call';
+      protocol: 'custom';
+      target: string;
+      data: string;
+      value?: string;
+      useOutput?: boolean;
+    };
