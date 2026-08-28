@@ -31,19 +31,19 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      if (!step.token) throw new Error('Flashloan step missing token');
-      if (!step.amount) throw new Error('Flashloan step missing amount');
+      // ✅ Use tokenIn/amountIn (unified schema)
+      if (!step.tokenIn) throw new Error('Flashloan step missing tokenIn');
+      if (!step.amountIn) throw new Error('Flashloan step missing amountIn');
       if (!step.callback || step.callback.length === 0) {
         throw new Error('Flashloan must contain at least one callback action');
       }
 
       const args: Record<string, any> = {
-        flashloanToken: ethers.utils.getAddress(step.token),
-        flashloanAmount: step.amount.toString(),
+        tokenIn: ethers.utils.getAddress(step.tokenIn),
+        amountIn: step.amountIn.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ Only add primaryAddress if it exists
       if (step.primaryAddress) {
         args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
       }
@@ -51,11 +51,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (step.receiver) {
         args.receiver = ethers.utils.getAddress(step.receiver);
       }
+      
+      if (step.refundReceiver) {
+        args.refundReceiver = ethers.utils.getAddress(step.refundReceiver);
+      }
 
-      log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
+      log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.tokenIn} | Amount: ${args.amountIn}`);
 
-      // ✅ CORRECTED: Return ONLY protocol, action, args
-      // NO extra tokenIn/amountIn at root level
       return {
         protocol: step.protocol,
         action: 'flashloan',
@@ -86,11 +88,12 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
+      // ✅ Use tokenIn/amountIn (unified schema)
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(step.token),
-        amountIn: typeof step.amount === 'string'
-          ? step.amount
-          : (step.amount as any).amount.toString(),
+        tokenIn: ethers.utils.getAddress(step.tokenIn),
+        amountIn: typeof step.amountIn === 'string'
+          ? step.amountIn
+          : (step.amountIn as any).amount?.toString() || (step.amountIn as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
@@ -105,12 +108,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
+      // ✅ Use tokenIn/tokenOut/amountOut (unified schema)
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(step.collateral),
-        tokenOut: ethers.utils.getAddress(step.token),
-        amountOut: typeof step.amount === 'string'
-          ? step.amount
-          : (step.amount as any).amount.toString(),
+        tokenIn: step.tokenIn ? ethers.utils.getAddress(step.tokenIn) : ethers.utils.getAddress(step.collateral || ''),
+        tokenOut: ethers.utils.getAddress(step.tokenOut),
+        amountOut: typeof step.amountOut === 'string'
+          ? step.amountOut
+          : (step.amountOut as any).amount?.toString() || (step.amountOut as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
@@ -149,7 +153,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     case 'harvest': {
       const args: Record<string, any> = {};
       
-      // ✅ positionAddress is required for harvest
       if (step.positionAddress) {
         args.positionAddress = ethers.utils.getAddress(step.positionAddress);
       }
