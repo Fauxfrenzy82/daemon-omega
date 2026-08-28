@@ -3,12 +3,15 @@ import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportun
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo } from '../../config/tokens';
 import { executionWallet } from '../../treasury/wallets';
+import { activeChain } from '../../config/chains';
 import { createLogger } from '../../utils/logger';
+import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('buildActionPlan');
 
-// ✅ CORRECT: Aave V3 Pool Address Provider on Polygon
-const AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
+// ✅ FALLBACK: Aave V3 Pool Address Provider on Polygon
+// This is used only if the dynamic fetch fails
+const FALLBACK_AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
@@ -55,6 +58,13 @@ async function buildAaveIncentivePlan(
     )
     .toString();
 
+  // ✅ DYNAMIC: Fetch the correct primaryAddress from Enso's metadata API
+  const enso = getEnsoClient();
+  const primaryAddress = await enso.getPrimaryAddressForToken(
+    flashLoanToken.address,
+    activeChain.chainId
+  );
+
   log.info('BUILDING AAVE INCENTIVE PLAN', {
     collateral: flashLoanToken.symbol,
     collateralAddress: flashLoanToken.address,
@@ -66,6 +76,7 @@ async function buildAaveIncentivePlan(
     borrowAmount,
     flashLoanProvider: flashLoanProvider.protocol,
     executionWalletAddress: executionWallet.address,
+    primaryAddress,
   });
 
   // ✅ Step 1: Deposit - uses tokenIn/amountIn (NO primaryAddress)
@@ -116,19 +127,20 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount (NOT tokenIn/amountIn)
-  // primaryAddress is the Pool Address Provider
+  // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount
+  // primaryAddress is dynamically fetched from Enso
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
-    flashloanToken: flashLoanToken.address,    // ✅ Enso requires this
-    flashloanAmount: flashLoanAmount,           // ✅ Enso requires this
-    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER,
+    flashloanToken: flashLoanToken.address,
+    flashloanAmount: flashLoanAmount,
+    primaryAddress: primaryAddress, // ✅ Dynamically fetched, lowercase
     callback,
   };
 
   log.info('FULL ACTION PLAN CREATED', {
     flashLoanProvider: flashLoanProvider.protocol,
+    primaryAddress,
     plan: JSON.stringify({ flashLoanToken, flashLoanAmount, steps: [flashloanStep] }, null, 2),
   });
 
@@ -155,6 +167,13 @@ async function buildQuickSwapV3Plan(
     )
     .toString();
 
+  // ✅ DYNAMIC: Fetch the correct primaryAddress from Enso's metadata API
+  const enso = getEnsoClient();
+  const primaryAddress = await enso.getPrimaryAddressForToken(
+    flashLoanToken.address,
+    activeChain.chainId
+  );
+
   const buyStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
@@ -178,7 +197,7 @@ async function buildQuickSwapV3Plan(
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER,
+    primaryAddress: primaryAddress, // ✅ Dynamically fetched, lowercase
     callback: [buyStep, sellStep],
   };
 
