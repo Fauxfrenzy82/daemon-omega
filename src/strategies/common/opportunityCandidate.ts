@@ -1,3 +1,34 @@
+import { TokenInfo } from '../../config/tokens';
+
+export interface OpportunityCandidate {
+  id: string;
+  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive';
+  protocol: string;
+  params: Record<string, any>;
+  estimatedGrossProfitUsd: number;
+  estimatedNetProfitUsd: number;
+  estimatedCostUsd: number;
+  actionPlan: ActionPlan | null;
+  sourceTimestamp: number;
+}
+
+export interface ActionPlan {
+  flashLoanToken: TokenInfo;
+  flashLoanAmount: string;
+  steps: ActionStep[];
+}
+
+// ✅ MOVED: FlashloanProtocol must be defined BEFORE ActionStep uses it
+export type FlashloanProtocol =
+  | 'aave-v3'
+  | 'morpho-markets-v1'
+  | 'balancer-v3'
+  | 'uniswap-v3'
+  | 'dolomite'
+  | 'bend'
+  | 'hyperlend'
+  | 'kodiak';
+
 export type ActionStep =
   | {
       type: 'flashloan';
