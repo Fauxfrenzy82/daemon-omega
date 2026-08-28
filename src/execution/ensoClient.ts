@@ -1,279 +1,97 @@
 // src/execution/ensoClient.ts
-import axios from 'axios';
-import { env } from '../config/env';
-import { activeChain } from '../config/chains';
-import { createLogger } from '../utils/logger';
 
-const log = createLogger('ensoClient');
+/**
+ * Fetch token metadata from Enso using /api/v1/tokens.
+ * This returns the primaryAddress field for tokens.
+ */
+async getTokenMetadata(tokenAddress: string, chainId: number = 137): Promise<EnsoTokenResponse | null> {
+  try {
+    // ✅ CORRECT: Use the tokens endpoint without includeMetadata
+    const url = `${BASE_URL}/v1/tokens?chainId=${chainId}&addresses=${tokenAddress}`;
 
-const BASE_URL = env.ENSO_BASE_URL || 'https://api.enso.build/api';
-const API_KEY = env.ENSO_API_KEY;
-
-// Log at module load so it appears in boot logs
-log.info('EnsoClient BASE_URL resolved', { BASE_URL });
-
-export interface EnsoBundleParams {
-  fromAddress: string;
-  chainId: number;
-  routingStrategy?: 'router' | 'delegate' | 'ensowallet' | 'router-legacy' | 'delegate-legacy';
-  receiver?: string;
-  spender?: string;
-}
-
-export interface EnsoAction {
-  protocol: string;
-  action: string;
-  args: Record<string, any>;
-}
-
-export interface EnsoTokenResponse {
-  address: string;
-  symbol: string;
-  name: string;
-  decimals: number;
-  chainId: number;
-  project: string;
-  primaryAddress?: string;
-  logoURI?: string;
-}
-
-export class EnsoClient {
-  private apiKey: string;
-
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
-  }
-
-  /**
-   * Fetch token metadata from Enso using /api/v1/tokens with includeMetadata=true.
-   * This is the recommended way to get primaryAddress for tokens.
-   */
-  async getTokenMetadataWithPrimaryAddress(
-    tokenAddress: string,
-    chainId: number = 137
-  ): Promise<EnsoTokenResponse | null> {
-    try {
-      // Use the tokens endpoint with includeMetadata=true
-      const url = `${BASE_URL}/v1/tokens?chainId=${chainId}&addresses=${tokenAddress}&includeMetadata=true`;
-
-      log.info('🌐 ENSO TOKEN METADATA REQUEST (with includeMetadata)', {
-        tokenAddress,
-        chainId,
-        url,
-      });
-
-      const response = await axios.get<EnsoTokenResponse[]>(
-        url,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`,
-          },
-          timeout: 10000,
-        }
-      );
-
-      // The response should be an array of tokens
-      const tokens = response.data;
-      if (Array.isArray(tokens) && tokens.length > 0) {
-        const token = tokens[0];
-        log.info('🌐 ENSO TOKEN METADATA RESPONSE (with includeMetadata)', {
-          token: token.symbol,
-          project: token.project,
-          primaryAddress: token.primaryAddress,
-          hasPrimaryAddress: !!token.primaryAddress,
-        });
-        return token;
-      }
-
-      log.warn('⚠️ No token data found in response', {
-        tokenAddress,
-        responseLength: tokens?.length || 0,
-      });
-      return null;
-    } catch (error: any) {
-      log.warn('⚠️ Failed to fetch token metadata from Enso', {
-        tokenAddress,
-        error: error.response?.status || error.message,
-      });
-      return null;
-    }
-  }
-
-  /**
-   * Get the primaryAddress for a token's protocol (e.g., Aave Pool Addresses Provider).
-   * Uses the /api/v1/tokens endpoint with includeMetadata=true.
-   */
-  async getPrimaryAddressForToken(tokenAddress: string, chainId: number = 137): Promise<string> {
-    // ✅ Verified Aave V3 Pool Addresses Provider on Polygon
-    const FALLBACK_ADDRESS = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
-
-    try {
-      const metadata = await this.getTokenMetadataWithPrimaryAddress(tokenAddress, chainId);
-
-      if (metadata?.primaryAddress) {
-        log.info('✅ Successfully fetched primaryAddress from token metadata', {
-          token: metadata.symbol,
-          primaryAddress: metadata.primaryAddress,
-        });
-        return metadata.primaryAddress.toLowerCase();
-      }
-
-      log.warn('⚠️ No primaryAddress in token metadata, using fallback', {
-        tokenAddress,
-        fallback: FALLBACK_ADDRESS,
-      });
-      return FALLBACK_ADDRESS;
-    } catch (error) {
-      log.warn('⚠️ Error fetching primaryAddress, using fallback', {
-        tokenAddress,
-        fallback: FALLBACK_ADDRESS,
-      });
-      return FALLBACK_ADDRESS;
-    }
-  }
-
-  /**
-   * Get the Aave V3 primaryAddress by querying a known Aave token.
-   * This is more reliable than the nontokenized endpoint for Aave V3.
-   */
-  async getAaveV3PrimaryAddress(chainId: number = 137): Promise<string> {
-    // Use WETH address as a known Aave V3 token on Polygon
-    const AAVE_TOKEN_ADDRESS = '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619';
-    return this.getPrimaryAddressForToken(AAVE_TOKEN_ADDRESS, chainId);
-  }
-
-  async getBundleData(params: EnsoBundleParams, actions: EnsoAction[]): Promise<any> {
-    const queryParams = new URLSearchParams();
-    queryParams.append('chainId', String(params.chainId));
-    if (params.fromAddress) queryParams.append('fromAddress', params.fromAddress);
-    if (params.routingStrategy) queryParams.append('routingStrategy', params.routingStrategy);
-    if (params.receiver) queryParams.append('receiver', params.receiver);
-    if (params.spender) queryParams.append('spender', params.spender);
-
-    const url = `${BASE_URL}/v1/shortcuts/bundle?${queryParams.toString()}`;
-
-    log.info('🌐 ENSO BUNDLE REQUEST (DIRECT)', {
+    log.info('🌐 ENSO TOKEN METADATA REQUEST', {
+      tokenAddress,
+      chainId,
       url,
-      actionCount: actions?.length,
-      firstAction: actions?.[0] ? {
-        protocol: actions[0].protocol,
-        action: actions[0].action,
-      } : null,
-      fullBody: JSON.stringify(actions, null, 2),
     });
 
-    try {
-      const response = await axios.post(
-        url,
-        actions,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`,
-          },
-          timeout: 30000,
-        }
-      );
-
-      log.info('🌐 ENSO BUNDLE RESPONSE (DIRECT)', {
-        status: response.status,
-        hasData: !!response.data,
-        fullResponse: JSON.stringify(response.data, null, 2),
-      });
-
-      return response.data;
-    } catch (error: any) {
-      log.error('🌐 ENSO BUNDLE ERROR (DIRECT)', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : null,
-        message: error.message,
-        url: error.config?.url,
-        method: error.config?.method,
-        sentBody: error.config?.data,
-        sentHeaders: {
-          contentType: error.config?.headers?.['Content-Type'],
-          hasAuth: !!error.config?.headers?.['Authorization'],
+    const response = await axios.get<EnsoTokenResponse[]>(
+      url,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
         },
+        timeout: 10000,
+      }
+    );
+
+    const tokens = response.data;
+    if (Array.isArray(tokens) && tokens.length > 0) {
+      const token = tokens[0];
+      log.info('🌐 ENSO TOKEN METADATA RESPONSE', {
+        token: token.symbol,
+        project: token.project,
+        primaryAddress: token.primaryAddress,
+        hasPrimaryAddress: !!token.primaryAddress,
       });
-      throw error;
+      return token;
     }
-  }
 
-  async getRouteData(params: any): Promise<any> {
-    const queryParams = new URLSearchParams();
-    if (params.chainId) queryParams.append('chainId', String(params.chainId));
-    if (params.fromAddress) queryParams.append('fromAddress', params.fromAddress);
-    if (params.routingStrategy) queryParams.append('routingStrategy', params.routingStrategy || 'router');
-    if (params.receiver) queryParams.append('receiver', params.receiver);
-    if (params.spender) queryParams.append('spender', params.spender);
-    if (params.slippage) queryParams.append('slippage', String(params.slippage));
-
-    const tokenIn = Array.isArray(params.tokenIn) ? params.tokenIn : [params.tokenIn];
-    const tokenOut = Array.isArray(params.tokenOut) ? params.tokenOut : [params.tokenOut];
-    const amountIn = Array.isArray(params.amountIn) ? params.amountIn : [params.amountIn];
-
-    tokenIn.forEach((t: string) => queryParams.append('tokenIn', t));
-    tokenOut.forEach((t: string) => queryParams.append('tokenOut', t));
-    amountIn.forEach((a: string) => queryParams.append('amountIn', String(a)));
-
-    const url = `${BASE_URL}/v1/shortcuts/route?${queryParams.toString()}`;
-
-    log.info('🌐 ENSO ROUTE REQUEST (DIRECT)', {
-      tokenIn: tokenIn[0],
-      tokenOut: tokenOut[0],
-      amountIn: amountIn[0],
-      fromAddress: params?.fromAddress,
-      chainId: params?.chainId,
+    log.warn('⚠️ No token data found in response', {
+      tokenAddress,
+      responseLength: tokens?.length || 0,
     });
-
-    try {
-      const response = await axios.get(
-        url,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${this.apiKey}`,
-          },
-          timeout: 15000,
-        }
-      );
-
-      log.info('🌐 ENSO ROUTE RESPONSE (DIRECT)', {
-        status: response.status,
-        hasData: !!response.data,
-      });
-
-      return response.data;
-    } catch (error: any) {
-      log.error('🌐 ENSO ROUTE ERROR (DIRECT)', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : null,
-        message: error.message,
-      });
-      throw error;
-    }
+    return null;
+  } catch (error: any) {
+    log.warn('⚠️ Failed to fetch token metadata from Enso', {
+      tokenAddress,
+      error: error.response?.status || error.message,
+      data: error.response?.data,
+    });
+    return null;
   }
 }
 
-let ensoClient: EnsoClient | null = null;
+/**
+ * Get the primaryAddress for a token's protocol.
+ * Uses the /api/v1/tokens endpoint.
+ */
+async getPrimaryAddressForToken(tokenAddress: string, chainId: number = 137): Promise<string> {
+  // ✅ Verified Aave V3 Pool Addresses Provider on Polygon
+  const FALLBACK_ADDRESS = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
 
-export function initEnsoClient(): EnsoClient {
-  if (!ensoClient) {
-    if (!API_KEY) {
-      throw new Error('ENSO_API_KEY is required. Get one from https://developers.enso.finance');
+  try {
+    const metadata = await this.getTokenMetadata(tokenAddress, chainId);
+
+    if (metadata?.primaryAddress) {
+      log.info('✅ Successfully fetched primaryAddress from token metadata', {
+        token: metadata.symbol,
+        primaryAddress: metadata.primaryAddress,
+      });
+      return metadata.primaryAddress.toLowerCase();
     }
-    ensoClient = new EnsoClient(API_KEY);
-    log.info('Enso client initialized (direct HTTP mode)', { chainId: activeChain.chainId });
+
+    log.warn('⚠️ No primaryAddress in token metadata, using fallback', {
+      tokenAddress,
+      fallback: FALLBACK_ADDRESS,
+    });
+    return FALLBACK_ADDRESS;
+  } catch (error) {
+    log.warn('⚠️ Error fetching primaryAddress, using fallback', {
+      tokenAddress,
+      fallback: FALLBACK_ADDRESS,
+    });
+    return FALLBACK_ADDRESS;
   }
-  return ensoClient;
 }
 
-export function getEnsoClient(): EnsoClient {
-  if (!ensoClient) {
-    throw new Error('Enso client not initialized. Call initEnsoClient() first.');
-  }
-  return ensoClient;
+/**
+ * Get the Aave V3 primaryAddress by querying a known Aave token.
+ * This is more reliable than the nontokenized endpoint for Aave V3.
+ */
+async getAaveV3PrimaryAddress(chainId: number = 137): Promise<string> {
+  // Use WETH address as a known Aave V3 token on Polygon
+  const AAVE_TOKEN_ADDRESS = '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619';
+  return this.getPrimaryAddressForToken(AAVE_TOKEN_ADDRESS, chainId);
 }
