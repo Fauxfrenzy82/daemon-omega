@@ -10,9 +10,6 @@ const log = createLogger('buildActionPlan');
 // Aave V3 Pool on Polygon (for flashloan, deposit, borrow)
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
-// Aave V3 Pool Address Provider on Polygon (for primaryAddress in flashloan)
-const AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
-
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
   const priceMap: Record<string, number> = {
@@ -126,17 +123,15 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // ✅ CORRECTED: Aave V3 flashloan with correct parameter names and primaryAddress
-  // Uses tokenIn/amountIn (not flashloanToken/flashloanAmount) at the root level
-  // primaryAddress is the Pool Address Provider
+  // ✅ CORRECTED: Aave V3 flashloan with correct primaryAddress
+  // Uses flashloanToken/flashloanAmount (from token/amount)
+  // primaryAddress is the Pool address (NOT the Pool Address Provider)
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol, // 'aave-v3'
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    tokenIn: flashLoanToken.address,      // ✅ Correct param name for flashloan
-    amountIn: flashLoanAmount,             // ✅ Correct param name for flashloan
-    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider (not token)
+    primaryAddress: AAVE_POOL, // ✅ Pool address (0x794a...)
     callback,
   };
 
@@ -186,15 +181,13 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ CORRECTED: Aave V3 flashloan with correct parameter names
+  // ✅ CORRECTED: Aave V3 flashloan with correct primaryAddress
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol, // 'aave-v3'
     token: flashLoanToken.address,
     amount: flashLoanAmount,
-    tokenIn: flashLoanToken.address,      // ✅ Correct param name
-    amountIn: flashLoanAmount,             // ✅ Correct param name
-    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider
+    primaryAddress: AAVE_POOL, // ✅ Pool address (0x794a...)
     callback: [buyStep, sellStep],
   };
 
