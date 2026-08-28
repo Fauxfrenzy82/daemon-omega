@@ -37,6 +37,18 @@ export interface EnsoTokenResponse {
   logoURI?: string;
 }
 
+export interface EnsoNonTokenizedResponse {
+  id: string;
+  chainId: number;
+  protocol: string;
+  protocolSlug: string;
+  primaryAddress: string;
+  name?: string;
+  symbol?: string;
+  decimals?: number;
+  underlying?: string[];
+}
+
 export class EnsoClient {
   private apiKey: string;
 
@@ -45,13 +57,138 @@ export class EnsoClient {
   }
 
   /**
+   * Fetch non-tokenized positions from Enso.
+   * This returns protocol contract interfaces, pool layouts, and primaryAddress arrays.
+   * This is the recommended way to get primaryAddress for protocols like Aave V3.
+   */
+  async getNonTokenizedPositions(
+    chainId: number = 137,
+    protocolSlug?: string
+  ): Promise<EnsoNonTokenizedResponse[]> {
+    try {
+      const params = new URLSearchParams();
+      params.append('chainId', String(chainId));
+      if (protocolSlug) {
+        params.append('protocolSlug', protocolSlug);
+      }
+
+      const url = `${BASE_URL}/v1/nontokenized?${params.toString()}`;
+
+      log.info('🌐 ENSO NONTOKENIZED REQUEST', {
+        chainId,
+        protocolSlug,
+        url,
+      });
+
+      const response = await axios.get<EnsoNonTokenizedResponse[]>(
+        url,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`,
+          },
+          timeout: 10000,
+        }
+      );
+
+      log.info('🌐 ENSO NONTOKENIZED RESPONSE', {
+        status: response.status,
+        count: response.data?.length || 0,
+        hasData: !!response.data,
+      });
+
+      return response.data || [];
+    } catch (error: any) {
+      log.warn('⚠️ Failed to fetch nontokenized data from Enso', {
+        chainId,
+        protocolSlug,
+        error: error.response?.status || error.message,
+      });
+      return [];
+    }
+  }
+
+  /**
+   * Get the primaryAddress for a specific protocol on a specific chain.
+   * Uses the /api/v1/nontokenized endpoint which returns protocol contract addresses.
+   */
+  async getProtocolPrimaryAddress(
+    protocolSlug: string,
+    chainId: number = 137
+  ): Promise<string | null> {
+    try {
+      const positions = await this.getNonTokenizedPositions(chainId, protocolSlug);
+
+      // Find the position that has a primaryAddress
+      for (const position of positions) {
+        if (position.primaryAddress) {
+          log.info('✅ Found primaryAddress in nontokenized response', {
+            protocol: position.protocol,
+            protocolSlug: position.protocolSlug,
+            primaryAddress: position.primaryAddress,
+            name: position.name,
+          });
+          return position.primaryAddress.toLowerCase();
+        }
+      }
+
+      log.warn('⚠️ No primaryAddress found in nontokenized response', {
+        protocolSlug,
+        chainId,
+      });
+      return null;
+    } catch (error) {
+      log.warn('⚠️ Error fetching primaryAddress from nontokenized endpoint', {
+        protocolSlug,
+        chainId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get the primaryAddress for Aave V3 on Polygon.
+   * Falls back to the known correct address if the API call fails.
+   */
+  async getAaveV3PrimaryAddress(chainId: number = 137): Promise<string> {
+    // ✅ Verified Aave V3 Pool Addresses Provider on Polygon
+    const FALLBACK_ADDRESS = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
+
+    try {
+      const primaryAddress = await this.getProtocolPrimaryAddress('aave-v3', chainId);
+
+      if (primaryAddress) {
+        log.info('✅ Successfully fetched Aave V3 primaryAddress', {
+          primaryAddress,
+          source: 'nontokenized endpoint',
+        });
+        return primaryAddress;
+      }
+
+      log.warn('⚠️ No primaryAddress found, using fallback', {
+        fallback: FALLBACK_ADDRESS,
+        chainId,
+      });
+      return FALLBACK_ADDRESS;
+    } catch (error) {
+      log.warn('⚠️ Error fetching Aave V3 primaryAddress, using fallback', {
+        fallback: FALLBACK_ADDRESS,
+        chainId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return FALLBACK_ADDRESS;
+    }
+  }
+
+  /**
    * Fetch token metadata from Enso, including the primaryAddress for the protocol.
-   * This is the recommended way to get the correct primaryAddress dynamically.
+   * This is an alternative method using the /api/v1/tokens endpoint.
    */
   async getTokenMetadata(tokenAddress: string, chainId: number = 137): Promise<EnsoTokenResponse | null> {
     try {
       const url = `${BASE_URL}/v1/tokens/${tokenAddress}?chainId=${chainId}`;
-      
+
       log.info('🌐 ENSO TOKEN METADATA REQUEST', {
         tokenAddress,
         chainId,
@@ -69,16 +206,19 @@ export class EnsoClient {
         }
       );
 
-      log.info('🌐 ENSO TOKEN METADATA RESPONSE', {
-        token: response.data.symbol,
-        project: response.data.project,
-        primaryAddress: response.data.primaryAddress,
-        hasData: !!response.data,
-      });
+      if (response.data) {
+        log.info('🌐 ENSO TOKEN METADATA RESPONSE', {
+          token: response.data.symbol,
+          project: response.data.project,
+          primaryAddress: response.data.primaryAddress,
+          hasData: !!response.data,
+        });
+        return response.data;
+      }
 
-      return response.data;
+      return null;
     } catch (error: any) {
-      log.warn('⚠️ Failed to fetch token metadata from Enso, using fallback', {
+      log.warn('⚠️ Failed to fetch token metadata from Enso', {
         tokenAddress,
         error: error.response?.status || error.message,
       });
@@ -87,32 +227,30 @@ export class EnsoClient {
   }
 
   /**
-   * Get the primaryAddress for a token's protocol (e.g., Aave Pool Addresses Provider).
+   * Get the primaryAddress for a token's protocol.
    * Falls back to known correct address if API call fails.
    */
   async getPrimaryAddressForToken(tokenAddress: string, chainId: number = 137): Promise<string> {
-    // Fallback for Polygon Aave V3 Pool Addresses Provider
-    const FALLBACK_PRIMARY_ADDRESS = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
-    
+    const FALLBACK_ADDRESS = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
+
     try {
       const metadata = await this.getTokenMetadata(tokenAddress, chainId);
-      
+
       if (metadata?.primaryAddress) {
-        // Return lowercase to ensure Enso accepts it
         return metadata.primaryAddress.toLowerCase();
       }
-      
+
       log.warn('⚠️ No primaryAddress in token metadata, using fallback', {
         tokenAddress,
-        fallback: FALLBACK_PRIMARY_ADDRESS,
+        fallback: FALLBACK_ADDRESS,
       });
-      return FALLBACK_PRIMARY_ADDRESS;
+      return FALLBACK_ADDRESS;
     } catch (error) {
       log.warn('⚠️ Error fetching primaryAddress, using fallback', {
         tokenAddress,
-        fallback: FALLBACK_PRIMARY_ADDRESS,
+        fallback: FALLBACK_ADDRESS,
       });
-      return FALLBACK_PRIMARY_ADDRESS;
+      return FALLBACK_ADDRESS;
     }
   }
 
@@ -175,7 +313,6 @@ export class EnsoClient {
   }
 
   async getRouteData(params: any): Promise<any> {
-    // Route API is GET with query params, not POST with body
     const queryParams = new URLSearchParams();
     if (params.chainId) queryParams.append('chainId', String(params.chainId));
     if (params.fromAddress) queryParams.append('fromAddress', params.fromAddress);
@@ -184,7 +321,6 @@ export class EnsoClient {
     if (params.spender) queryParams.append('spender', params.spender);
     if (params.slippage) queryParams.append('slippage', String(params.slippage));
 
-    // Handle array params
     const tokenIn = Array.isArray(params.tokenIn) ? params.tokenIn : [params.tokenIn];
     const tokenOut = Array.isArray(params.tokenOut) ? params.tokenOut : [params.tokenOut];
     const amountIn = Array.isArray(params.amountIn) ? params.amountIn : [params.amountIn];
