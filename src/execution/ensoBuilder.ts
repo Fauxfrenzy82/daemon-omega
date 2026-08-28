@@ -35,7 +35,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       // Fallback to legacy fields for backward compatibility
       const flashloanToken = step.flashloanToken || step.token || step.tokenIn;
       const flashloanAmount = step.flashloanAmount || step.amount || step.amountIn;
-      
+
       if (!flashloanToken) {
         throw new Error('Flashloan step missing flashloanToken/token/tokenIn');
       }
@@ -52,14 +52,15 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
+      // ✅ CRITICAL FIX: Use lowercase for primaryAddress (don't checksum)
       if (step.primaryAddress) {
-        args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
+        args.primaryAddress = step.primaryAddress.toLowerCase();
       }
-      
+
       if (step.receiver) {
         args.receiver = ethers.utils.getAddress(step.receiver);
       }
-      
+
       if (step.refundReceiver) {
         args.refundReceiver = ethers.utils.getAddress(step.refundReceiver);
       }
@@ -99,10 +100,10 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       // Prefer tokenIn/amountIn, fallback to token/amount
       const tokenIn = step.tokenIn || step.token;
       const amountIn = step.amountIn || step.amount;
-      
+
       if (!tokenIn) throw new Error('Deposit step missing tokenIn/token');
       if (!amountIn) throw new Error('Deposit step missing amountIn/amount');
-      
+
       const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(tokenIn),
         amountIn: typeof amountIn === 'string'
@@ -126,11 +127,11 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const tokenIn = step.tokenIn || step.collateral;
       const tokenOut = step.tokenOut || step.token;
       const amountOut = step.amountOut || step.amount;
-      
+
       if (!tokenIn) throw new Error('Borrow step missing tokenIn/collateral');
       if (!tokenOut) throw new Error('Borrow step missing tokenOut/token');
       if (!amountOut) throw new Error('Borrow step missing amountOut/amount');
-      
+
       const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(tokenIn),
         tokenOut: ethers.utils.getAddress(tokenOut),
@@ -157,7 +158,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     case 'withdraw': {
       if (!step.token) throw new Error('Withdraw step missing token');
       if (!step.amount) throw new Error('Withdraw step missing amount');
-      
+
       const args: Record<string, any> = {
         tokenIn: ethers.utils.getAddress(step.token),
         amountIn: typeof step.amount === 'string'
@@ -177,7 +178,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 
     case 'harvest': {
       const args: Record<string, any> = {};
-      
+
       if (step.positionAddress) {
         args.positionAddress = ethers.utils.getAddress(step.positionAddress);
       }
