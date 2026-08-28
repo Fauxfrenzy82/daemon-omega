@@ -7,8 +7,8 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('buildActionPlan');
 
-// Aave V3 Pool on Polygon (for flashloan, deposit, borrow)
-const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
+// Aave V3 Pool Address Provider on Polygon (required for flashloan root)
+const AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
@@ -44,8 +44,6 @@ async function buildAaveIncentivePlan(
   const { asset, borrowAsset, borrowAmount, positionSize } = candidate.params;
 
   const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
-
-  // ✅ Force Aave V3 as the flashloan provider on Polygon
   const flashLoanProvider = { protocol: 'aave-v3' as const };
 
   // Calculate flashloan amount from position size in collateral token's decimals.
@@ -71,40 +69,36 @@ async function buildAaveIncentivePlan(
     executionWalletAddress: executionWallet.address,
   });
 
-  // Step 0: deposit flashloaned collateral into Aave V3.
+  // ✅ Step 0: deposit flashloaned collateral into Aave V3.
+  // Removed primaryAddress (Enso tracks context globally)
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
-    token: flashLoanToken.address,
-    amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL,
+    tokenIn: flashLoanToken.address,     // ✅ Use tokenIn (not token)
+    amountIn: flashLoanAmount,            // ✅ Use amountIn (not amount)
     onBehalfOf: executionWallet.address,
   };
 
   log.info('DEPOSIT STEP CREATED', {
     token: flashLoanToken.symbol,
     amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
   });
 
-  // Step 1: borrow USDC against the deposited collateral.
+  // ✅ Step 1: borrow USDC against the deposited collateral.
+  // Removed primaryAddress (Enso tracks context globally)
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
-    collateral: flashLoanToken.address,
-    token: borrowAsset.address,
-    amount: borrowAmount,
-    primaryAddress: AAVE_POOL,
+    tokenOut: borrowAsset.address,       // ✅ Use tokenOut (not token)
+    amountOut: borrowAmount,              // ✅ Use amountOut (not amount)
     onBehalfOf: executionWallet.address,
     interestRateMode: 2,
   };
 
   log.info('BORROW STEP CREATED', {
-    collateral: flashLoanToken.symbol,
     borrowToken: borrowAsset.symbol,
     amount: borrowAmount,
-    primaryAddress: AAVE_POOL,
     onBehalfOf: executionWallet.address,
   });
 
@@ -123,15 +117,16 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // ✅ CORRECTED: Aave V3 flashloan with correct primaryAddress
-  // Uses flashloanToken/flashloanAmount (from token/amount)
-  // primaryAddress is the Pool address (NOT the Pool Address Provider)
+  // ✅ CORRECTED: Aave V3 flashloan with Enso's unified schema
+  // - Uses tokenIn/amountIn (not flashloanToken/flashloanAmount)
+  // - primaryAddress is the Pool Address Provider
+  // - No redundant primaryAddress in callbacks
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol, // 'aave-v3'
-    token: flashLoanToken.address,
-    amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL, // ✅ Pool address (0x794a...)
+    tokenIn: flashLoanToken.address,      // ✅ Enso unified schema
+    amountIn: flashLoanAmount,             // ✅ Enso unified schema
+    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider
     callback,
   };
 
@@ -181,13 +176,13 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ CORRECTED: Aave V3 flashloan with correct primaryAddress
+  // ✅ CORRECTED: Aave V3 flashloan with Enso's unified schema
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol, // 'aave-v3'
-    token: flashLoanToken.address,
-    amount: flashLoanAmount,
-    primaryAddress: AAVE_POOL, // ✅ Pool address (0x794a...)
+    tokenIn: flashLoanToken.address,      // ✅ Enso unified schema
+    amountIn: flashLoanAmount,             // ✅ Enso unified schema
+    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider
     callback: [buyStep, sellStep],
   };
 
