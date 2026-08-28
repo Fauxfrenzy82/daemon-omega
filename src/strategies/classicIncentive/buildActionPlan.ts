@@ -10,7 +10,6 @@ import { getEnsoClient } from '../../execution/ensoClient';
 const log = createLogger('buildActionPlan');
 
 // ✅ FALLBACK: Aave V3 Pool Address Provider on Polygon
-// This is used only if the dynamic fetch fails
 const FALLBACK_AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
 
 function getTokenPriceUsd(token: TokenInfo): number {
@@ -58,9 +57,13 @@ async function buildAaveIncentivePlan(
     )
     .toString();
 
-  // ✅ DYNAMIC: Fetch the correct primaryAddress from Enso's nontokenized endpoint
+  // ✅ DYNAMIC: Fetch primaryAddress using /api/v1/tokens with includeMetadata=true
   const enso = getEnsoClient();
-  const primaryAddress = await enso.getAaveV3PrimaryAddress(activeChain.chainId);
+  // Use the flashLoanToken address to get the correct primaryAddress
+  const primaryAddress = await enso.getPrimaryAddressForToken(
+    flashLoanToken.address,
+    activeChain.chainId
+  );
 
   log.info('BUILDING AAVE INCENTIVE PLAN', {
     collateral: flashLoanToken.symbol,
@@ -125,7 +128,6 @@ async function buildAaveIncentivePlan(
   }
 
   // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount
-  // primaryAddress is dynamically fetched from Enso and lowercase
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
@@ -164,9 +166,12 @@ async function buildQuickSwapV3Plan(
     )
     .toString();
 
-  // ✅ DYNAMIC: Fetch the correct primaryAddress from Enso's nontokenized endpoint
+  // ✅ DYNAMIC: Fetch primaryAddress using /api/v1/tokens with includeMetadata=true
   const enso = getEnsoClient();
-  const primaryAddress = await enso.getAaveV3PrimaryAddress(activeChain.chainId);
+  const primaryAddress = await enso.getPrimaryAddressForToken(
+    flashLoanToken.address,
+    activeChain.chainId
+  );
 
   const buyStep: ActionStep = {
     type: 'swap',
