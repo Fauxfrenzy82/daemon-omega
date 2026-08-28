@@ -11,6 +11,10 @@ const log = createLogger('buildActionPlan');
 // NOT placed on the flashloan outer step (that caused "Invalid address type").
 const AAVE_POOL = '0x794a61358D6845594F94dc1DB02A252b5b4814aD';
 
+// Morpho Blue contract address on Polygon
+// Required as primaryAddress for morpho-markets-v1 flashloans
+const MORPHO_BLUE = '0x1bF0c2541F820E775182832f06c0B7Fc27A25f67';
+
 // Morpho is the flashloan provider. It supports WETH, WBTC, USDC on Polygon.
 // The flashloan itself comes from Morpho; the collateral actions inside the
 // callback still target Aave V3. This sidesteps the Enso aave-v3 flashloan
@@ -133,9 +137,8 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // 🔥 FIX: Morpho flashloan outer step — no primaryAddress on this level.
-  // BUT: tokenIn and amountIn are required at the root level for the flashloan action.
-  // This matches the Enso flashloan schema and the Harvest strategy's working pattern.
+  // ✅ FIXED: Morpho flashloan requires primaryAddress (the Morpho Blue contract)
+  // Also requires tokenIn and amountIn at the root level for the flashloan action.
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
@@ -143,6 +146,7 @@ async function buildAaveIncentivePlan(
     amount: flashLoanAmount,
     tokenIn: flashLoanToken.address,   // ✅ REQUIRED: Enso flashloan schema
     amountIn: flashLoanAmount,          // ✅ REQUIRED: Enso flashloan schema
+    primaryAddress: MORPHO_BLUE,        // ✅ REQUIRED: Morpho Blue contract address
     callback,
   };
 
@@ -192,7 +196,7 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // 🔥 FIX: Add tokenIn and amountIn to the flashloan step
+  // ✅ FIXED: Morpho flashloan requires primaryAddress
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
@@ -200,6 +204,7 @@ async function buildQuickSwapV3Plan(
     amount: flashLoanAmount,
     tokenIn: flashLoanToken.address,   // ✅ REQUIRED: Enso flashloan schema
     amountIn: flashLoanAmount,          // ✅ REQUIRED: Enso flashloan schema
+    primaryAddress: MORPHO_BLUE,        // ✅ REQUIRED: Morpho Blue contract address
     callback: [buyStep, sellStep],
   };
 
