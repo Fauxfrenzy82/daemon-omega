@@ -69,13 +69,12 @@ async function buildAaveIncentivePlan(
     executionWalletAddress: executionWallet.address,
   });
 
-  // ✅ Step 0: deposit flashloaned collateral into Aave V3.
-  // Removed primaryAddress (Enso tracks context globally)
+  // ✅ Deposit step using unified schema (no primaryAddress)
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
-    tokenIn: flashLoanToken.address,     // ✅ Use tokenIn (not token)
-    amountIn: flashLoanAmount,            // ✅ Use amountIn (not amount)
+    tokenIn: flashLoanToken.address,
+    amountIn: flashLoanAmount,
     onBehalfOf: executionWallet.address,
   };
 
@@ -85,18 +84,19 @@ async function buildAaveIncentivePlan(
     onBehalfOf: executionWallet.address,
   });
 
-  // ✅ Step 1: borrow USDC against the deposited collateral.
-  // Removed primaryAddress (Enso tracks context globally)
+  // ✅ Borrow step using unified schema (no primaryAddress)
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
-    tokenOut: borrowAsset.address,       // ✅ Use tokenOut (not token)
-    amountOut: borrowAmount,              // ✅ Use amountOut (not amount)
+    tokenIn: flashLoanToken.address,  // collateral
+    tokenOut: borrowAsset.address,    // borrow asset
+    amountOut: borrowAmount,           // borrow amount
     onBehalfOf: executionWallet.address,
     interestRateMode: 2,
   };
 
   log.info('BORROW STEP CREATED', {
+    collateral: flashLoanToken.symbol,
     borrowToken: borrowAsset.symbol,
     amount: borrowAmount,
     onBehalfOf: executionWallet.address,
@@ -117,16 +117,13 @@ async function buildAaveIncentivePlan(
     callback.push(swapStep);
   }
 
-  // ✅ CORRECTED: Aave V3 flashloan with Enso's unified schema
-  // - Uses tokenIn/amountIn (not flashloanToken/flashloanAmount)
-  // - primaryAddress is the Pool Address Provider
-  // - No redundant primaryAddress in callbacks
+  // ✅ CORRECTED: Aave V3 flashloan with unified schema
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashLoanProvider.protocol, // 'aave-v3'
-    tokenIn: flashLoanToken.address,      // ✅ Enso unified schema
-    amountIn: flashLoanAmount,             // ✅ Enso unified schema
-    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider
+    protocol: flashLoanProvider.protocol,
+    tokenIn: flashLoanToken.address,
+    amountIn: flashLoanAmount,
+    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER,
     callback,
   };
 
@@ -176,13 +173,12 @@ async function buildQuickSwapV3Plan(
     slippage: '100',
   };
 
-  // ✅ CORRECTED: Aave V3 flashloan with Enso's unified schema
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: flashLoanProvider.protocol, // 'aave-v3'
-    tokenIn: flashLoanToken.address,      // ✅ Enso unified schema
-    amountIn: flashLoanAmount,             // ✅ Enso unified schema
-    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER, // ✅ Pool Address Provider
+    protocol: flashLoanProvider.protocol,
+    tokenIn: flashLoanToken.address,
+    amountIn: flashLoanAmount,
+    primaryAddress: AAVE_POOL_ADDRESS_PROVIDER,
     callback: [buyStep, sellStep],
   };
 
