@@ -31,16 +31,19 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // ✅ Use tokenIn/amountIn (unified schema)
-      if (!step.tokenIn) throw new Error('Flashloan step missing tokenIn');
-      if (!step.amountIn) throw new Error('Flashloan step missing amountIn');
+      // ⚠️ Support BOTH schemas: prefer tokenIn/amountIn, fallback to token/amount
+      const tokenIn = step.tokenIn || step.token;
+      const amountIn = step.amountIn || step.amount;
+      
+      if (!tokenIn) throw new Error('Flashloan step missing token/tokenIn');
+      if (!amountIn) throw new Error('Flashloan step missing amount/amountIn');
       if (!step.callback || step.callback.length === 0) {
         throw new Error('Flashloan must contain at least one callback action');
       }
 
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(step.tokenIn),
-        amountIn: step.amountIn.toString(),
+        tokenIn: ethers.utils.getAddress(tokenIn),
+        amountIn: amountIn.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
@@ -88,12 +91,15 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
-      // ✅ Use tokenIn/amountIn (unified schema)
+      // ⚠️ Support BOTH schemas: prefer tokenIn/amountIn, fallback to token/amount
+      const tokenIn = step.tokenIn || step.token;
+      const amountIn = step.amountIn || step.amount;
+      
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(step.tokenIn),
-        amountIn: typeof step.amountIn === 'string'
-          ? step.amountIn
-          : (step.amountIn as any).amount?.toString() || (step.amountIn as any).toString(),
+        tokenIn: ethers.utils.getAddress(tokenIn),
+        amountIn: typeof amountIn === 'string'
+          ? amountIn
+          : (amountIn as any).amount?.toString() || (amountIn as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
@@ -108,13 +114,20 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      // ✅ Use tokenIn/tokenOut/amountOut (unified schema)
+      // ⚠️ Support BOTH schemas
+      // tokenIn = collateral (from tokenIn or collateral)
+      // tokenOut = borrow asset (from tokenOut or token)
+      // amountOut = borrow amount (from amountOut or amount)
+      const tokenIn = step.tokenIn || step.collateral;
+      const tokenOut = step.tokenOut || step.token;
+      const amountOut = step.amountOut || step.amount;
+      
       const args: Record<string, any> = {
-        tokenIn: step.tokenIn ? ethers.utils.getAddress(step.tokenIn) : ethers.utils.getAddress(step.collateral || ''),
-        tokenOut: ethers.utils.getAddress(step.tokenOut),
-        amountOut: typeof step.amountOut === 'string'
-          ? step.amountOut
-          : (step.amountOut as any).amount?.toString() || (step.amountOut as any).toString(),
+        tokenIn: ethers.utils.getAddress(tokenIn),
+        tokenOut: ethers.utils.getAddress(tokenOut),
+        amountOut: typeof amountOut === 'string'
+          ? amountOut
+          : (amountOut as any).amount?.toString() || (amountOut as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
