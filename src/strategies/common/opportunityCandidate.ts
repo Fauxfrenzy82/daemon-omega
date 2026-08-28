@@ -18,7 +18,6 @@ export interface ActionPlan {
   steps: ActionStep[];
 }
 
-// ✅ MOVED: FlashloanProtocol must be defined BEFORE ActionStep uses it
 export type FlashloanProtocol =
   | 'aave-v3'
   | 'morpho-markets-v1'
@@ -33,10 +32,9 @@ export type ActionStep =
   | {
       type: 'flashloan';
       protocol: FlashloanProtocol;
-      // ✅ Enso's required parameter names for flashloan
-      flashloanToken: string;
-      flashloanAmount: string;
-      // ⚠️ Legacy support for backward compatibility
+      // ✅ All fields optional for backward compatibility
+      flashloanToken?: string;
+      flashloanAmount?: string;
       token?: string;
       amount?: string;
       tokenIn?: string;
