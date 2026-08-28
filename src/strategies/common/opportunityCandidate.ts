@@ -32,11 +32,11 @@ export type ActionStep =
   | {
       type: 'flashloan';
       protocol: FlashloanProtocol;
-      // ✅ Support both schemas
+      // ⚠️ Support BOTH schemas - make all fields optional except callback
       token?: string;                    // Legacy
       amount?: string;                   // Legacy
-      tokenIn: string;                   // ✅ Unified schema
-      amountIn: string;                  // ✅ Unified schema
+      tokenIn?: string;                  // Unified schema
+      amountIn?: string;                 // Unified schema
       callback: ActionStep[];
       primaryAddress?: string;
       receiver?: string;
@@ -55,11 +55,11 @@ export type ActionStep =
   | {
       type: 'deposit';
       protocol: 'aave-v3' | 'stata';
-      // ✅ Support both schemas
+      // ⚠️ Support BOTH schemas
       token?: string;                    // Legacy
       amount?: string | { useOutputOfCallAt: number }; // Legacy
-      tokenIn: string;                   // ✅ Unified schema
-      amountIn: string | { useOutputOfCallAt: number }; // ✅ Unified schema
+      tokenIn?: string;                  // Unified schema
+      amountIn?: string | { useOutputOfCallAt: number }; // Unified schema
       primaryAddress?: string;
       onBehalfOf?: string;
     }
@@ -73,13 +73,13 @@ export type ActionStep =
   | {
       type: 'borrow';
       protocol: 'aave-v3';
-      // ✅ Support both schemas
+      // ⚠️ Support BOTH schemas
       collateral?: string;               // Legacy
       token?: string;                    // Legacy
       amount?: string | { useOutputOfCallAt: number }; // Legacy
-      tokenIn?: string;                  // ✅ Unified schema (collateral)
-      tokenOut: string;                  // ✅ Unified schema (borrow asset)
-      amountOut: string | { useOutputOfCallAt: number }; // ✅ Unified schema
+      tokenIn?: string;                  // Unified schema (collateral)
+      tokenOut?: string;                 // Unified schema (borrow asset)
+      amountOut?: string | { useOutputOfCallAt: number }; // Unified schema
       primaryAddress?: string;
       onBehalfOf?: string;
       interestRateMode?: number;
