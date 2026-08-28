@@ -43,12 +43,14 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ Only add primaryAddress if it exists and protocol requires it
+      // ✅ Only add primaryAddress if it exists
       if (step.primaryAddress) {
         args.primaryAddress = ethers.utils.getAddress(step.primaryAddress);
       }
       
-      if (step.receiver) args.receiver = ethers.utils.getAddress(step.receiver);
+      if (step.receiver) {
+        args.receiver = ethers.utils.getAddress(step.receiver);
+      }
 
       log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
 
@@ -147,7 +149,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     case 'harvest': {
       const args: Record<string, any> = {};
       
-      // ✅ ADDED: positionAddress is required
+      // ✅ positionAddress is required for harvest
       if (step.positionAddress) {
         args.positionAddress = ethers.utils.getAddress(step.positionAddress);
       }
