@@ -26,11 +26,94 @@ export interface EnsoAction {
   args: Record<string, any>;
 }
 
+export interface EnsoTokenResponse {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  chainId: number;
+  project: string;
+  primaryAddress: string; // The protocol's primary address (e.g., Aave Pool Addresses Provider)
+  logoURI?: string;
+}
+
 export class EnsoClient {
   private apiKey: string;
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
+  }
+
+  /**
+   * Fetch token metadata from Enso, including the primaryAddress for the protocol.
+   * This is the recommended way to get the correct primaryAddress dynamically.
+   */
+  async getTokenMetadata(tokenAddress: string, chainId: number = 137): Promise<EnsoTokenResponse | null> {
+    try {
+      const url = `${BASE_URL}/v1/tokens/${tokenAddress}?chainId=${chainId}`;
+      
+      log.info('🌐 ENSO TOKEN METADATA REQUEST', {
+        tokenAddress,
+        chainId,
+        url,
+      });
+
+      const response = await axios.get<EnsoTokenResponse>(
+        url,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`,
+          },
+          timeout: 10000,
+        }
+      );
+
+      log.info('🌐 ENSO TOKEN METADATA RESPONSE', {
+        token: response.data.symbol,
+        project: response.data.project,
+        primaryAddress: response.data.primaryAddress,
+        hasData: !!response.data,
+      });
+
+      return response.data;
+    } catch (error: any) {
+      log.warn('⚠️ Failed to fetch token metadata from Enso, using fallback', {
+        tokenAddress,
+        error: error.response?.status || error.message,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get the primaryAddress for a token's protocol (e.g., Aave Pool Addresses Provider).
+   * Falls back to known correct address if API call fails.
+   */
+  async getPrimaryAddressForToken(tokenAddress: string, chainId: number = 137): Promise<string> {
+    // Fallback for Polygon Aave V3 Pool Addresses Provider
+    const FALLBACK_PRIMARY_ADDRESS = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
+    
+    try {
+      const metadata = await this.getTokenMetadata(tokenAddress, chainId);
+      
+      if (metadata?.primaryAddress) {
+        // Return lowercase to ensure Enso accepts it
+        return metadata.primaryAddress.toLowerCase();
+      }
+      
+      log.warn('⚠️ No primaryAddress in token metadata, using fallback', {
+        tokenAddress,
+        fallback: FALLBACK_PRIMARY_ADDRESS,
+      });
+      return FALLBACK_PRIMARY_ADDRESS;
+    } catch (error) {
+      log.warn('⚠️ Error fetching primaryAddress, using fallback', {
+        tokenAddress,
+        fallback: FALLBACK_PRIMARY_ADDRESS,
+      });
+      return FALLBACK_PRIMARY_ADDRESS;
+    }
   }
 
   async getBundleData(params: EnsoBundleParams, actions: EnsoAction[]): Promise<any> {
@@ -50,7 +133,6 @@ export class EnsoClient {
         protocol: actions[0].protocol,
         action: actions[0].action,
       } : null,
-      // Full body logged so we can diff against what Enso actually receives
       fullBody: JSON.stringify(actions, null, 2),
     });
 
@@ -82,7 +164,6 @@ export class EnsoClient {
         message: error.message,
         url: error.config?.url,
         method: error.config?.method,
-        // Log exactly what was sent so we can see what Enso received
         sentBody: error.config?.data,
         sentHeaders: {
           contentType: error.config?.headers?.['Content-Type'],
