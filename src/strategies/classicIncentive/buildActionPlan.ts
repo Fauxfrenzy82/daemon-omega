@@ -9,9 +9,8 @@ import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('buildActionPlan');
 
-// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
-// This is what Enso expects for the flashloan primaryAddress
-const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
+// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon (lowercase)
+const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
