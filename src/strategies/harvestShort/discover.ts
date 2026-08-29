@@ -17,7 +17,7 @@ export interface HarvestFarm {
 /**
  * Discovers harvest opportunities from configured farms.
  */
-export async function discoverHarvestOpportunities(
+export async function discoverHarvestShort(
   farms: HarvestFarm[]
 ): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
@@ -63,3 +63,6 @@ export async function discoverHarvestOpportunities(
 
   return candidates;
 }
+
+// ✅ Alias for backward compatibility
+export const discoverHarvestOpportunities = discoverHarvestShort;
