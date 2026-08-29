@@ -102,8 +102,7 @@ export class EnsoClient {
    */
   async getPrimaryAddressForToken(tokenAddress: string, chainId: number = 137): Promise<string> {
     // ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
-    // This is what Enso expects for the flashloan primaryAddress
-    const CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
+    const CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
     try {
       const metadata = await this.getTokenMetadata(tokenAddress, chainId);
@@ -120,13 +119,13 @@ export class EnsoClient {
         tokenAddress,
         fallback: CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER,
       });
-      return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER.toLowerCase();
+      return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER;
     } catch (error) {
       log.warn('⚠️ Error fetching primaryAddress, using correct fallback', {
         tokenAddress,
         fallback: CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER,
       });
-      return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER.toLowerCase();
+      return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER;
     }
   }
 
@@ -136,14 +135,19 @@ export class EnsoClient {
    */
   async getAaveV3PrimaryAddress(chainId: number = 137): Promise<string> {
     // ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
-    const CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
-    return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER.toLowerCase();
+    const CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
+    return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER;
   }
 
   async getBundleData(params: EnsoBundleParams, actions: EnsoAction[]): Promise<any> {
     const queryParams = new URLSearchParams();
     queryParams.append('chainId', String(params.chainId));
-    if (params.fromAddress) queryParams.append('fromAddress', params.fromAddress);
+    
+    // ✅ CRITICAL FIX: fromAddress must be lowercase in the query string
+    if (params.fromAddress) {
+      queryParams.append('fromAddress', params.fromAddress.toLowerCase());
+    }
+    
     if (params.routingStrategy) queryParams.append('routingStrategy', params.routingStrategy);
     if (params.receiver) queryParams.append('receiver', params.receiver);
     if (params.spender) queryParams.append('spender', params.spender);
@@ -201,7 +205,12 @@ export class EnsoClient {
   async getRouteData(params: any): Promise<any> {
     const queryParams = new URLSearchParams();
     if (params.chainId) queryParams.append('chainId', String(params.chainId));
-    if (params.fromAddress) queryParams.append('fromAddress', params.fromAddress);
+    
+    // ✅ CRITICAL FIX: fromAddress must be lowercase in the query string
+    if (params.fromAddress) {
+      queryParams.append('fromAddress', params.fromAddress.toLowerCase());
+    }
+    
     if (params.routingStrategy) queryParams.append('routingStrategy', params.routingStrategy || 'router');
     if (params.receiver) queryParams.append('receiver', params.receiver);
     if (params.spender) queryParams.append('spender', params.spender);
