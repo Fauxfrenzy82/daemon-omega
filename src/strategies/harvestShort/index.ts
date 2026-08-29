@@ -1,2 +1,4 @@
-export { discoverHarvestShort } from './discover';
-export { buildActionPlan } from './buildActionPlan';
+// src/strategies/harvestShort/index.ts
+
+export { buildActionPlan, buildHarvestActionPlan } from './buildActionPlan';
+export { discoverHarvestOpportunities } from './discover';
