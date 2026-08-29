@@ -28,6 +28,10 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
   { name: 'Morpho', protocol: 'morpho-markets-v1' },
 ];
 
+function isValidEVMAddress(address: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(address);
+}
+
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
@@ -37,6 +41,12 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!flashloanToken) {
         throw new Error('Flashloan step missing flashloanToken/token/tokenIn');
       }
+      
+      // ✅ Validate address length (must be exactly 40 hex chars after 0x)
+      if (!isValidEVMAddress(flashloanToken)) {
+        throw new Error(`Invalid flashloanToken address: ${flashloanToken} - must be 0x + 40 hex characters`);
+      }
+      
       if (!flashloanAmount) {
         throw new Error('Flashloan step missing flashloanAmount/amount/amountIn');
       }
@@ -50,16 +60,25 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ CRITICAL: primaryAddress must be lowercase
+      // ✅ CRITICAL: primaryAddress must be lowercase and valid
       if (step.primaryAddress) {
+        if (!isValidEVMAddress(step.primaryAddress)) {
+          throw new Error(`Invalid primaryAddress: ${step.primaryAddress} - must be 0x + 40 hex characters`);
+        }
         args.primaryAddress = step.primaryAddress.toLowerCase();
       }
 
       if (step.receiver) {
+        if (!isValidEVMAddress(step.receiver)) {
+          throw new Error(`Invalid receiver: ${step.receiver} - must be 0x + 40 hex characters`);
+        }
         args.receiver = step.receiver.toLowerCase();
       }
 
       if (step.refundReceiver) {
+        if (!isValidEVMAddress(step.refundReceiver)) {
+          throw new Error(`Invalid refundReceiver: ${step.refundReceiver} - must be 0x + 40 hex characters`);
+        }
         args.refundReceiver = step.refundReceiver.toLowerCase();
       }
 
@@ -73,6 +92,14 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'swap': {
+      // ✅ Validate addresses
+      if (!isValidEVMAddress(step.tokenIn)) {
+        throw new Error(`Invalid tokenIn: ${step.tokenIn} - must be 0x + 40 hex characters`);
+      }
+      if (!isValidEVMAddress(step.tokenOut)) {
+        throw new Error(`Invalid tokenOut: ${step.tokenOut} - must be 0x + 40 hex characters`);
+      }
+      
       const args = {
         tokenIn: step.tokenIn.toLowerCase(),
         tokenOut: step.tokenOut.toLowerCase(),
@@ -99,6 +126,9 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const amountIn = step.amountIn || step.amount;
 
       if (!tokenIn) throw new Error('Deposit step missing tokenIn/token');
+      if (!isValidEVMAddress(tokenIn)) {
+        throw new Error(`Invalid tokenIn: ${tokenIn} - must be 0x + 40 hex characters`);
+      }
       if (!amountIn) throw new Error('Deposit step missing amountIn/amount');
 
       const args: Record<string, any> = {
@@ -125,7 +155,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const amountOut = step.amountOut || step.amount;
 
       if (!tokenIn) throw new Error('Borrow step missing tokenIn/collateral');
+      if (!isValidEVMAddress(tokenIn)) {
+        throw new Error(`Invalid tokenIn: ${tokenIn} - must be 0x + 40 hex characters`);
+      }
       if (!tokenOut) throw new Error('Borrow step missing tokenOut/token');
+      if (!isValidEVMAddress(tokenOut)) {
+        throw new Error(`Invalid tokenOut: ${tokenOut} - must be 0x + 40 hex characters`);
+      }
       if (!amountOut) throw new Error('Borrow step missing amountOut/amount');
 
       const args: Record<string, any> = {
@@ -153,6 +189,9 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 
     case 'withdraw': {
       if (!step.token) throw new Error('Withdraw step missing token');
+      if (!isValidEVMAddress(step.token)) {
+        throw new Error(`Invalid token: ${step.token} - must be 0x + 40 hex characters`);
+      }
       if (!step.amount) throw new Error('Withdraw step missing amount');
 
       const args: Record<string, any> = {
@@ -176,9 +215,15 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const args: Record<string, any> = {};
 
       if (step.positionAddress) {
+        if (!isValidEVMAddress(step.positionAddress)) {
+          throw new Error(`Invalid positionAddress: ${step.positionAddress} - must be 0x + 40 hex characters`);
+        }
         args.positionAddress = step.positionAddress.toLowerCase();
       }
       if (step.token) {
+        if (!isValidEVMAddress(step.token)) {
+          throw new Error(`Invalid token: ${step.token} - must be 0x + 40 hex characters`);
+        }
         args.token = step.token.toLowerCase();
       }
 
