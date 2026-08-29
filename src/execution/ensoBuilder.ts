@@ -31,7 +31,6 @@ export const FLASH_LOAN_PROVIDERS: FlashLoanProvider[] = [
 function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: string }): any {
   switch (step.type) {
     case 'flashloan': {
-      // ✅ Enso requires flashloanToken/flashloanAmount for flashloan action
       const flashloanToken = step.flashloanToken || step.token || step.tokenIn;
       const flashloanAmount = step.flashloanAmount || step.amount || step.amountIn;
 
@@ -51,7 +50,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ CRITICAL: primaryAddress must be lowercase (no checksum)
+      // ✅ CRITICAL: primaryAddress must be lowercase
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress.toLowerCase();
       }
@@ -108,10 +107,10 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
           ? amountIn
           : (amountIn as any).amount?.toString() || (amountIn as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
-        ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
+        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf.toLowerCase() } : {}), // ✅ FIXED: lowercase
       };
 
-      log.info(`DEPOSIT PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn} | PrimaryAddress: ${args.primaryAddress ?? 'none'}`);
+      log.info(`DEPOSIT PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn} | PrimaryAddress: ${args.primaryAddress ?? 'none'} | OnBehalfOf: ${args.onBehalfOf ?? 'none'}`);
 
       return {
         protocol: step.protocol,
@@ -136,14 +135,14 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
           ? amountOut
           : (amountOut as any).amount?.toString() || (amountOut as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
-        ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
+        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf.toLowerCase() } : {}), // ✅ FIXED: lowercase
       };
 
       if (step.interestRateMode !== undefined) {
         args.interestRateMode = step.interestRateMode;
       }
 
-      log.info(`BORROW PARSED - Collateral: ${args.tokenIn} | Borrow (tokenOut): ${args.tokenOut} | AmountOut: ${args.amountOut}`);
+      log.info(`BORROW PARSED - Collateral: ${args.tokenIn} | Borrow (tokenOut): ${args.tokenOut} | AmountOut: ${args.amountOut} | OnBehalfOf: ${args.onBehalfOf ?? 'none'}`);
 
       return {
         protocol: step.protocol,
