@@ -58,8 +58,6 @@ async function buildAaveIncentivePlan(
     )
     .toString();
 
-  // ✅ Use the correct Aave V3 Pool Addresses Provider
-  // This is what Enso expects for the flashloan primaryAddress
   const primaryAddress = AAVE_V3_POOL_ADDRESSES_PROVIDER;
 
   log.info('BUILDING AAVE INCENTIVE PLAN', {
@@ -76,22 +74,26 @@ async function buildAaveIncentivePlan(
     primaryAddress,
   });
 
-  // ✅ Step 1: Deposit - uses tokenIn/amountIn (NO primaryAddress)
+  // ✅ Step 1: Deposit - uses tokenIn/amountIn
+  // ✅ FIXED: primaryAddress is required on the inner deposit action
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
     tokenIn: flashLoanToken.address,
     amountIn: flashLoanAmount,
     onBehalfOf: executionWallet.address,
+    primaryAddress, // ✅ REQUIRED: Enso needs this on the inner deposit action
   };
 
   log.info('DEPOSIT STEP CREATED', {
     token: flashLoanToken.symbol,
     amount: flashLoanAmount,
     onBehalfOf: executionWallet.address,
+    primaryAddress,
   });
 
-  // ✅ Step 2: Borrow - uses tokenIn/tokenOut/amountOut (NO primaryAddress)
+  // ✅ Step 2: Borrow - uses tokenIn/tokenOut/amountOut
+  // ✅ FIXED: primaryAddress is required on the inner borrow action
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
@@ -100,6 +102,7 @@ async function buildAaveIncentivePlan(
     amountOut: borrowAmount,
     onBehalfOf: executionWallet.address,
     interestRateMode: 2,
+    primaryAddress, // ✅ REQUIRED: Enso needs this on the inner borrow action
   };
 
   log.info('BORROW STEP CREATED', {
@@ -107,6 +110,7 @@ async function buildAaveIncentivePlan(
     borrowToken: borrowAsset.symbol,
     amount: borrowAmount,
     onBehalfOf: executionWallet.address,
+    primaryAddress,
   });
 
   const callback: ActionStep[] = [depositStep, borrowStep];
@@ -125,13 +129,13 @@ async function buildAaveIncentivePlan(
   }
 
   // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount
-  // primaryAddress is the Aave V3 Pool Addresses Provider (what Enso expects)
+  // primaryAddress is also required on the outer flashloan wrapper
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress: primaryAddress, // ✅ Correct: Pool Addresses Provider
+    primaryAddress, // ✅ Required on outer flashloan wrapper
     callback,
   };
 
@@ -164,7 +168,6 @@ async function buildQuickSwapV3Plan(
     )
     .toString();
 
-  // ✅ Use the correct Aave V3 Pool Addresses Provider
   const primaryAddress = AAVE_V3_POOL_ADDRESSES_PROVIDER;
 
   const buyStep: ActionStep = {
@@ -190,7 +193,7 @@ async function buildQuickSwapV3Plan(
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress: primaryAddress, // ✅ Correct: Pool Addresses Provider
+    primaryAddress,
     callback: [buyStep, sellStep],
   };
 
