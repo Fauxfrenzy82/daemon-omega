@@ -11,8 +11,8 @@ import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('buildActionPlan');
 
-// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
-const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
+// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon (lowercase)
+const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
 interface FarmConfig {
   id: string;
@@ -95,3 +95,6 @@ export async function buildHarvestActionPlan(
     steps: [flashloanStep],
   };
 }
+
+// ✅ Export as buildActionPlan for compatibility with processor.ts
+export const buildActionPlan = buildHarvestActionPlan;
