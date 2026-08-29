@@ -45,22 +45,21 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       }
 
       const args: Record<string, any> = {
-        flashloanToken: ethers.utils.getAddress(flashloanToken),
+        flashloanToken: flashloanToken.toLowerCase(),  // ✅ lowercase
         flashloanAmount: flashloanAmount.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ CRITICAL: primaryAddress must be lowercase
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress.toLowerCase();
       }
 
       if (step.receiver) {
-        args.receiver = ethers.utils.getAddress(step.receiver);
+        args.receiver = step.receiver.toLowerCase();  // ✅ lowercase
       }
 
       if (step.refundReceiver) {
-        args.refundReceiver = ethers.utils.getAddress(step.refundReceiver);
+        args.refundReceiver = step.refundReceiver.toLowerCase();  // ✅ lowercase
       }
 
       log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
@@ -74,8 +73,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 
     case 'swap': {
       const args = {
-        tokenIn: ethers.utils.getAddress(step.tokenIn),
-        tokenOut: ethers.utils.getAddress(step.tokenOut),
+        tokenIn: step.tokenIn.toLowerCase(),   // ✅ lowercase
+        tokenOut: step.tokenOut.toLowerCase(), // ✅ lowercase
         amountIn:
           typeof step.amountIn === 'string'
             ? step.amountIn
@@ -102,12 +101,12 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!amountIn) throw new Error('Deposit step missing amountIn/amount');
 
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(tokenIn),
+        tokenIn: tokenIn.toLowerCase(),  // ✅ lowercase
         amountIn: typeof amountIn === 'string'
           ? amountIn
           : (amountIn as any).amount?.toString() || (amountIn as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
-        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf.toLowerCase() } : {}), // ✅ FIXED: lowercase
+        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf.toLowerCase() } : {}),
       };
 
       log.info(`DEPOSIT PARSED - TokenIn: ${args.tokenIn} | AmountIn: ${args.amountIn} | PrimaryAddress: ${args.primaryAddress ?? 'none'} | OnBehalfOf: ${args.onBehalfOf ?? 'none'}`);
@@ -129,13 +128,13 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!amountOut) throw new Error('Borrow step missing amountOut/amount');
 
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(tokenIn),
-        tokenOut: ethers.utils.getAddress(tokenOut),
+        tokenIn: tokenIn.toLowerCase(),   // ✅ lowercase
+        tokenOut: tokenOut.toLowerCase(), // ✅ lowercase
         amountOut: typeof amountOut === 'string'
           ? amountOut
           : (amountOut as any).amount?.toString() || (amountOut as any).toString(),
         ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
-        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf.toLowerCase() } : {}), // ✅ FIXED: lowercase
+        ...(step.onBehalfOf ? { onBehalfOf: step.onBehalfOf.toLowerCase() } : {}),
       };
 
       if (step.interestRateMode !== undefined) {
@@ -156,7 +155,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!step.amount) throw new Error('Withdraw step missing amount');
 
       const args: Record<string, any> = {
-        tokenIn: ethers.utils.getAddress(step.token),
+        tokenIn: step.token.toLowerCase(),  // ✅ lowercase
         amountIn: typeof step.amount === 'string'
           ? step.amount
           : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -176,10 +175,10 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const args: Record<string, any> = {};
 
       if (step.positionAddress) {
-        args.positionAddress = ethers.utils.getAddress(step.positionAddress);
+        args.positionAddress = step.positionAddress.toLowerCase();  // ✅ lowercase
       }
       if (step.token) {
-        args.token = ethers.utils.getAddress(step.token);
+        args.token = step.token.toLowerCase();  // ✅ lowercase
       }
 
       log.info(`HARVEST PARSED - PositionAddress: ${args.positionAddress || 'none'}`);
@@ -204,7 +203,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle> {
   const enso = getEnsoClient();
   const chainId = activeChain.chainId;
-  const fromAddress = ethers.utils.getAddress(executionWallet.address) as `0x${string}`;
+  const fromAddress = executionWallet.address.toLowerCase() as `0x${string}`;
 
   log.info('BUILDING BUNDLE FROM PLAN', {
     executionWalletAddress: executionWallet.address,
