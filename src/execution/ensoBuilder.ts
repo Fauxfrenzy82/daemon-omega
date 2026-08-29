@@ -32,7 +32,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
   switch (step.type) {
     case 'flashloan': {
       // ✅ Enso requires flashloanToken/flashloanAmount for flashloan action
-      // Fallback to legacy fields for backward compatibility
       const flashloanToken = step.flashloanToken || step.token || step.tokenIn;
       const flashloanAmount = step.flashloanAmount || step.amount || step.amountIn;
 
@@ -52,7 +51,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ CRITICAL: Use lowercase for primaryAddress (don't checksum)
+      // ✅ CRITICAL: primaryAddress must be lowercase (no checksum)
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress.toLowerCase();
       }
@@ -83,7 +82,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
             ? step.amountIn
             : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
         slippage: step.slippage,
-        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
         ...(step.poolFee !== undefined ? { poolFee: step.poolFee } : {}),
       };
 
@@ -97,7 +96,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'deposit': {
-      // Prefer tokenIn/amountIn, fallback to token/amount
       const tokenIn = step.tokenIn || step.token;
       const amountIn = step.amountIn || step.amount;
 
@@ -109,7 +107,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         amountIn: typeof amountIn === 'string'
           ? amountIn
           : (amountIn as any).amount?.toString() || (amountIn as any).toString(),
-        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
@@ -123,7 +121,6 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
     }
 
     case 'borrow': {
-      // Prefer tokenIn/tokenOut/amountOut, fallback to collateral/token/amount
       const tokenIn = step.tokenIn || step.collateral;
       const tokenOut = step.tokenOut || step.token;
       const amountOut = step.amountOut || step.amount;
@@ -138,7 +135,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         amountOut: typeof amountOut === 'string'
           ? amountOut
           : (amountOut as any).amount?.toString() || (amountOut as any).toString(),
-        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
         ...(step.onBehalfOf ? { onBehalfOf: ethers.utils.getAddress(step.onBehalfOf) } : {}),
       };
 
@@ -164,7 +161,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         amountIn: typeof step.amount === 'string'
           ? step.amount
           : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
-        ...(step.primaryAddress ? { primaryAddress: ethers.utils.getAddress(step.primaryAddress) } : {}),
+        ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
       };
 
       log.info(`WITHDRAW PARSED - TokenIn: ${args.tokenIn} | PrimaryAddress: ${args.primaryAddress ?? 'none'}`);
