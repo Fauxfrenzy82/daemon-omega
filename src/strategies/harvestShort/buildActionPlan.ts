@@ -1,80 +1,45 @@
+// src/strategies/harvestShort/buildActionPlan.ts
+
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
-import { env } from '../../config/env';
-import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
+import { TokenInfo } from '../../config/tokens';
+import { executionWallet } from '../../treasury/wallets';
+import { activeChain } from '../../config/chains';
 import { createLogger } from '../../utils/logger';
+import { getEnsoClient } from '../../execution/ensoClient';
 
-const log = createLogger('buildActionPlan');
+const log = createLogger('harvestShortBuildActionPlan');
 
-/**
- * 🔥 Supported flashloan protocols on Polygon
- * - morpho-markets-v1: 0% fee (BEST for arbitrage)
- * - aave-v3: Dynamic fee (5-9 bps)
- * - balancer-v3: Pool-specific fee
- */
-const SUPPORTED_FLASHLOAN_PROTOCOLS = [
-  'morpho-markets-v1',
-  'aave-v3',
-  'balancer-v3',
-] as const;
+// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
+const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
 
-type FlashloanProtocol = typeof SUPPORTED_FLASHLOAN_PROTOCOLS[number];
+interface FarmConfig {
+  id: string;
+  positionAddress: string;
+  rewardToken: TokenInfo;
+  entryToken: TokenInfo;
+  protocol: string;
+}
 
-export async function buildActionPlan(
-  candidate: OpportunityCandidate,
-  options?: { flashLoanToken?: any; flashLoanProvider?: FlashLoanProvider }
+export async function buildHarvestActionPlan(
+  farm: FarmConfig,
+  rewardAmount: string,
+  flashLoanProvider?: FlashLoanProvider
 ): Promise<ActionPlan> {
-  const {
-    positionAddress,
-    rewardToken,
-    entryToken,
-    rewardAmount,
-    sellQuote,
-    useFlashloanArbitrage,
-    flashloanSizeUsd,
-    flashloanAmount,
-    buyQuote,
-    priceImpactBps,
-    _debugSteps,
-  } = candidate.params;
+  const { positionAddress, rewardToken, entryToken } = farm;
 
-  const flashLoanToken = options?.flashLoanToken || entryToken;
+  // ✅ Use Aave V3 as the flashloan provider
+  const provider = flashLoanProvider || { protocol: 'aave-v3' as const };
 
-  const flashloanProtocol = (env.HARVEST_FLASHLOAN_PROTOCOL || 'morpho-markets-v1') as FlashloanProtocol;
+  // Minimal flashloan amount (1 wei) - just enough to trigger the callback
+  const flashLoanAmount = '1';
 
-  if (!SUPPORTED_FLASHLOAN_PROTOCOLS.includes(flashloanProtocol)) {
-    log.warn(`Unsupported flashloan protocol: ${flashloanProtocol}, falling back to morpho-markets-v1`);
-  }
+  log.info('🪣 Using minimal flashloan (gas only) for harvest', {
+    protocol: provider.protocol,
+  });
 
-  const useArbitrage = useFlashloanArbitrage === true && flashloanAmount && buyQuote;
-
-  let actualFlashloanAmount: string;
-  let flashloanAmountHuman: string;
-
-  if (useArbitrage && flashloanAmount) {
-    actualFlashloanAmount = flashloanAmount;
-    flashloanAmountHuman = ethers.utils.formatUnits(flashloanAmount, flashLoanToken.decimals);
-    log.info(`🚀 Using flashloan arbitrage for harvest`, {
-      flashloanSizeUsd,
-      flashloanAmount: flashloanAmountHuman,
-      entryToken: flashLoanToken.symbol,
-      rewardToken: rewardToken.symbol,
-      protocol: flashloanProtocol,
-      priceImpactBps,
-      feePercent: flashloanProtocol === 'morpho-markets-v1' ? '0%' : 'variable',
-      debugSteps: _debugSteps?.length || 0,
-    });
-  } else {
-    actualFlashloanAmount = '1';
-    flashloanAmountHuman = '1 (minimal)';
-    log.info(`🪣 Using minimal flashloan (gas only) for harvest`, {
-      protocol: flashloanProtocol,
-    });
-  }
-
-  // 🔥 Step 1: Harvest rewards using Enso's native harvest action
-  // Enso handles the ABI automatically – no custom contract calls needed
+  // ✅ Step 1: Harvest the reward
   const harvestStep: ActionStep = {
     type: 'harvest',
     protocol: 'enso',
@@ -82,87 +47,39 @@ export async function buildActionPlan(
     token: rewardToken.address,
   };
 
-  // 🔥 Build the callback actions
-  const callbackActions: ActionStep[] = [harvestStep];
-
-  // 🔥 Step 2: If using arbitrage, add the flashloan swap logic
-  if (useArbitrage && buyQuote) {
-    // Swap entryToken → rewardToken (buy reward token with flashloaned funds)
-    const buyStep: ActionStep = {
-      type: 'swap',
-      protocol: 'enso',
-      tokenIn: flashLoanToken.address,
-      tokenOut: rewardToken.address,
-      amountIn: actualFlashloanAmount,
-      slippage: '100',
-      primaryAddress: buyQuote.raw?.primaryAddress || undefined,
-      poolFee: buyQuote.raw?.poolFee,
-    };
-    callbackActions.push(buyStep);
-
-    // 🔥 FIX: After harvesting, sell all rewards back to entryToken
-    // Use the actual rewardAmount from discovery (not useOutputOfCallAt)
-    const sellStep: ActionStep = {
-      type: 'swap',
-      protocol: 'enso',
-      tokenIn: rewardToken.address,
-      tokenOut: entryToken.address,
-      amountIn: rewardAmount,  // ✅ FIX: Use direct amount from discovery
-      slippage: '100',
-      primaryAddress: sellQuote?.raw?.primaryAddress || undefined,
-      poolFee: sellQuote?.raw?.poolFee,
-    };
-    callbackActions.push(sellStep);
-
-    log.info(`📈 Arbitrage steps added`, {
-      buyStep: `${flashLoanToken.symbol} → ${rewardToken.symbol}`,
-      sellStep: `${rewardToken.symbol} → ${flashLoanToken.symbol}`,
-      flashloanAmount: flashloanAmountHuman,
-      rewardAmount: rewardAmount,
-      protocol: flashloanProtocol,
-    });
-  } else {
-    // 🔥 Standard harvest + spot sell
-    // Use the actual rewardAmount from discovery (not useOutputOfCallAt)
-    const sellStep: ActionStep = {
-      type: 'swap',
-      protocol: 'enso',
-      tokenIn: rewardToken.address,
-      tokenOut: entryToken.address,
-      amountIn: rewardAmount,  // ✅ FIX: Use direct amount from discovery
-      slippage: '100',
-      primaryAddress: sellQuote?.raw?.primaryAddress || undefined,
-      poolFee: sellQuote?.raw?.poolFee,
-    };
-    callbackActions.push(sellStep);
-  }
-
-  // 🔥 Flashloan step with configurable protocol
-  const flashloanStep: ActionStep = {
-    type: 'flashloan',
-    protocol: flashloanProtocol,
-    token: flashLoanToken.address,
-    amount: actualFlashloanAmount,
-    tokenIn: flashLoanToken.address,
-    amountIn: actualFlashloanAmount,
-    callback: callbackActions,
+  // ✅ Step 2: Swap reward token to entry token (USDC)
+  const swapStep: ActionStep = {
+    type: 'swap',
+    protocol: 'enso',
+    tokenIn: rewardToken.address,
+    tokenOut: entryToken.address,
+    amountIn: { useOutputOfCallAt: 0 },
+    slippage: '100',
   };
 
-  log.info(`✅ Harvest action plan built`, {
+  // ✅ Flashloan step with Aave V3
+  const flashloanStep: ActionStep = {
+    type: 'flashloan',
+    protocol: provider.protocol, // 'aave-v3'
+    tokenIn: entryToken.address,   // Flashloan USDC
+    amountIn: flashLoanAmount,     // 1 wei
+    primaryAddress: AAVE_V3_POOL_ADDRESSES_PROVIDER,
+    callback: [harvestStep, swapStep],
+  };
+
+  log.info('✅ Harvest action plan built', {
     positionAddress,
     rewardToken: rewardToken.symbol,
     entryToken: entryToken.symbol,
-    flashloanAmount: flashloanAmountHuman,
-    flashloanProtocol,
-    callbackActionCount: callbackActions.length,
-    usingArbitrage: useArbitrage,
-    rewardAmount: rewardAmount,
-    steps: callbackActions.map(a => a.type).join(' → '),
+    flashloanAmount: `${flashLoanAmount} (minimal)`,
+    flashloanProtocol: provider.protocol,
+    callbackActionCount: 2,
+    steps: 'harvest → swap',
   });
 
   return {
-    flashLoanToken,
-    flashLoanAmount: actualFlashloanAmount,
+    flashLoanToken: entryToken,
+    flashLoanAmount,
     steps: [flashloanStep],
   };
 }
