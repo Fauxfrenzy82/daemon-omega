@@ -45,21 +45,22 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       }
 
       const args: Record<string, any> = {
-        flashloanToken: flashloanToken.toLowerCase(),  // ✅ lowercase
+        flashloanToken: flashloanToken.toLowerCase(),
         flashloanAmount: flashloanAmount.toString(),
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
+      // ✅ CRITICAL: primaryAddress must be lowercase
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress.toLowerCase();
       }
 
       if (step.receiver) {
-        args.receiver = step.receiver.toLowerCase();  // ✅ lowercase
+        args.receiver = step.receiver.toLowerCase();
       }
 
       if (step.refundReceiver) {
-        args.refundReceiver = step.refundReceiver.toLowerCase();  // ✅ lowercase
+        args.refundReceiver = step.refundReceiver.toLowerCase();
       }
 
       log.info(`FLASHLOAN PARSED - Protocol: ${step.protocol} | Token: ${args.flashloanToken} | Amount: ${args.flashloanAmount}`);
@@ -73,8 +74,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 
     case 'swap': {
       const args = {
-        tokenIn: step.tokenIn.toLowerCase(),   // ✅ lowercase
-        tokenOut: step.tokenOut.toLowerCase(), // ✅ lowercase
+        tokenIn: step.tokenIn.toLowerCase(),
+        tokenOut: step.tokenOut.toLowerCase(),
         amountIn:
           typeof step.amountIn === 'string'
             ? step.amountIn
@@ -101,7 +102,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!amountIn) throw new Error('Deposit step missing amountIn/amount');
 
       const args: Record<string, any> = {
-        tokenIn: tokenIn.toLowerCase(),  // ✅ lowercase
+        tokenIn: tokenIn.toLowerCase(),
         amountIn: typeof amountIn === 'string'
           ? amountIn
           : (amountIn as any).amount?.toString() || (amountIn as any).toString(),
@@ -128,8 +129,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!amountOut) throw new Error('Borrow step missing amountOut/amount');
 
       const args: Record<string, any> = {
-        tokenIn: tokenIn.toLowerCase(),   // ✅ lowercase
-        tokenOut: tokenOut.toLowerCase(), // ✅ lowercase
+        tokenIn: tokenIn.toLowerCase(),
+        tokenOut: tokenOut.toLowerCase(),
         amountOut: typeof amountOut === 'string'
           ? amountOut
           : (amountOut as any).amount?.toString() || (amountOut as any).toString(),
@@ -155,7 +156,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       if (!step.amount) throw new Error('Withdraw step missing amount');
 
       const args: Record<string, any> = {
-        tokenIn: step.token.toLowerCase(),  // ✅ lowercase
+        tokenIn: step.token.toLowerCase(),
         amountIn: typeof step.amount === 'string'
           ? step.amount
           : { useOutputOfCallAt: (step.amount as any).useOutputOfCallAt },
@@ -175,10 +176,10 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
       const args: Record<string, any> = {};
 
       if (step.positionAddress) {
-        args.positionAddress = step.positionAddress.toLowerCase();  // ✅ lowercase
+        args.positionAddress = step.positionAddress.toLowerCase();
       }
       if (step.token) {
-        args.token = step.token.toLowerCase();  // ✅ lowercase
+        args.token = step.token.toLowerCase();
       }
 
       log.info(`HARVEST PARSED - PositionAddress: ${args.positionAddress || 'none'}`);
@@ -203,6 +204,8 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
 export async function buildBundleFromPlan(plan: ActionPlan): Promise<BuiltBundle> {
   const enso = getEnsoClient();
   const chainId = activeChain.chainId;
+  
+  // ✅ CRITICAL FIX: fromAddress must be lowercase
   const fromAddress = executionWallet.address.toLowerCase() as `0x${string}`;
 
   log.info('BUILDING BUNDLE FROM PLAN', {
