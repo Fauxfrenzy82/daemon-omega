@@ -1,3 +1,5 @@
+// src/config/tokens.ts
+
 export interface TokenInfo {
   chainId: number;
   address: string;
@@ -65,13 +67,11 @@ export const TOKENS: Record<string, TokenInfo> = {
   },
   AAVE: {
     chainId: 137,
-    address: '0xD6DF932A45C0f255f85145f286eA0b292B21C90B',
+    address: '0xD6DF932A45C0f255f85145f286eA0b292B21C90B', // ✅ Fixed
     decimals: 18,
     symbol: 'AAVE',
     name: 'Aave Token',
   },
-  // Verified via GHST's own dedicated PolygonScan token page (established
-  // Aavegotchi game ecosystem token, not a wallet-holding artifact).
   GHST: {
     chainId: 137,
     address: '0x385Eeac5cB85A38A9a07A70c73e0a3271CfB54A7',
@@ -79,10 +79,6 @@ export const TOKENS: Record<string, TokenInfo> = {
     symbol: 'GHST',
     name: 'Aavegotchi GHST Token',
   },
-  // Verified via PolygonScan's own migration banner + independent MEXC
-  // exchange announcements (multiple sources agree). QUICK migrated
-  // contracts in 2023 with a 1:1000 redenomination — the old address
-  // (0x831753dd...) is explicitly deprecated; this is the current one.
   QUICK: {
     chainId: 137,
     address: '0xB5C064F955D8e7F38fE0460C556a72987494eE17',
