@@ -52,7 +52,7 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         callback: step.callback.map(s => convertStepToEnsoAction(s, context)),
       };
 
-      // ✅ CRITICAL FIX: Use lowercase for primaryAddress (don't checksum)
+      // ✅ CRITICAL: Use lowercase for primaryAddress (don't checksum)
       if (step.primaryAddress) {
         args.primaryAddress = step.primaryAddress.toLowerCase();
       }
