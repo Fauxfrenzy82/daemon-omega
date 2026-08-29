@@ -9,7 +9,6 @@ const log = createLogger('ensoClient');
 const BASE_URL = env.ENSO_BASE_URL || 'https://api.enso.build/api';
 const API_KEY = env.ENSO_API_KEY;
 
-// Log at module load so it appears in boot logs
 log.info('EnsoClient BASE_URL resolved', { BASE_URL });
 
 export interface EnsoBundleParams {
@@ -101,7 +100,6 @@ export class EnsoClient {
    * Falls back to the correct Aave V3 Pool Addresses Provider on Polygon.
    */
   async getPrimaryAddressForToken(tokenAddress: string, chainId: number = 137): Promise<string> {
-    // ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
     const CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
     try {
@@ -134,7 +132,6 @@ export class EnsoClient {
    * This is what Enso expects for the flashloan primaryAddress.
    */
   async getAaveV3PrimaryAddress(chainId: number = 137): Promise<string> {
-    // ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
     const CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
     return CORRECT_AAVE_V3_POOL_ADDRESSES_PROVIDER;
   }
