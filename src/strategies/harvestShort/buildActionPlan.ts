@@ -27,20 +27,28 @@ interface FarmConfig {
  * Uses Aave V3 flashloan (not Morpho) to enable the reward token swap.
  */
 export async function buildHarvestActionPlan(
-  farm: FarmConfig,
-  rewardAmount: string,
-  flashLoanProvider?: FlashLoanProvider
+  candidate: OpportunityCandidate,
+  options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const { positionAddress, rewardToken, entryToken } = farm;
+  // Extract farm data from the candidate params
+  const farm = candidate.params.farm as FarmConfig;
+  const rewardAmount = candidate.params.rewardAmount || '1';
+  const flashLoanProvider = options?.flashLoanProvider || { protocol: 'aave-v3' as const };
 
-  // ✅ Use Aave V3 as the flashloan provider (not Morpho)
-  const provider = flashLoanProvider || { protocol: 'aave-v3' as const };
+  if (!farm) {
+    throw new Error('Harvest candidate missing farm params');
+  }
+
+  const { positionAddress, rewardToken, entryToken } = farm;
 
   // Minimal flashloan amount (1 wei) - just enough to trigger the callback
   const flashLoanAmount = '1';
 
   log.info('🪣 Using minimal flashloan (gas only) for harvest', {
-    protocol: provider.protocol,
+    protocol: flashLoanProvider.protocol,
+    positionAddress,
+    rewardToken: rewardToken.symbol,
+    entryToken: entryToken.symbol,
   });
 
   // ✅ Step 1: Harvest the reward
@@ -64,9 +72,9 @@ export async function buildHarvestActionPlan(
   // ✅ Flashloan step with Aave V3
   const flashloanStep: ActionStep = {
     type: 'flashloan',
-    protocol: provider.protocol, // 'aave-v3'
-    tokenIn: entryToken.address,   // Flashloan USDC
-    amountIn: flashLoanAmount,     // 1 wei
+    protocol: flashLoanProvider.protocol,
+    tokenIn: entryToken.address,
+    amountIn: flashLoanAmount,
     primaryAddress: AAVE_V3_POOL_ADDRESSES_PROVIDER,
     callback: [harvestStep, swapStep],
   };
@@ -76,7 +84,7 @@ export async function buildHarvestActionPlan(
     rewardToken: rewardToken.symbol,
     entryToken: entryToken.symbol,
     flashloanAmount: `${flashLoanAmount} (minimal)`,
-    flashloanProtocol: provider.protocol,
+    flashloanProtocol: flashLoanProvider.protocol,
     callbackActionCount: 2,
     steps: 'harvest → swap',
   });
@@ -87,8 +95,3 @@ export async function buildHarvestActionPlan(
     steps: [flashloanStep],
   };
 }
-
-/**
- * Alias for compatibility with existing code that expects buildActionPlan.
- */
-export const buildActionPlan = buildHarvestActionPlan;
