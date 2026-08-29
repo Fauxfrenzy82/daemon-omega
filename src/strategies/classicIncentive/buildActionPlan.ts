@@ -9,7 +9,7 @@ import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('buildActionPlan');
 
-// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon (lowercase)
+// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon (lowercase, 40 chars)
 const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
 function getTokenPriceUsd(token: TokenInfo): number {
@@ -74,14 +74,13 @@ async function buildAaveIncentivePlan(
   });
 
   // ✅ Step 1: Deposit - uses tokenIn/amountIn
-  // ✅ FIXED: primaryAddress is required on the inner deposit action
   const depositStep: ActionStep = {
     type: 'deposit',
     protocol: 'aave-v3',
     tokenIn: flashLoanToken.address,
     amountIn: flashLoanAmount,
     onBehalfOf: executionWallet.address,
-    primaryAddress, // ✅ REQUIRED: Enso needs this on the inner deposit action
+    primaryAddress,
   };
 
   log.info('DEPOSIT STEP CREATED', {
@@ -92,7 +91,6 @@ async function buildAaveIncentivePlan(
   });
 
   // ✅ Step 2: Borrow - uses tokenIn/tokenOut/amountOut
-  // ✅ FIXED: primaryAddress is required on the inner borrow action
   const borrowStep: ActionStep = {
     type: 'borrow',
     protocol: 'aave-v3',
@@ -101,7 +99,7 @@ async function buildAaveIncentivePlan(
     amountOut: borrowAmount,
     onBehalfOf: executionWallet.address,
     interestRateMode: 2,
-    primaryAddress, // ✅ REQUIRED: Enso needs this on the inner borrow action
+    primaryAddress,
   };
 
   log.info('BORROW STEP CREATED', {
@@ -128,13 +126,12 @@ async function buildAaveIncentivePlan(
   }
 
   // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount
-  // primaryAddress is also required on the outer flashloan wrapper
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress, // ✅ Required on outer flashloan wrapper
+    primaryAddress,
     callback,
   };
 
