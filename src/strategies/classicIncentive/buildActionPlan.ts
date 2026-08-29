@@ -9,8 +9,9 @@ import { getEnsoClient } from '../../execution/ensoClient';
 
 const log = createLogger('buildActionPlan');
 
-// ✅ FALLBACK: Aave V3 Pool Address Provider on Polygon
-const FALLBACK_AAVE_POOL_ADDRESS_PROVIDER = '0xa97684ecd3b83121b6a219c60a431530d09a731e';
+// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
+// This is what Enso expects for the flashloan primaryAddress
+const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
 
 function getTokenPriceUsd(token: TokenInfo): number {
   if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
@@ -57,13 +58,9 @@ async function buildAaveIncentivePlan(
     )
     .toString();
 
-  // ✅ DYNAMIC: Fetch primaryAddress using /api/v1/tokens with includeMetadata=true
-  const enso = getEnsoClient();
-  // Use the flashLoanToken address to get the correct primaryAddress
-  const primaryAddress = await enso.getPrimaryAddressForToken(
-    flashLoanToken.address,
-    activeChain.chainId
-  );
+  // ✅ Use the correct Aave V3 Pool Addresses Provider
+  // This is what Enso expects for the flashloan primaryAddress
+  const primaryAddress = AAVE_V3_POOL_ADDRESSES_PROVIDER;
 
   log.info('BUILDING AAVE INCENTIVE PLAN', {
     collateral: flashLoanToken.symbol,
@@ -128,12 +125,13 @@ async function buildAaveIncentivePlan(
   }
 
   // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount
+  // primaryAddress is the Aave V3 Pool Addresses Provider (what Enso expects)
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress: primaryAddress, // ✅ Dynamically fetched, lowercase
+    primaryAddress: primaryAddress, // ✅ Correct: Pool Addresses Provider
     callback,
   };
 
@@ -166,12 +164,8 @@ async function buildQuickSwapV3Plan(
     )
     .toString();
 
-  // ✅ DYNAMIC: Fetch primaryAddress using /api/v1/tokens with includeMetadata=true
-  const enso = getEnsoClient();
-  const primaryAddress = await enso.getPrimaryAddressForToken(
-    flashLoanToken.address,
-    activeChain.chainId
-  );
+  // ✅ Use the correct Aave V3 Pool Addresses Provider
+  const primaryAddress = AAVE_V3_POOL_ADDRESSES_PROVIDER;
 
   const buyStep: ActionStep = {
     type: 'swap',
@@ -196,7 +190,7 @@ async function buildQuickSwapV3Plan(
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress: primaryAddress, // ✅ Dynamically fetched, lowercase
+    primaryAddress: primaryAddress, // ✅ Correct: Pool Addresses Provider
     callback: [buyStep, sellStep],
   };
 
