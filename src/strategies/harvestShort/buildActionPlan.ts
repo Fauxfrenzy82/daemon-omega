@@ -9,7 +9,7 @@ import { activeChain } from '../../config/chains';
 import { createLogger } from '../../utils/logger';
 import { getEnsoClient } from '../../execution/ensoClient';
 
-const log = createLogger('harvestShortBuildActionPlan');
+const log = createLogger('buildActionPlan');
 
 // ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
 const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb';
@@ -22,6 +22,10 @@ interface FarmConfig {
   protocol: string;
 }
 
+/**
+ * Builds an action plan for harvesting rewards and selling them immediately.
+ * Uses Aave V3 flashloan (not Morpho) to enable the reward token swap.
+ */
 export async function buildHarvestActionPlan(
   farm: FarmConfig,
   rewardAmount: string,
@@ -29,7 +33,7 @@ export async function buildHarvestActionPlan(
 ): Promise<ActionPlan> {
   const { positionAddress, rewardToken, entryToken } = farm;
 
-  // ✅ Use Aave V3 as the flashloan provider
+  // ✅ Use Aave V3 as the flashloan provider (not Morpho)
   const provider = flashLoanProvider || { protocol: 'aave-v3' as const };
 
   // Minimal flashloan amount (1 wei) - just enough to trigger the callback
@@ -83,3 +87,8 @@ export async function buildHarvestActionPlan(
     steps: [flashloanStep],
   };
 }
+
+/**
+ * Alias for compatibility with existing code that expects buildActionPlan.
+ */
+export const buildActionPlan = buildHarvestActionPlan;
