@@ -54,7 +54,9 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
-  // ✅ Step 2: Run protocol discovery (only if Classic Incentive is enabled)
+  // ✅ Step 2: Run protocol discovery (Merkl pools via subgraph)
+  // This runs once at startup to register Merkl pools for later claim checking.
+  // Beefy discovery runs during each scan cycle (inside discoverClassicIncentive).
   if (env.STRATEGY_CLASSIC_ENABLED && env.MASTER_STRATEGY_ENABLED) {
     try {
       log.info('🔍 Running protocol discovery...');
@@ -64,7 +66,7 @@ async function bootstrap(): Promise<void> {
       log.error('Failed to discover protocols', {
         error: err instanceof Error ? err.message : String(err),
       });
-      // Non-fatal: continue with hardcoded fallbacks
+      // Non-fatal: continue with fallbacks
     }
   }
 
