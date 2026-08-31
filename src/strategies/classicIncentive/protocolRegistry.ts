@@ -8,7 +8,7 @@ import { env } from '../../config/env';
 const log = createLogger('protocolRegistry');
 
 // ============================================
-// TYPES (Now exported for use in other files)
+// TYPES
 // ============================================
 
 export interface HarvestFunction {
