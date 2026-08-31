@@ -1,473 +1,275 @@
-// src/config/protocolDiscovery.ts
+// src/strategies/classicIncentive/protocolRegistry.ts
 
-import axios from 'axios';
 import { ethers } from 'ethers';
-import { createLogger } from '../utils/logger';
-import { withRetry, isTransientError } from '../utils/retry';
-import { provider } from '../treasury/wallets';
-import { TOKENS, TokenInfo } from './tokens';
-import { env } from './env';
+import { TokenInfo, TOKENS } from '../../config/tokens';
+import { createLogger } from '../../utils/logger';
+import { env } from '../../config/env';
 
-const log = createLogger('protocolDiscovery');
+const log = createLogger('protocolRegistry');
 
 // ============================================
 // TYPES
 // ============================================
 
-export interface DiscoveredProtocol {
+export interface HarvestFunction {
+  name: string;
+  signature: string;
+  args?: string[];
+}
+
+export type RewardType = 
+  | 'harvest-triggered'   // Caller receives value (Beefy)
+  | 'keeper-incentive'    // Caller gets keeper fee (Convex)
+  | 'merkl-claim'         // Merkl-distributed rewards (Gamma)
+  | 'position-based'      // Rewards tied to positions (skip)
+  | 'claim-with-proof';   // Merkl-style (skip)
+
+export interface ProtocolConfig {
   id: string;
   name: string;
+  priority: 1 | 2 | 3;
   address: string;
+  functions: HarvestFunction[];
   rewardToken: TokenInfo;
   entryToken: TokenInfo;
-  protocol: string;
-  priority: 1 | 2 | 3;
-  functionNames: string[];
-}
-
-export interface BeefyVault {
-  id: string;
-  name: string;
-  token: string;
-  earnedTokenAddress: string;
-  earnedToken: string;
-  platformId: string;
+  rewardType: RewardType;
+  callerIncentiveBps?: number;
+  skipForCallerHarvest: boolean;
+  abi?: string[];
+  requiresPosition?: boolean; // ✅ NEW: For Merkl/Gamma
+  tvlUsd?: string;
 }
 
 // ============================================
-// BEEFY FINANCE DISCOVERY
+// ABIs
 // ============================================
 
-/**
- * Fetch all Beefy vaults from their public API
- * Endpoint: https://api.beefy.finance/config/polygon
- * Returns: Array of vault configurations
- */
-export async function discoverBeefyVaults(): Promise<DiscoveredProtocol[]> {
-  const protocols: DiscoveredProtocol[] = [];
+export const BEEFY_ABI = [
+  'function harvest() external',
+  'function getReward() external',
+  'function balanceOf(address) view returns (uint256)',
+  'function earned(address) view returns (uint256)',
+  'function strategy() view returns (address)',
+  'function performanceFee() view returns (uint256)',
+];
 
-  try {
-    log.info('🔍 Discovering Beefy vaults from API...');
-    
-    const response = await withRetry(
-      () => axios.get<Record<string, BeefyVault>>('https://api.beefy.finance/config/polygon', {
-        timeout: 10000,
-      }),
-      { label: 'beefy.discovery', shouldRetry: isTransientError, retries: 2 }
-    );
+export const CONVEX_ABI = [
+  'function getReward() external',
+  'function claim() external',
+  'function earned(address) view returns (uint256)',
+  'function rewardRate() view returns (uint256)',
+];
 
-    const vaults = response.data;
+export const HARVEST_ABI = [
+  'function harvest() external',
+  'function earned(address) view returns (uint256)',
+  'function getReward() external',
+  'function profitSharingNumerator() view returns (uint256)',
+];
 
-    // Filter for relevant vaults on Polygon
-    const relevantVaults = Object.entries(vaults).filter(([_, vault]) => {
-      // Only include vaults with positive TVL and valid addresses
-      return vault.earnedTokenAddress && 
-             ethers.utils.isAddress(vault.earnedTokenAddress) &&
-             vault.earnedTokenAddress !== '0x0000000000000000000000000000000000000000';
-    });
+// Merkl distributor ABI (for Gamma rewards)
+export const MERKL_ABI = [
+  'function claim(bytes32[] calldata proof, bytes32[] calldata proofFlags, bytes calldata data) external',
+  'function getReward(address) external',
+  'function claimable(address, address) view returns (uint256)',
+];
 
-    log.info(`Found ${relevantVaults.length} Beefy vaults`);
+// ============================================
+// ADAPTER 1: HARVEST-TRIGGERED (Beefy, Convex, Harvest)
+// ============================================
 
-    // Take top 10 by TVL (or priority)
-    for (const [id, vault] of relevantVaults.slice(0, 10)) {
-      // Map token symbol to our TokenInfo
-      const tokenSymbol = vault.token || 'USDC';
-      let rewardToken = TOKENS.USDC;
-      let entryToken = TOKENS.USDC;
+const BEEFY_PROTOCOLS: ProtocolConfig[] = [
+  {
+    id: 'beefy-wbtc-wmatic',
+    name: 'Beefy WBTC/WMATIC Vault',
+    priority: 1,
+    address: env.BEEFY_VAULT_ADDRESS || '',
+    functions: [
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'getReward', signature: 'getReward()' },
+    ],
+    rewardToken: TOKENS.WBTC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    callerIncentiveBps: 200,
+    skipForCallerHarvest: false,
+    abi: BEEFY_ABI,
+    requiresPosition: false,
+  },
+  {
+    id: 'beefy-weth-usdc',
+    name: 'Beefy WETH/USDC Vault',
+    priority: 1,
+    address: env.BEEFY_WETH_VAULT || '',
+    functions: [
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'getReward', signature: 'getReward()' },
+    ],
+    rewardToken: TOKENS.WETH,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    callerIncentiveBps: 200,
+    skipForCallerHarvest: false,
+    abi: BEEFY_ABI,
+    requiresPosition: false,
+  },
+];
 
-      // Try to map to known tokens
-      const symbolUpper = tokenSymbol.toUpperCase();
-      if (symbolUpper.includes('WETH') || symbolUpper.includes('ETH')) {
-        rewardToken = TOKENS.WETH;
-      } else if (symbolUpper.includes('WBTC') || symbolUpper.includes('BTC')) {
-        rewardToken = TOKENS.WBTC;
-      } else if (symbolUpper.includes('MATIC') || symbolUpper.includes('POL')) {
-        rewardToken = TOKENS.WMATIC;
-      } else if (symbolUpper.includes('AAVE')) {
-        rewardToken = TOKENS.AAVE;
-      }
+const CONVEX_PROTOCOLS: ProtocolConfig[] = [
+  {
+    id: 'convex-rewards',
+    name: 'Convex Rewards',
+    priority: 2,
+    address: env.CONVEX_ADDRESS || '',
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'claim', signature: 'claim()' },
+    ],
+    rewardToken: TOKENS.USDC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'keeper-incentive',
+    skipForCallerHarvest: false,
+    abi: CONVEX_ABI,
+    requiresPosition: false,
+  },
+];
 
-      protocols.push({
-        id: `beefy-${id}`,
-        name: vault.name || `Beefy ${id}`,
-        address: vault.earnedTokenAddress,
-        rewardToken: rewardToken,
-        entryToken: entryToken,
-        protocol: 'beefy',
-        priority: 1,
-        functionNames: ['harvest', 'getReward', 'earn'],
-      });
+const HARVEST_PROTOCOLS: ProtocolConfig[] = [
+  {
+    id: 'harvest-finance',
+    name: 'Harvest Finance Vault',
+    priority: 2,
+    address: env.HARVEST_VAULT_ADDRESS || '',
+    functions: [
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'getReward', signature: 'getReward()' },
+    ],
+    rewardToken: TOKENS.USDC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'keeper-incentive',
+    skipForCallerHarvest: false,
+    abi: HARVEST_ABI,
+    requiresPosition: false,
+  },
+];
 
-      log.debug(`Added Beefy vault: ${vault.name} -> ${vault.earnedTokenAddress}`);
-    }
+// ============================================
+// ADAPTER 2: MERKL-CLAIM (Gamma / QuickSwap ALM)
+// ============================================
 
-  } catch (err) {
-    log.warn('Failed to discover Beefy vaults from API', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+// These are NOT harvest-triggered — they require LP positions
+// They are discovered dynamically from subgraph
+let merklProtocols: ProtocolConfig[] = [];
 
-  return protocols;
+export function setMerklProtocols(pools: { id: string; token0: any; token1: any; tvlUsd?: string }[]): void {
+  merklProtocols = pools.map(pool => ({
+    id: `merkl-${pool.id}`,
+    name: `Merkl Pool ${pool.token0.symbol}/${pool.token1.symbol}`,
+    priority: 1,
+    address: pool.id,
+    functions: [
+      { name: 'getReward', signature: 'getReward(address)' },
+    ],
+    rewardToken: TOKENS.QUICK,
+    entryToken: TOKENS.USDC,
+    rewardType: 'merkl-claim',
+    skipForCallerHarvest: true, // ✅ NOT harvest-triggered
+    abi: MERKL_ABI,
+    requiresPosition: true, // ✅ Requires LP position
+    tvlUsd: pool.tvlUsd,
+  }));
+
+  log.info(`✅ Registered ${merklProtocols.length} Merkl/Gamma protocols`);
 }
 
 // ============================================
-// QUICKSWAP GAMMA DISCOVERY (via Subgraph)
+// POSITION-BASED PROTOCOLS (SKIP)
 // ============================================
 
-/**
- * Discover QuickSwap Gamma farms from subgraph
- * These are permissionless harvest opportunities
- */
-export async function discoverGammaFarms(): Promise<DiscoveredProtocol[]> {
-  const protocols: DiscoveredProtocol[] = [];
+const POSITION_BASED_PROTOCOLS: ProtocolConfig[] = [
+  {
+    id: 'morpho-blue',
+    name: 'Morpho Blue',
+    priority: 3,
+    address: env.MORPHO_ADDRESS || '',
+    functions: [],
+    rewardToken: TOKENS.USDC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'position-based',
+    skipForCallerHarvest: true,
+    abi: [],
+    requiresPosition: true,
+  },
+  {
+    id: 'aave-v3-rewards',
+    name: 'Aave V3 Rewards',
+    priority: 3,
+    address: '0x929EC64c34a17401F460460D4B9390518E5B473e',
+    functions: [],
+    rewardToken: TOKENS.AAVE,
+    entryToken: TOKENS.USDC,
+    rewardType: 'position-based',
+    skipForCallerHarvest: true,
+    abi: [],
+    requiresPosition: true,
+  },
+];
 
-  const subgraphApiKey = env.SUBGRAPH_API_KEY;
-  if (!subgraphApiKey) {
-    log.warn('SUBGRAPH_API_KEY not set, skipping Gamma farm discovery');
-    return protocols;
-  }
+// ============================================
+// MASTER EXPORTS
+// ============================================
 
-  const subgraphId = '5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU';
-  const endpoint = `https://gateway.thegraph.com/api/${subgraphApiKey}/subgraphs/id/${subgraphId}`;
+// ✅ Harvest-triggered protocols (caller gets paid)
+export const HARVESTABLE_PROTOCOLS: ProtocolConfig[] = [
+  ...BEEFY_PROTOCOLS,
+  ...CONVEX_PROTOCOLS,
+  ...HARVEST_PROTOCOLS,
+];
 
-  try {
-    log.info('🔍 Discovering QuickSwap Gamma farms from subgraph...');
+// ✅ All protocols (including Merkl/Gamma)
+export function getAllProtocols(): ProtocolConfig[] {
+  return [...HARVESTABLE_PROTOCOLS, ...merklProtocols];
+}
 
-    const query = `
-      {
-        incentives(
-          where: { endTime_gt: "${Math.floor(Date.now() / 1000)}" }
-          first: 20
-        ) {
-          id
-          rewardToken
-          bonusRewardToken
-          totalReward
-          bonusReward
-          startTime
-          endTime
-          pool {
-            id
-            token0 {
-              id
-              symbol
-              decimals
-            }
-            token1 {
-              id
-              symbol
-              decimals
-            }
-          }
-        }
-      }
-    `;
+// ✅ Only harvest-triggered (caller gets paid)
+export function getHarvestableProtocols(): ProtocolConfig[] {
+  const all = [...HARVESTABLE_PROTOCOLS];
+  return all.filter(p => 
+    !p.skipForCallerHarvest && 
+    p.address && 
+    p.address !== '' &&
+    p.address !== ethers.constants.AddressZero
+  );
+}
 
-    const response = await withRetry(
-      () => axios.post(endpoint, { query }, { timeout: 15000 }),
-      { label: 'gamma.discovery', shouldRetry: isTransientError, retries: 2 }
-    );
-
-    const incentives = response.data?.data?.incentives || [];
-
-    log.info(`Found ${incentives.length} active Gamma incentives`);
-
-    for (const inc of incentives) {
-      if (!inc.pool?.id) continue;
-
-      const rewardTokenAddress = inc.rewardToken?.toLowerCase() || '';
-      let rewardToken = TOKENS.QUICK;
-      let entryToken = TOKENS.USDC;
-
-      // Map reward token
-      if (rewardTokenAddress === TOKENS.WETH.address.toLowerCase()) {
-        rewardToken = TOKENS.WETH;
-      } else if (rewardTokenAddress === TOKENS.WBTC.address.toLowerCase()) {
-        rewardToken = TOKENS.WBTC;
-      } else if (rewardTokenAddress === TOKENS.WMATIC.address.toLowerCase()) {
-        rewardToken = TOKENS.WMATIC;
-      } else if (rewardTokenAddress === TOKENS.USDC.address.toLowerCase() ||
-                 rewardTokenAddress === TOKENS.USDCe.address.toLowerCase()) {
-        rewardToken = TOKENS.USDC;
-      } else if (rewardTokenAddress === TOKENS.USDT.address.toLowerCase()) {
-        rewardToken = TOKENS.USDT;
-      } else if (rewardTokenAddress === TOKENS.AAVE.address.toLowerCase()) {
-        rewardToken = TOKENS.AAVE;
-      }
-
-      // Entry token is typically the pool token0
-      if (inc.pool?.token0?.id) {
-        const token0Addr = inc.pool.token0.id.toLowerCase();
-        for (const [symbol, token] of Object.entries(TOKENS)) {
-          if (token.address.toLowerCase() === token0Addr) {
-            entryToken = token;
-            break;
-          }
-        }
-      }
-
-      protocols.push({
-        id: `quickswap-gamma-${inc.pool.id}`,
-        name: `QuickSwap Gamma ${inc.pool.token0?.symbol}/${inc.pool.token1?.symbol}`,
-        address: inc.pool.id,
-        rewardToken: rewardToken,
-        entryToken: entryToken,
-        protocol: 'quickswap-gamma',
-        priority: 1,
-        functionNames: ['getReward', 'harvest', 'compound'],
-      });
-
-      log.debug(`Added Gamma farm: ${inc.pool.token0?.symbol}/${inc.pool.token1?.symbol}`);
-    }
-
-  } catch (err) {
-    log.warn('Failed to discover Gamma farms from subgraph', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  return protocols;
+// ✅ Merkl/Gamma protocols (require LP position)
+export function getMerklProtocols(): ProtocolConfig[] {
+  return merklProtocols.filter(p => 
+    p.address && 
+    p.address !== '' &&
+    p.address !== ethers.constants.AddressZero
+  );
 }
 
 // ============================================
-// QUICKSWAP FARMS DISCOVERY
+// HELPERS
 // ============================================
 
-/**
- * Discover QuickSwap farms (MasterChef style)
- * These are permissionless reward harvesting opportunities
- */
-export async function discoverQuickSwapFarms(): Promise<DiscoveredProtocol[]> {
-  const protocols: DiscoveredProtocol[] = [];
-
-  const subgraphApiKey = env.SUBGRAPH_API_KEY;
-  if (!subgraphApiKey) {
-    return protocols;
-  }
-
-  const subgraphId = '5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU';
-  const endpoint = `https://gateway.thegraph.com/api/${subgraphApiKey}/subgraphs/id/${subgraphId}`;
-
-  try {
-    log.info('🔍 Discovering QuickSwap farms from subgraph...');
-
-    const query = `
-      {
-        farms(
-          first: 10
-        ) {
-          id
-          pair
-          rewardToken
-          rewardPerBlock
-          totalAllocPoint
-          poolInfo {
-            lpToken
-            allocPoint
-            lastRewardBlock
-            accRewardPerShare
-          }
-        }
-      }
-    `;
-
-    const response = await withRetry(
-      () => axios.post(endpoint, { query }, { timeout: 15000 }),
-      { label: 'farm.discovery', shouldRetry: isTransientError, retries: 2 }
-    );
-
-    const farms = response.data?.data?.farms || [];
-
-    log.info(`Found ${farms.length} QuickSwap farms`);
-
-    for (const farm of farms.slice(0, 5)) {
-      if (!farm.poolInfo?.[0]?.lpToken) continue;
-
-      const lpToken = farm.poolInfo[0].lpToken;
-      const rewardTokenAddress = farm.rewardToken?.toLowerCase() || '';
-
-      let rewardToken = TOKENS.QUICK;
-      let entryToken = TOKENS.USDC;
-
-      if (rewardTokenAddress === TOKENS.QUICK.address.toLowerCase()) {
-        rewardToken = TOKENS.QUICK;
-      }
-
-      protocols.push({
-        id: `quickswap-farm-${farm.id}`,
-        name: `QuickSwap Farm ${farm.id}`,
-        address: lpToken,
-        rewardToken: rewardToken,
-        entryToken: entryToken,
-        protocol: 'quickswap-farm',
-        priority: 1,
-        functionNames: ['getReward', 'harvest'],
-      });
-
-      log.debug(`Added QuickSwap farm: ${farm.id}`);
-    }
-
-  } catch (err) {
-    log.warn('Failed to discover QuickSwap farms from subgraph', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  return protocols;
+export function isHarvestLikeFunction(functionName: string): boolean {
+  const lower = functionName.toLowerCase();
+  return ['harvest', 'compound', 'earn', 'claim', 'claimRewards', 'getReward'].some(k => lower.includes(k));
 }
 
-// ============================================
-// CONVEX DISCOVERY (via on-chain or API)
-// ============================================
-
-/**
- * Discover Convex reward pools
- * These often have keeper incentives for calling getReward()
- */
-export async function discoverConvexPools(): Promise<DiscoveredProtocol[]> {
-  const protocols: DiscoveredProtocol[] = [];
-
-  // Convex uses a registry pattern
-  // The main registry on Polygon is:
-  const CONVEX_REGISTRY = '0x...'; // Would need to verify
-
-  try {
-    log.info('🔍 Discovering Convex pools...');
-
-    // For now, use env override or skip
-    const convexAddress = env.CONVEX_ADDRESS;
-    if (convexAddress && ethers.utils.isAddress(convexAddress)) {
-      protocols.push({
-        id: 'convex-rewards',
-        name: 'Convex Rewards',
-        address: convexAddress,
-        rewardToken: TOKENS.USDC,
-        entryToken: TOKENS.USDC,
-        protocol: 'convex',
-        priority: 2,
-        functionNames: ['getReward', 'claim'],
-      });
-      log.info(`Added Convex pool: ${convexAddress}`);
-    }
-
-  } catch (err) {
-    log.warn('Failed to discover Convex pools', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+export function getContractInterface(protocol: ProtocolConfig): ethers.utils.Interface {
+  if (protocol.abi && protocol.abi.length > 0) {
+    return new ethers.utils.Interface(protocol.abi);
   }
-
-  return protocols;
-}
-
-// ============================================
-// HARVEST FINANCE DISCOVERY
-// ============================================
-
-/**
- * Discover Harvest Finance vaults
- * These have caller incentives for harvest()
- */
-export async function discoverHarvestVaults(): Promise<DiscoveredProtocol[]> {
-  const protocols: DiscoveredProtocol[] = [];
-
-  try {
-    log.info('🔍 Discovering Harvest Finance vaults...');
-
-    // Harvest Finance uses a factory pattern on Polygon
-    // Addresses can be found via their public API or GitHub
-
-    const harvestAddress = env.HARVEST_VAULT_ADDRESS;
-    if (harvestAddress && ethers.utils.isAddress(harvestAddress)) {
-      protocols.push({
-        id: 'harvest-finance',
-        name: 'Harvest Finance Vault',
-        address: harvestAddress,
-        rewardToken: TOKENS.USDC,
-        entryToken: TOKENS.USDC,
-        protocol: 'harvest',
-        priority: 2,
-        functionNames: ['harvest', 'getReward'],
-      });
-      log.info(`Added Harvest vault: ${harvestAddress}`);
-    }
-
-  } catch (err) {
-    log.warn('Failed to discover Harvest vaults', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  return protocols;
-}
-
-// ============================================
-// MAIN DISCOVERY FUNCTION
-// ============================================
-
-/**
- * Run all discovery services once at startup
- * Returns a combined list of all discovered protocols
- */
-export async function discoverAllProtocols(): Promise<DiscoveredProtocol[]> {
-  log.info('🚀 Running complete protocol discovery...');
-
-  const allProtocols: DiscoveredProtocol[] = [];
-
-  // 1. Discover Beefy vaults
-  const beefy = await discoverBeefyVaults();
-  allProtocols.push(...beefy);
-
-  // 2. Discover Gamma farms
-  const gamma = await discoverGammaFarms();
-  allProtocols.push(...gamma);
-
-  // 3. Discover QuickSwap farms
-  const farms = await discoverQuickSwapFarms();
-  allProtocols.push(...farms);
-
-  // 4. Discover Convex pools
-  const convex = await discoverConvexPools();
-  allProtocols.push(...convex);
-
-  // 5. Discover Harvest vaults
-  const harvest = await discoverHarvestVaults();
-  allProtocols.push(...harvest);
-
-  // Add manual overrides from env (if set)
-  const manualAddresses = [
-    { key: env.BEEFY_VAULT_ADDRESS, id: 'beefy-manual', name: 'Beefy Manual', token: TOKENS.USDC },
-    { key: env.BEEFY_WETH_VAULT, id: 'beefy-weth-manual', name: 'Beefy WETH Manual', token: TOKENS.WETH },
-  ];
-
-  for (const manual of manualAddresses) {
-    if (manual.key && ethers.utils.isAddress(manual.key)) {
-      // Check if already discovered
-      const exists = allProtocols.some(p => p.address.toLowerCase() === manual.key.toLowerCase());
-      if (!exists) {
-        allProtocols.push({
-          id: manual.id,
-          name: manual.name,
-          address: manual.key,
-          rewardToken: manual.token,
-          entryToken: TOKENS.USDC,
-          protocol: 'beefy',
-          priority: 1,
-          functionNames: ['harvest', 'getReward'],
-        });
-        log.info(`Added manual override: ${manual.name} -> ${manual.key}`);
-      }
-    }
-  }
-
-  log.info(`✅ Discovery complete: ${allProtocols.length} protocols found`);
-
-  // Log summary by protocol type
-  const summary = allProtocols.reduce((acc, p) => {
-    acc[p.protocol] = (acc[p.protocol] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
-
-  log.info('📊 Discovery summary', { summary });
-
-  return allProtocols;
+  const abi = protocol.functions.map(f => ({
+    type: 'function',
+    name: f.name,
+    inputs: f.args?.map(arg => ({ type: 'address', name: arg })) || [],
+    outputs: [{ type: 'uint256', name: 'amount' }],
+    stateMutability: 'view',
+  }));
+  return new ethers.utils.Interface(abi);
 }
