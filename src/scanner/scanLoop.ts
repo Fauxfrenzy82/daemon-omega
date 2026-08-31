@@ -17,36 +17,41 @@ let loopTimer: NodeJS.Timeout | null = null;
 let isScanning = false;
 let cachedNativePrice = 0.5;
 
-// All strategies enabled by default (fallback to true)
+// Helper function to check if a strategy is enabled
+function isStrategyEnabled(strategyEnvVar: boolean): boolean {
+  return env.MASTER_STRATEGY_ENABLED && strategyEnvVar;
+}
+
+// All strategies with their enabled status derived from env + master toggle
 const discoverers = [
   { 
     name: 'LP Entry/Exit', 
     fn: discoverLPEntryExit, 
-    enabled: env.STRATEGY_LP_ENABLED ?? true,
+    enabled: isStrategyEnabled(env.STRATEGY_LP_ENABLED),
     description: 'DEX round‑trip arbitrage'
   },
   { 
     name: 'Vault Arbitrage', 
     fn: discoverVaultArb, 
-    enabled: env.STRATEGY_VAULT_ENABLED ?? true,
+    enabled: isStrategyEnabled(env.STRATEGY_VAULT_ENABLED),
     description: 'ERC‑4626 StataToken wrapper arbitrage'
   },
   { 
     name: 'Debt Position', 
     fn: discoverDebtPosition, 
-    enabled: env.STRATEGY_DEBT_ENABLED ?? true,  // <-- CHANGED to true
+    enabled: isStrategyEnabled(env.STRATEGY_DEBT_ENABLED),
     description: 'Aave V3 liquidation arbitrage'
   },
   { 
     name: 'Harvest + Spot Sell', 
     fn: discoverHarvestShort, 
-    enabled: env.STRATEGY_HARVEST_ENABLED ?? true,
+    enabled: isStrategyEnabled(env.STRATEGY_HARVEST_ENABLED),
     description: 'Claim rewards and sell immediately'
   },
   { 
     name: 'Classic Incentive', 
     fn: discoverClassicIncentive, 
-    enabled: env.STRATEGY_CLASSIC_ENABLED ?? true,  // <-- CHANGED to true
+    enabled: isStrategyEnabled(env.STRATEGY_CLASSIC_ENABLED),
     description: 'Instant‑claim incentive programs'
   },
 ];
@@ -82,7 +87,15 @@ async function runScanCycle(): Promise<void> {
 
     log.info('🔍 Scan cycle started', { nativePrice: cachedNativePrice });
 
+    // Filter to only enabled strategies
     const active = discoverers.filter(d => d.enabled);
+
+    // If no strategies are enabled, log once and idle
+    if (active.length === 0) {
+      log.warn('⚠️ No strategies enabled — scan loop is idle. Set MASTER_STRATEGY_ENABLED=true and/or individual strategy flags to true.');
+      return;
+    }
+
     const strategyResults: Record<string, { candidates: number, status: string, note?: string }> = {};
 
     // Log which strategies are active
