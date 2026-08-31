@@ -11,8 +11,8 @@ import { withRetry, isTransientError } from '../../utils/retry';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
 import { 
-  HARVESTABLE_PROTOCOLS,
   ProtocolConfig, 
+  getHarvestableProtocols,
   getContractInterface,
   isHarvestLikeFunction,
   isHarvestable,
@@ -22,10 +22,6 @@ import {
 import { discoverGammaFarms } from '../../config/farmDiscovery';
 
 const log = createLogger('classicIncentive');
-
-// ============================================
-// TYPES
-// ============================================
 
 interface HarvestCandidate {
   protocol: ProtocolConfig;
@@ -46,32 +42,19 @@ interface HarvestCandidate {
 // STEP 1: DYNAMIC PROTOCOL DISCOVERY
 // ============================================
 
-/**
- * Discover all harvestable protocols dynamically
- * - Priority 1: Hardcoded + Gamma farms from subgraph + QuickSwap farms
- * - Priority 2: Hardcoded (Convex, Harvest Finance)
- */
 async function discoverProtocols(): Promise<ProtocolConfig[]> {
   const protocols: ProtocolConfig[] = [];
 
   // 1. Add hardcoded harvestable protocols
-  for (const p of HARVESTABLE_PROTOCOLS) {
-    // Skip Beefy if address not set
-    if (p.id.startsWith('beefy') && !ethers.utils.isAddress(p.address)) {
-      continue;
-    }
-    // Skip Convex if address not set
-    if (p.id === 'convex-rewards' && !ethers.utils.isAddress(p.address)) {
-      continue;
-    }
-    // Skip Harvest Finance if address not set
-    if (p.id === 'harvest-finance' && !ethers.utils.isAddress(p.address)) {
-      continue;
-    }
+  for (const p of getHarvestableProtocols()) {
+    // Skip if address is not set for optional protocols
+    if (p.id.startsWith('beefy') && !ethers.utils.isAddress(p.address)) continue;
+    if (p.id === 'convex-rewards' && !ethers.utils.isAddress(p.address)) continue;
+    if (p.id === 'harvest-finance' && !ethers.utils.isAddress(p.address)) continue;
     protocols.push(p);
   }
 
-  // 2. Discover Gamma farms dynamically (Priority 1)
+  // 2. Discover Gamma farms dynamically
   try {
     log.info('🔍 Discovering Gamma farms from subgraph...');
     const gammaFarms = await discoverGammaFarms();
@@ -79,19 +62,13 @@ async function discoverProtocols(): Promise<ProtocolConfig[]> {
     for (const [pairId, address] of Object.entries(gammaFarms)) {
       if (!ethers.utils.isAddress(address)) continue;
       
-      // Determine reward token from pair
       let rewardToken = TOKENS.QUICK;
       let entryToken = TOKENS.USDC;
       
-      if (pairId.includes('WETH')) {
-        rewardToken = TOKENS.WETH;
-      } else if (pairId.includes('WBTC')) {
-        rewardToken = TOKENS.WBTC;
-      } else if (pairId.includes('WMATIC')) {
-        rewardToken = TOKENS.WMATIC;
-      } else if (pairId.includes('AAVE')) {
-        rewardToken = TOKENS.AAVE;
-      }
+      if (pairId.includes('WETH')) rewardToken = TOKENS.WETH;
+      else if (pairId.includes('WBTC')) rewardToken = TOKENS.WBTC;
+      else if (pairId.includes('WMATIC')) rewardToken = TOKENS.WMATIC;
+      else if (pairId.includes('AAVE')) rewardToken = TOKENS.AAVE;
       
       const protocol = createGammaProtocol(pairId, address, rewardToken, entryToken);
       protocols.push(protocol);
@@ -103,11 +80,9 @@ async function discoverProtocols(): Promise<ProtocolConfig[]> {
     });
   }
 
-  // 3. Discover QuickSwap farms (from subgraph or hardcoded)
+  // 3. Discover QuickSwap farms
   try {
-    // This would come from the subgraph - placeholder for now
-    // In production, fetch from QuickSwap subgraph
-    const farmAddress = process.env.QUICKSWAP_FARM_ADDRESS;
+    const farmAddress = env.QUICKSWAP_FARM_ADDRESS;
     if (farmAddress && ethers.utils.isAddress(farmAddress)) {
       const protocol = createFarmProtocol('main', farmAddress, TOKENS.QUICK, TOKENS.USDC);
       protocols.push(protocol);
@@ -119,13 +94,8 @@ async function discoverProtocols(): Promise<ProtocolConfig[]> {
     });
   }
 
-  // Filter to only harvestable protocols
   const harvestable = protocols.filter(p => isHarvestable(p));
-  
-  log.info(`📋 Total harvestable protocols: ${harvestable.length}`, {
-    protocols: harvestable.map(p => `${p.id} (${p.rewardType})`),
-  });
-
+  log.info(`📋 Total harvestable protocols: ${harvestable.length}`);
   return harvestable;
 }
 
@@ -133,9 +103,6 @@ async function discoverProtocols(): Promise<ProtocolConfig[]> {
 // STEP 2: ON-CHAIN STATE CHECK
 // ============================================
 
-/**
- * Check if a protocol has pending rewards for the executor
- */
 async function checkPendingRewards(
   protocol: ProtocolConfig,
   executorAddress: string
@@ -143,7 +110,6 @@ async function checkPendingRewards(
   try {
     const contract = new ethers.Contract(protocol.address, protocol.abi || [], provider);
     
-    // Try common reward-checking functions
     const checkFunctions = [
       { name: 'earned', args: [executorAddress] },
       { name: 'pendingReward', args: [0, executorAddress] },
@@ -155,22 +121,15 @@ async function checkPendingRewards(
 
     for (const fn of checkFunctions) {
       try {
+        if (typeof contract[fn.name] !== 'function') continue;
+        
         const result = await withRetry(
-          () => {
-            // Check if function exists on contract
-            if (typeof contract[fn.name] !== 'function') {
-              throw new Error(`Function ${fn.name} not found`);
-            }
-            return contract[fn.name](...fn.args);
-          },
-          { 
-            label: `checkRewards.${protocol.id}.${fn.name}`, 
-            shouldRetry: isTransientError, 
-            retries: 2 
-          }
+          () => contract[fn.name](...fn.args),
+          { label: `checkRewards.${protocol.id}.${fn.name}`, shouldRetry: isTransientError, retries: 2 }
         );
 
-        if (result && typeof result === 'object' && result._isBigNumber) {
+        // ✅ FIXED: Use BigNumber.isBigNumber() instead of _isBigNumber
+        if (result && ethers.BigNumber.isBigNumber(result)) {
           const amount = result as ethers.BigNumber;
           if (amount.gt(0)) {
             log.debug(`Found rewards for ${protocol.id} via ${fn.name}`, {
@@ -184,15 +143,13 @@ async function checkPendingRewards(
           }
         }
       } catch (err) {
-        // Function may not exist or may have different signature
         continue;
       }
     }
 
-    // Special case: Beefy - check if there's harvestable value
+    // Special case: Beefy
     if (protocol.id.startsWith('beefy')) {
       try {
-        // Check strategy balance that could be harvested
         const strategy = await contract.strategy();
         if (strategy && strategy !== ethers.constants.AddressZero) {
           const strategyContract = new ethers.Contract(strategy, [
@@ -200,7 +157,6 @@ async function checkPendingRewards(
           ], provider);
           const balance = await strategyContract.balanceOf(protocol.address);
           if (balance.gt(0)) {
-            // There's value to harvest - estimate caller reward
             const performanceFee = await contract.performanceFee?.() || 0;
             const callerShare = performanceFee * (protocol.callerIncentiveBps || 200) / 10000;
             const rewardAmount = balance.mul(callerShare).div(10000);
@@ -214,9 +170,7 @@ async function checkPendingRewards(
           }
         }
       } catch (err) {
-        log.debug(`Beefy special check failed for ${protocol.id}`, {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        log.debug(`Beefy special check failed for ${protocol.id}`);
       }
     }
 
@@ -226,9 +180,7 @@ async function checkPendingRewards(
       rewardToken: protocol.rewardToken,
     };
   } catch (err) {
-    log.debug(`Failed to check rewards for ${protocol.id}`, {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.debug(`Failed to check rewards for ${protocol.id}`);
     return {
       hasRewards: false,
       rewardAmount: ethers.BigNumber.from(0),
@@ -241,10 +193,6 @@ async function checkPendingRewards(
 // STEP 3: SIMULATE EXECUTION
 // ============================================
 
-/**
- * Simulate the exact state transition:
- * Δexecutor_balance - Δgas - Δswap_costs
- */
 async function simulateHarvest(
   protocol: ProtocolConfig,
   functionName: string,
@@ -262,51 +210,27 @@ async function simulateHarvest(
   error?: string;
 }> {
   try {
-    // 1. Get reward value in USD
     const rewardTokenPrice = await getLiveTokenPriceUsd(rewardToken);
     const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, rewardToken.decimals)) * rewardTokenPrice;
 
-    // 2. Estimate gas cost
     const gasPrice = await provider.getGasPrice();
-    const gasPriceGwei = Number(ethers.utils.formatUnits(gasPrice, 'gwei'));
-
-    // Build call data for gas estimation
     const iface = getContractInterface(protocol);
     const fn = protocol.functions.find(f => f.name === functionName);
     if (!fn) {
-      return { 
-        success: false, 
-        deltaBalance: 0, 
-        gasCostUsd: 0, 
-        swapCostUsd: 0, 
-        callerIncentiveUsd: 0,
-        netProfitUsd: 0, 
-        error: 'Function not found' 
-      };
+      return { success: false, deltaBalance: 0, gasCostUsd: 0, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0, error: 'Function not found' };
     }
 
     let callData: string;
     try {
-      // Try with no args first
       callData = iface.encodeFunctionData(fn.name, []);
     } catch {
       try {
-        // Try with executor address
         callData = iface.encodeFunctionData(fn.name, [executorAddress]);
       } catch {
-        return { 
-          success: false, 
-          deltaBalance: 0, 
-          gasCostUsd: 0, 
-          swapCostUsd: 0, 
-          callerIncentiveUsd: 0,
-          netProfitUsd: 0, 
-          error: 'Cannot encode function' 
-        };
+        return { success: false, deltaBalance: 0, gasCostUsd: 0, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0, error: 'Cannot encode function' };
       }
     }
 
-    // Estimate gas with a safe buffer
     let gasEstimate: ethers.BigNumber;
     try {
       gasEstimate = await provider.estimateGas({
@@ -314,57 +238,31 @@ async function simulateHarvest(
         data: callData,
         from: executorAddress,
       });
-      // Add 20% buffer
       gasEstimate = gasEstimate.mul(120).div(100);
     } catch {
-      // Fallback: use a reasonable gas limit
       gasEstimate = ethers.BigNumber.from(200000);
     }
 
     const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate)));
     const gasCostUsd = gasCostNative * nativePriceUsd;
 
-    // 3. Simulate swap: reward → entry token
     const amountIn = rewardAmount.toString();
     const quote = await getEnsoRouteQuote(rewardToken, protocol.entryToken, amountIn);
 
     if (!quote) {
-      return { 
-        success: false, 
-        deltaBalance: 0, 
-        gasCostUsd, 
-        swapCostUsd: 0, 
-        callerIncentiveUsd: 0,
-        netProfitUsd: 0, 
-        error: 'Failed to get swap quote' 
-      };
+      return { success: false, deltaBalance: 0, gasCostUsd, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0, error: 'Failed to get swap quote' };
     }
 
-    // Calculate swap cost (slippage + protocol fee)
-    const swapCostBps = 10; // 0.1% estimated
+    const swapCostBps = 10;
     const swapCostUsd = rewardUsd * (swapCostBps / 10000);
 
-    // 4. Calculate caller incentive (if applicable)
     let callerIncentiveUsd = rewardUsd;
     if (protocol.callerIncentiveBps) {
-      // For Beefy-style: caller gets a percentage of performance fee
       callerIncentiveUsd = rewardUsd * (protocol.callerIncentiveBps / 10000);
     }
 
-    // 5. Flashloan fee (0% with Morpho, 0.09% with Aave)
-    const flashloanFeeUsd = 0; // Using Morpho for 0% fee
-
-    // 6. Net profit
+    const flashloanFeeUsd = 0;
     const netProfitUsd = callerIncentiveUsd - gasCostUsd - swapCostUsd - flashloanFeeUsd;
-
-    log.debug(`Simulation result for ${protocol.id}.${functionName}`, {
-      rewardUsd,
-      callerIncentiveUsd,
-      gasCostUsd,
-      swapCostUsd,
-      flashloanFeeUsd,
-      netProfitUsd,
-    });
 
     return {
       success: netProfitUsd > 0,
@@ -400,35 +298,24 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
     nativePrice: nativePriceUsd,
   });
 
-  // 1. Discover all harvestable protocols
   const protocols = await discoverProtocols();
 
   if (protocols.length === 0) {
-    log.warn('⚠️ No harvestable protocols discovered — check configuration');
+    log.warn('⚠️ No harvestable protocols discovered');
     return [];
   }
 
-  // Sort by priority (Priority 1 first)
   const sortedProtocols = [...protocols].sort((a, b) => a.priority - b.priority);
 
-  log.info(`📋 Scanning ${sortedProtocols.length} harvestable protocols`);
-
-  // 2. For each protocol, check pending rewards
   for (const protocol of sortedProtocols) {
     try {
-      log.debug(`Checking protocol: ${protocol.id} (${protocol.name})`);
-
-      // Skip if address is invalid
       if (!ethers.utils.isAddress(protocol.address) || protocol.address === ethers.constants.AddressZero) {
-        log.debug(`Skipping ${protocol.id}: invalid address`);
         continue;
       }
 
-      // Check pending rewards
       const rewardCheck = await checkPendingRewards(protocol, executorAddress);
 
       if (!rewardCheck.hasRewards || rewardCheck.rewardAmount.lte(0)) {
-        log.debug(`No rewards for ${protocol.id}`);
         continue;
       }
 
@@ -437,11 +324,9 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
         rewardToken: rewardCheck.rewardToken.symbol,
       });
 
-      // 3. Try each harvest-like function
       for (const fn of protocol.functions) {
         if (!isHarvestLikeFunction(fn.name)) continue;
 
-        // 4. Simulate execution
         const simulation = await simulateHarvest(
           protocol,
           fn.name,
@@ -459,14 +344,12 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
           continue;
         }
 
-        // Check minimum profit threshold
         const minProfit = env.CLASSIC_INCENTIVE_MIN_PROFIT_USD || env.DEFAULT_MIN_PROFIT_USD || 0.05;
         if (simulation.netProfitUsd < minProfit) {
           log.debug(`Net profit ${simulation.netProfitUsd.toFixed(4)} below threshold ${minProfit}`);
           continue;
         }
 
-        // 5. Create candidate
         const candidate: OpportunityCandidate = {
           id: `harvest-${protocol.id}-${fn.name}-${Date.now()}`,
           strategy: 'classicIncentive',
@@ -497,17 +380,12 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
           rewardToken: rewardCheck.rewardToken.symbol,
           rewardUsd: simulation.deltaBalance.toFixed(4),
           netProfitUsd: simulation.netProfitUsd.toFixed(4),
-          gasCostUsd: simulation.gasCostUsd.toFixed(4),
-          swapCostUsd: simulation.swapCostUsd.toFixed(4),
         });
 
-        // Only take the first successful function for this protocol
         break;
       }
     } catch (err) {
-      log.debug(`Protocol check failed for ${protocol.id}`, {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      log.debug(`Protocol check failed for ${protocol.id}`);
     }
   }
 
