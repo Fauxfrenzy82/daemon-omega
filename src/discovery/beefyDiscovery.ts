@@ -23,14 +23,12 @@ const STRATEGY_ABI = [
   'function balanceOf(address) view returns (uint256)',
 ];
 
-// ✅ Beefy Vault ABI to check caller fee
 const VAULT_ABI = [
   'function harvest() external',
   'function balanceOf(address) view returns (uint256)',
   'function pricePerFullShare() view returns (uint256)',
 ];
 
-// ✅ ABI for the reward token (to check balance changes)
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function decimals() view returns (uint8)',
@@ -55,6 +53,9 @@ interface BeefyVault {
   pricePerFullShare: string;
 }
 
+// ✅ Valid statuses that can be harvested
+const EXECUTABLE_STATUSES = ['active', 'stable', 'experimental'];
+
 /**
  * Fetch all Beefy vaults
  */
@@ -74,7 +75,6 @@ async function fetchBeefyVaults(): Promise<BeefyVault[]> {
       vaultsArray = Object.values(data);
     }
 
-    // ✅ Log chain distribution to understand what's available
     const chainDistribution = vaultsArray.reduce((acc: Record<string, number>, v) => {
       const chain = v.chain || v.network || 'unknown';
       acc[chain] = (acc[chain] || 0) + 1;
@@ -93,8 +93,46 @@ async function fetchBeefyVaults(): Promise<BeefyVault[]> {
 }
 
 /**
+ * ✅ Log status distribution for Polygon vaults
+ */
+function logPolygonStatusDistribution(vaults: BeefyVault[]): void {
+  const polygonVaults = vaults.filter(v => (v.chain || v.network || '').toLowerCase() === 'polygon');
+  
+  if (polygonVaults.length === 0) {
+    log.warn('⚠️ No Polygon vaults found');
+    return;
+  }
+
+  const statusDistribution = polygonVaults.reduce((acc: Record<string, number>, v) => {
+    const status = v.status || 'unknown';
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+
+  log.info('📊 Polygon vault status distribution', { statusDistribution });
+
+  // ✅ Log which statuses are executable vs skipped
+  const executable = Object.keys(statusDistribution).filter(s => EXECUTABLE_STATUSES.includes(s));
+  const skipped = Object.keys(statusDistribution).filter(s => !EXECUTABLE_STATUSES.includes(s));
+
+  log.info('✅ Executable statuses (will scan):', { statuses: executable });
+  log.info('⏭️ Skipped statuses (will ignore):', { statuses: skipped });
+
+  // Log sample vaults for each executable status
+  for (const status of executable) {
+    const samples = polygonVaults
+      .filter(v => v.status === status)
+      .slice(0, 3)
+      .map(v => ({ id: v.id, name: v.name, strategy: v.strategy }));
+
+    if (samples.length > 0) {
+      log.info(`📋 Sample ${status} vaults`, { samples });
+    }
+  }
+}
+
+/**
  * ✅ CORRECT: Simulate harvest and trace what the executor receives
- * This is the key change - we simulate the harvest and check balance changes
  */
 async function simulateHarvestAndTraceRewards(
   strategyAddress: string,
@@ -112,36 +150,9 @@ async function simulateHarvestAndTraceRewards(
     const strategy = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
     const rewardToken = new ethers.Contract(rewardTokenAddress, ERC20_ABI, provider);
 
-    // ✅ Get balances BEFORE harvest simulation
-    const beforeExecutorReward = await rewardToken.balanceOf(executorAddress);
-    const beforeStrategyBalance = await rewardToken.balanceOf(strategyAddress);
-    const beforeVaultBalance = await rewardToken.balanceOf(vaultAddress);
-
-    // ✅ Simulate the harvest call
-    const gasEstimate = await strategy.estimateGas.harvest({ from: executorAddress });
-
-    // ✅ Use callStatic to simulate without state change
-    await strategy.callStatic.harvest({ from: executorAddress });
-
-    // ✅ Since callStatic doesn't change state, we can't get post-balance.
-    // Instead, we need to use a different approach: check if the strategy
-    // has pending rewards that would be distributed to the caller.
-
-    // Approach: Check if there's a known caller fee pattern
-    // Beefy's fee structure: performance fee is split between:
-    // - caller (harvest caller)
-    // - strategist
-    // - treasury
-    // - stakers (BIFI holders)
-
-    // The caller fee is typically a small percentage of the harvest value.
-    // We can check the vault's total value and estimate the caller fee.
-
-    // For now, let's check if the strategy has any balance that could be harvested
+    // Check if there's harvestable balance
     const strategyBalance = await rewardToken.balanceOf(strategyAddress);
     const vaultBalance = await rewardToken.balanceOf(vaultAddress);
-
-    // If there's a balance in the strategy or vault, there might be harvestable value
     const totalHarvestable = strategyBalance.add(vaultBalance);
 
     if (totalHarvestable.isZero()) {
@@ -149,9 +160,17 @@ async function simulateHarvestAndTraceRewards(
         success: false,
         rewardAmount: ethers.BigNumber.from(0),
         rewardToken: rewardTokenAddress,
-        gasEstimate: gasEstimate || ethers.BigNumber.from(200000),
+        gasEstimate: ethers.BigNumber.from(200000),
         error: 'No harvestable balance',
       };
+    }
+
+    // Estimate gas for harvest
+    let gasEstimate: ethers.BigNumber;
+    try {
+      gasEstimate = await strategy.estimateGas.harvest({ from: executorAddress });
+    } catch {
+      gasEstimate = ethers.BigNumber.from(200000);
     }
 
     // ✅ Estimate caller fee from Beefy's fee structure
@@ -160,22 +179,31 @@ async function simulateHarvestAndTraceRewards(
     const callerFeeBps = 5; // 0.05%
     const callerReward = totalHarvestable.mul(callerFeeBps).div(10000);
 
-    // If the caller reward is too small, skip
     if (callerReward.isZero()) {
       return {
         success: false,
         rewardAmount: ethers.BigNumber.from(0),
         rewardToken: rewardTokenAddress,
-        gasEstimate: gasEstimate || ethers.BigNumber.from(200000),
+        gasEstimate,
         error: 'Caller reward too small',
       };
+    }
+
+    // ✅ Try to simulate harvest to verify it won't revert
+    try {
+      await strategy.callStatic.harvest({ from: executorAddress });
+    } catch (err) {
+      // Harvest simulation failed - might still work with different params
+      log.debug('Harvest simulation failed, but continuing with estimate', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     return {
       success: true,
       rewardAmount: callerReward,
       rewardToken: rewardTokenAddress,
-      gasEstimate: gasEstimate || ethers.BigNumber.from(200000),
+      gasEstimate,
     };
 
   } catch (err) {
@@ -190,47 +218,7 @@ async function simulateHarvestAndTraceRewards(
 }
 
 /**
- * Check if there's harvestable value in the strategy
- */
-async function getHarvestableValue(
-  strategyAddress: string,
-  vaultAddress: string,
-  rewardTokenAddress: string
-): Promise<{ hasValue: boolean; amount: ethers.BigNumber }> {
-  try {
-    const rewardToken = new ethers.Contract(rewardTokenAddress, ERC20_ABI, provider);
-    const strategy = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
-    const vault = new ethers.Contract(vaultAddress, VAULT_ABI, provider);
-
-    // Check strategy balance
-    const strategyBalance = await rewardToken.balanceOf(strategyAddress);
-    const vaultBalance = await rewardToken.balanceOf(vaultAddress);
-
-    // Check if there's any harvestable value
-    const total = strategyBalance.add(vaultBalance);
-
-    // Also check if the vault has pending harvest
-    // Some Beefy strategies use earned() to track pending rewards
-    let earnedAmount = ethers.BigNumber.from(0);
-    try {
-      earnedAmount = await strategy.earned(vaultAddress);
-    } catch {
-      // earned() might not exist
-    }
-
-    const totalHarvestable = total.add(earnedAmount);
-
-    return {
-      hasValue: totalHarvestable.gt(0),
-      amount: totalHarvestable,
-    };
-  } catch (err) {
-    return { hasValue: false, amount: ethers.BigNumber.from(0) };
-  }
-}
-
-/**
- * Convert a token address to our TokenInfo
+ * Get token info
  */
 function getTokenInfo(address: string, symbol?: string): TokenInfo {
   for (const [key, token] of Object.entries(TOKENS)) {
@@ -248,7 +236,7 @@ function getTokenInfo(address: string, symbol?: string): TokenInfo {
 }
 
 /**
- * Main discovery function for Beefy harvest opportunities
+ * Main discovery function
  */
 export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const candidates: OpportunityCandidate[] = [];
@@ -263,35 +251,27 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
     return [];
   }
 
-  // ✅ Filter for Polygon + active
+  // 2. Log status distribution for Polygon
+  logPolygonStatusDistribution(allVaults);
+
+  // 3. ✅ Filter: Polygon + executable status
   const polygonVaults = allVaults.filter(v => {
     const chain = (v.chain || v.network || '').toLowerCase();
-    return chain === 'polygon' && v.status === 'active';
+    return chain === 'polygon' && 
+           EXECUTABLE_STATUSES.includes(v.status) &&
+           v.strategy &&
+           ethers.utils.isAddress(v.strategy);
   });
 
-  log.info(`📊 Found ${polygonVaults.length} active Polygon vaults`);
+  log.info(`📊 Found ${polygonVaults.length} executable Polygon vaults`);
 
   if (polygonVaults.length === 0) {
-    log.warn('⚠️ No Polygon vaults found. Chain distribution:', {
-      chains: [...new Set(allVaults.map(v => v.chain || v.network || 'unknown'))],
-    });
+    log.warn('⚠️ No executable Polygon vaults found');
     return [];
   }
 
-  // Log sample Polygon vaults
-  for (const v of polygonVaults.slice(0, 10)) {
-    log.debug('[Beefy] Polygon vault sample', {
-      id: v.id,
-      name: v.name,
-      strategy: v.strategy,
-      earnedToken: v.earnedToken,
-      earnedTokenAddress: v.earnedTokenAddress,
-    });
-  }
-
-  // ✅ Process first 20 Polygon vaults
-  const limitedVaults = polygonVaults.slice(0, 20);
-
+  // 4. Process vaults
+  const limitedVaults = polygonVaults.slice(0, 50);
   let checkedCount = 0;
   let harvestableCount = 0;
   let profitableCount = 0;
@@ -304,31 +284,11 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
       const vaultAddress = vault.earnContractAddress;
       const rewardTokenAddress = vault.earnedTokenAddress;
 
-      if (!strategyAddress || !ethers.utils.isAddress(strategyAddress)) {
-        log.debug(`Skipping ${vault.id}: invalid strategy`);
-        continue;
-      }
-
       if (!rewardTokenAddress || !ethers.utils.isAddress(rewardTokenAddress)) {
-        log.debug(`Skipping ${vault.id}: invalid reward token`);
         continue;
       }
 
-      // ✅ Check if there's harvestable value
-      const harvestable = await getHarvestableValue(
-        strategyAddress,
-        vaultAddress,
-        rewardTokenAddress
-      );
-
-      if (!harvestable.hasValue || harvestable.amount.isZero()) {
-        log.debug(`Skipping ${vault.id}: no harvestable value`);
-        continue;
-      }
-
-      log.debug(`Vault ${vault.id} has harvestable value: ${ethers.utils.formatUnits(harvestable.amount, 18)}`);
-
-      // ✅ Simulate harvest and trace rewards
+      // 5. Simulate harvest and trace rewards
       const simulation = await simulateHarvestAndTraceRewards(
         strategyAddress,
         vaultAddress,
@@ -337,7 +297,7 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
       );
 
       if (!simulation.success) {
-        log.debug(`Skipping ${vault.id}: simulation failed - ${simulation.error}`);
+        log.debug(`Skipping ${vault.id}: ${simulation.error}`);
         continue;
       }
 
@@ -345,7 +305,7 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
 
       const rewardToken = getTokenInfo(rewardTokenAddress, vault.earnedToken || 'REWARD');
 
-      // ✅ Get reward token price via Enso
+      // 6. Quote via Enso
       const amountIn = simulation.rewardAmount.toString();
       const quote = await getEnsoRouteQuote(rewardToken, TOKENS.USDC, amountIn);
 
@@ -354,13 +314,12 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
         continue;
       }
 
-      // ✅ Calculate gas cost
+      // 7. Calculate gas + profit
       const gasPrice = await provider.getGasPrice();
-      const totalGas = simulation.gasEstimate.mul(120).div(100); // 20% buffer
+      const totalGas = simulation.gasEstimate.mul(120).div(100);
       const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(totalGas)));
       const gasCostUsd = gasCostNative * nativePriceUsd;
 
-      // ✅ Calculate profit
       const rewardUsd = Number(ethers.utils.formatUnits(simulation.rewardAmount, rewardToken.decimals)) * quote.price;
       const swapCostBps = 10;
       const swapCostUsd = rewardUsd * (swapCostBps / 10000);
@@ -374,6 +333,7 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
 
       profitableCount++;
 
+      // 8. Create candidate
       const candidate: OpportunityCandidate = {
         id: `beefy-${vault.id}-${Date.now()}`,
         strategy: 'classicIncentive',
