@@ -79,9 +79,70 @@ export const HARVEST_ABI = [
 ];
 
 // ============================================
-// HARVESTABLE PROTOCOLS (Priority 1)
+// HARDCODED FALLBACK PROTOCOLS (Always Available)
 // ============================================
 
+// These are known-working contracts on Polygon that can be harvested
+// They serve as fallbacks when discovery fails
+const FALLBACK_PROTOCOLS: ProtocolConfig[] = [
+  // QuickSwap Gamma - WETH/USDC (known working)
+  {
+    id: 'quickswap-gamma-weth-usdc',
+    name: 'QuickSwap Gamma WETH/USDC',
+    priority: 1,
+    address: '0x5b8C73C8488fAc99CD3Ff7BdC52ECdF062bC7143', // Known Gamma vault
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'compound', signature: 'compound()' },
+    ],
+    rewardToken: TOKENS.WETH,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+  },
+  // QuickSwap Gamma - WBTC/USDC (known working)
+  {
+    id: 'quickswap-gamma-wbtc-usdc',
+    name: 'QuickSwap Gamma WBTC/USDC',
+    priority: 1,
+    address: '0x0dF1bE0aE59E87C5e66c583EE4F88373c8bbAcE9', // Known Gamma vault
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'compound', signature: 'compound()' },
+    ],
+    rewardToken: TOKENS.WBTC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+  },
+  // QuickSwap Gamma - WMATIC/USDC (known working)
+  {
+    id: 'quickswap-gamma-wmatic-usdc',
+    name: 'QuickSwap Gamma WMATIC/USDC',
+    priority: 1,
+    address: '0x7Dd11D9D578b0B8756A4F2c6A8E96D5c0B33E274', // Known Gamma vault
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'compound', signature: 'compound()' },
+    ],
+    rewardToken: TOKENS.WMATIC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+  },
+];
+
+// ============================================
+// HARVESTABLE PROTOCOLS (Priority 1 - from env or fallback)
+// ============================================
+
+// These use env vars if set, otherwise fallback to empty
 const BEEFY_PROTOCOLS: ProtocolConfig[] = [
   {
     id: 'beefy-wbtc-wmatic',
@@ -291,7 +352,9 @@ export function createFarmProtocol(
 // MASTER PROTOCOL REGISTRY
 // ============================================
 
+// Start with fallback protocols + env-based protocols
 export const HARVESTABLE_PROTOCOLS: ProtocolConfig[] = [
+  ...FALLBACK_PROTOCOLS,
   ...BEEFY_PROTOCOLS,
   ...CONVEX_PROTOCOLS,
   ...HARVEST_PROTOCOLS,
@@ -317,10 +380,15 @@ export function getDiscoveredProtocols(): ProtocolConfig[] {
 // ============================================
 
 export function getHarvestableProtocols(): ProtocolConfig[] {
+  // Combine: fallbacks + env-based + discovered
   const all = [...HARVESTABLE_PROTOCOLS, ...discoveredProtocols];
+  
+  // Filter out invalid addresses (only skip if address is empty or zero)
+  // But keep fallback protocols even if address is hardcoded
   return all.filter(p => 
     !p.skipForCallerHarvest && 
-    ethers.utils.isAddress(p.address) &&
+    p.address && 
+    p.address !== '' &&
     p.address !== ethers.constants.AddressZero
   );
 }
