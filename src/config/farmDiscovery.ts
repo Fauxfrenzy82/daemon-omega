@@ -25,10 +25,9 @@ const FACTORY_ABI = [
 ];
 
 /**
- * ✅ FIXED: Query only fields that actually exist in the QuickSwap V3 subgraph schema
- * No feeTier, no rewards — these fields don't exist in this schema
+ * Pool type returned from subgraph
  */
-export async function discoverGammaPools(): Promise<{
+export interface SubgraphPool {
   id: string;
   token0: { id: string; symbol: string; decimals: string };
   token1: { id: string; symbol: string; decimals: string };
@@ -36,7 +35,22 @@ export async function discoverGammaPools(): Promise<{
   token0Price: string;
   token1Price: string;
   totalValueLockedUSD: string;
-}[]> {
+}
+
+/**
+ * Simplified pool type for on-chain discovery
+ */
+export interface SimplePool {
+  id: string;
+  token0: { id: string; symbol: string; decimals: string };
+  token1: { id: string; symbol: string; decimals: string };
+  totalValueLockedUSD?: string;
+}
+
+/**
+ * ✅ FIXED: Query only fields that exist in the QuickSwap V3 subgraph schema
+ */
+export async function discoverGammaPools(): Promise<SubgraphPool[]> {
   const subgraphApiKey = env.SUBGRAPH_API_KEY;
   if (!subgraphApiKey) {
     log.warn('❌ SUBGRAPH_API_KEY is not set!');
@@ -48,7 +62,6 @@ export async function discoverGammaPools(): Promise<{
 
   log.info('🔍 Discovering QuickSwap V3 pools...');
 
-  // ✅ CORRECT QUERY: Only fields that exist in the schema
   const query = `
     {
       pools(
@@ -100,16 +113,8 @@ export async function discoverGammaPools(): Promise<{
 /**
  * Discover pools on-chain as fallback
  */
-export async function discoverPoolsOnChain(): Promise<{
-  id: string;
-  token0: { id: string; symbol: string; decimals: string };
-  token1: { id: string; symbol: string; decimals: string };
-}[]> {
-  const pools: {
-    id: string;
-    token0: { id: string; symbol: string; decimals: string };
-    token1: { id: string; symbol: string; decimals: string };
-  }[] = [];
+export async function discoverPoolsOnChain(): Promise<SimplePool[]> {
+  const pools: SimplePool[] = [];
 
   try {
     log.info('🔍 Discovering pools on-chain...');
@@ -142,6 +147,7 @@ export async function discoverPoolsOnChain(): Promise<{
           id: poolAddress,
           token0: { id: token0, symbol: 'Unknown', decimals: '18' },
           token1: { id: token1, symbol: 'Unknown', decimals: '18' },
+          totalValueLockedUSD: '0',
         });
       } catch {
         continue;
@@ -159,8 +165,23 @@ export async function discoverPoolsOnChain(): Promise<{
 }
 
 /**
+ * ✅ EXPORTED: Discover Gamma farms (alias for discoverGammaPools)
+ * Kept for backward compatibility with imports
+ */
+export async function discoverGammaFarms(): Promise<Record<string, string>> {
+  const pools = await discoverGammaPools();
+  const farms: Record<string, string> = {};
+  
+  for (const pool of pools) {
+    const pairId = `${pool.token0.symbol}/${pool.token1.symbol}`;
+    farms[pairId] = pool.id;
+  }
+  
+  return farms;
+}
+
+/**
  * Generate reward positions from discovered pools
- * This is the adapter layer for Merkl/Gamma rewards
  */
 export async function generateRewardPositions(): Promise<any[]> {
   const positions: any[] = [];
@@ -189,8 +210,8 @@ export async function generateRewardPositions(): Promise<any[]> {
         rewardToken: TOKENS.QUICK,
         entryToken: TOKENS.USDC,
         protocol: 'quickswap-pool',
-        rewardType: 'merkl-claim', // Merkl-distributed, not harvest-triggered
-        requiresPosition: true, // Requires LP position to claim
+        rewardType: 'merkl-claim',
+        requiresPosition: true,
       });
     }
   } else {
