@@ -11,7 +11,7 @@ import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
 import { 
   ProtocolConfig,
-  getHarvestTriggeredProtocols,
+  getHarvestableProtocols,
   getMerklPools,
   getContractInterface,
 } from './protocolRegistry';
@@ -53,9 +53,7 @@ async function checkMerklClaim(
 ): Promise<OpportunityCandidate | null> {
   try {
     // 1. Query Merkl distributor for claimable amount
-    // Merkl distributor address is often per-pool; we need to know it.
-    // For QuickSwap Gamma, the distributor is usually the pool itself or a separate contract.
-    const merklDistributor = pool.address; // or a separate address
+    const merklDistributor = pool.address;
 
     const contract = new ethers.Contract(merklDistributor, [
       'function claimable(address user, address token) view returns (uint256)',
@@ -106,8 +104,43 @@ async function simulateHarvest(
   rewardAmount: ethers.BigNumber,
   nativePriceUsd: number
 ): Promise<any> {
-  // ... same as before – estimate gas, swap, net profit
-  // Return { success, deltaBalance, gasCostUsd, swapCostUsd, callerIncentiveUsd, netProfitUsd }
+  try {
+    const rewardTokenPrice = await getLiveTokenPriceUsd(protocol.rewardToken);
+    const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, protocol.rewardToken.decimals)) * rewardTokenPrice;
+
+    const gasPrice = await provider.getGasPrice();
+    const gasEstimate = ethers.BigNumber.from(200000);
+    const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate)));
+    const gasCostUsd = gasCostNative * nativePriceUsd;
+
+    const amountIn = rewardAmount.toString();
+    const quote = await getEnsoRouteQuote(protocol.rewardToken, protocol.entryToken, amountIn);
+
+    if (!quote) {
+      return { success: false, deltaBalance: 0, gasCostUsd, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
+    }
+
+    const swapCostBps = 10;
+    const swapCostUsd = rewardUsd * (swapCostBps / 10000);
+
+    let callerIncentiveUsd = rewardUsd;
+    if (protocol.callerIncentiveBps) {
+      callerIncentiveUsd = rewardUsd * (protocol.callerIncentiveBps / 10000);
+    }
+
+    const netProfitUsd = callerIncentiveUsd - gasCostUsd - swapCostUsd;
+
+    return {
+      success: netProfitUsd > 0,
+      deltaBalance: callerIncentiveUsd,
+      gasCostUsd,
+      swapCostUsd,
+      callerIncentiveUsd,
+      netProfitUsd,
+    };
+  } catch (err) {
+    return { success: false, deltaBalance: 0, gasCostUsd: 0, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
+  }
 }
 
 async function simulateClaim(
@@ -116,6 +149,38 @@ async function simulateClaim(
   nativePriceUsd: number
 ): Promise<any> {
   // Similar to simulateHarvest, but for Merkl claim
+  try {
+    const rewardTokenPrice = await getLiveTokenPriceUsd(protocol.rewardToken);
+    const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, protocol.rewardToken.decimals)) * rewardTokenPrice;
+
+    const gasPrice = await provider.getGasPrice();
+    const gasEstimate = ethers.BigNumber.from(250000);
+    const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate)));
+    const gasCostUsd = gasCostNative * nativePriceUsd;
+
+    const amountIn = rewardAmount.toString();
+    const quote = await getEnsoRouteQuote(protocol.rewardToken, protocol.entryToken, amountIn);
+
+    if (!quote) {
+      return { success: false, deltaBalance: 0, gasCostUsd, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
+    }
+
+    const swapCostBps = 10;
+    const swapCostUsd = rewardUsd * (swapCostBps / 10000);
+
+    const netProfitUsd = rewardUsd - gasCostUsd - swapCostUsd;
+
+    return {
+      success: netProfitUsd > 0,
+      deltaBalance: rewardUsd,
+      gasCostUsd,
+      swapCostUsd,
+      callerIncentiveUsd: rewardUsd,
+      netProfitUsd,
+    };
+  } catch (err) {
+    return { success: false, deltaBalance: 0, gasCostUsd: 0, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
+  }
 }
 
 // ============================================
@@ -139,7 +204,6 @@ function createCandidate(
       rewardToken: protocol.rewardToken,
       entryToken: protocol.entryToken,
       callerIncentiveUsd: simulation.callerIncentiveUsd || simulation.deltaBalance,
-      nativePriceUsd: simulation.nativePriceUsd,
       simulation,
     },
     estimatedGrossProfitUsd: simulation.deltaBalance,
@@ -161,7 +225,7 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
   log.info('🔍 Classic Incentive discovery', { executor, nativePrice: nativePriceUsd });
 
   // 1. Check harvest-triggered protocols (Beefy, Convex, etc.)
-  const harvestProtocols = getHarvestTriggeredProtocols();
+  const harvestProtocols = getHarvestableProtocols();
   log.info(`📋 Harvest-triggered protocols: ${harvestProtocols.length}`);
   for (const protocol of harvestProtocols) {
     const candidate = await checkHarvestTriggered(protocol, executor, nativePriceUsd);
