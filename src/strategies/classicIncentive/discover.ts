@@ -23,21 +23,6 @@ import { discoverGammaFarms } from '../../config/farmDiscovery';
 
 const log = createLogger('classicIncentive');
 
-interface HarvestCandidate {
-  protocol: ProtocolConfig;
-  functionName: string;
-  functionSignature: string;
-  rewardAmount: ethers.BigNumber;
-  rewardToken: TokenInfo;
-  rewardUsd: number;
-  gasCostUsd: number;
-  flashloanFeeUsd: number;
-  swapCostUsd: number;
-  callerIncentiveUsd: number;
-  netProfitUsd: number;
-  simulationData: any;
-}
-
 // ============================================
 // STEP 1: DYNAMIC PROTOCOL DISCOVERY
 // ============================================
@@ -128,7 +113,6 @@ async function checkPendingRewards(
           { label: `checkRewards.${protocol.id}.${fn.name}`, shouldRetry: isTransientError, retries: 2 }
         );
 
-        // ✅ FIXED: Use BigNumber.isBigNumber() instead of _isBigNumber
         if (result && ethers.BigNumber.isBigNumber(result)) {
           const amount = result as ethers.BigNumber;
           if (amount.gt(0)) {
