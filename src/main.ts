@@ -13,7 +13,6 @@ import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 import { fetchNativePriceUsd } from './config/priceFeeds';
 import { discoverAllProtocols } from './config/protocolDiscovery';
-// ✅ CORRECTED IMPORT PATH
 import { setDiscoveredProtocols } from './strategies/classicIncentive/protocolRegistry';
 
 const log = createLogger('main');
@@ -58,8 +57,24 @@ async function bootstrap(): Promise<void> {
     try {
       log.info('🔍 Running protocol self-discovery...');
       const discovered = await discoverAllProtocols();
-      setDiscoveredProtocols(discovered);
-      log.info(`✅ Protocol discovery complete: ${discovered.length} protocols registered`);
+
+      // Transform DiscoveredProtocol[] to ProtocolConfig[]
+      const protocolConfigs = discovered.map(d => ({
+        id: d.id,
+        name: d.name,
+        priority: d.priority,
+        address: d.address,
+        functions: d.functionNames.map(name => ({ name, signature: `${name}()` })),
+        rewardToken: d.rewardToken,
+        entryToken: d.entryToken,
+        rewardType: 'harvest-triggered' as const,
+        skipForCallerHarvest: false,
+        abi: [],
+        callerIncentiveBps: d.protocol === 'beefy' ? 200 : undefined,
+      }));
+
+      setDiscoveredProtocols(protocolConfigs);
+      log.info(`✅ Protocol discovery complete: ${protocolConfigs.length} protocols registered`);
     } catch (err) {
       log.error('Failed to discover protocols', {
         error: err instanceof Error ? err.message : String(err),
