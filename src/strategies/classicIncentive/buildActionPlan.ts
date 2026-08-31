@@ -25,9 +25,10 @@ export async function buildActionPlan(
   const entryToken = candidate.params.entryToken as TokenInfo;
 
   const flashLoanToken = options?.flashLoanToken || entryToken;
+  // ✅ FIX: Removed invalid 'as const'
   const flashLoanProvider = options?.flashLoanProvider || { 
     name: 'Morpho', 
-    protocol: DEFAULT_FLASHLOAN_PROTOCOL as const 
+    protocol: DEFAULT_FLASHLOAN_PROTOCOL 
   };
 
   const flashLoanAmount = '1';
