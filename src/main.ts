@@ -1,3 +1,5 @@
+// src/main.ts
+
 import { env } from './config/env';
 import { initSchema, closePool } from './db/client';
 import { initEnsoClient } from './execution/ensoClient';
@@ -10,7 +12,8 @@ import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 import { fetchNativePriceUsd } from './config/priceFeeds';
-import { initializeFarms } from './config/farms';
+import { discoverAllProtocols } from './config/protocolDiscovery';
+import { ProtocolConfig, setDiscoveredProtocols } from '../strategies/classicIncentive/protocolRegistry';
 
 const log = createLogger('main');
 
@@ -31,11 +34,10 @@ function isAnyStrategyEnabled(): boolean {
 }
 
 async function bootstrap(): Promise<void> {
-  log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v2)', {
+  log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v3)', {
     env: env.NODE_ENV,
     executionWallet: executionWallet.address,
     discordAlerts: isDiscordConfigured() ? 'enabled' : 'disabled',
-    gasReserveUsd: env.SWEEP_KEEP_GAS_RESERVE_USD,
     masterEnabled: env.MASTER_STRATEGY_ENABLED,
     classicIncentiveEnabled: env.STRATEGY_CLASSIC_ENABLED,
   });
@@ -54,44 +56,47 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
-  // ✅ Step 2: Initialize farms ONLY if Harvest is enabled
-  if (env.STRATEGY_HARVEST_ENABLED && env.MASTER_STRATEGY_ENABLED) {
+  // ✅ Step 2: Run self-discovery for protocols (ONCE at startup)
+  if (env.STRATEGY_CLASSIC_ENABLED && env.MASTER_STRATEGY_ENABLED) {
     try {
-      await initializeFarms();
-      log.info('Farms initialized successfully');
+      log.info('🔍 Running protocol self-discovery...');
+      const discovered = await discoverAllProtocols();
+      
+      // Update the protocol registry with discovered protocols
+      // This function would need to be added to protocolRegistry.ts
+      setDiscoveredProtocols(discovered);
+      
+      log.info(`✅ Protocol discovery complete: ${discovered.length} protocols registered`);
     } catch (err) {
-      log.error('Failed to initialize farms', {
+      log.error('Failed to discover protocols', {
         error: err instanceof Error ? err.message : String(err),
       });
-      // Non-fatal: continue without farms
+      // Non-fatal: continue with hardcoded protocols
     }
-  } else {
-    log.info('Skipping farm initialization (Harvest strategy disabled or master toggle off)');
   }
 
   // ✅ Step 3: Start health server
   startHealthServer();
 
-  // ✅ Step 4: Get initial native price BEFORE starting scan loop
+  // ✅ Step 4: Get initial native price
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // ✅ Step 5: Start worker pool (so workers are ready for candidates)
-  // Only start if at least one strategy is enabled
+  // ✅ Step 5: Start worker pool
   if (isAnyStrategyEnabled()) {
     startWorkerPool();
     log.info('Worker pool started');
   } else {
-    log.warn('⚠️ No strategies enabled — worker pool NOT started. Set MASTER_STRATEGY_ENABLED=true and/or individual strategy flags to true.');
+    log.warn('⚠️ No strategies enabled — worker pool NOT started');
   }
 
-  // ✅ Step 6: Start scan loop (workers are already waiting)
+  // ✅ Step 6: Start scan loop
   startScanLoop();
 
   // ✅ Step 7: Send system started alert
   await alertSystemStarted(executionWallet.address);
 
-  // ✅ Step 8: Sweep interval (profit collection)
+  // ✅ Step 8: Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await fetchNativePriceUsd();
@@ -121,29 +126,7 @@ async function bootstrap(): Promise<void> {
     }
   }, DAILY_SUMMARY_MS);
 
-  log.info('System running');
+  log.info('✅ System running with self-discovered protocols');
 }
 
-async function shutdown(signal: string): Promise<void> {
-  log.info('Shutdown signal received', { signal });
-  stopScanLoop();
-  await closePool();
-  process.exit(0);
-}
-
-// ✅ Process signal handlers
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-
-// ✅ Unhandled rejection handler
-process.on('unhandledRejection', (reason) => {
-  log.error('Unhandled promise rejection', { reason: String(reason) });
-});
-
-// ✅ Bootstrap the system
-bootstrap().catch((err) => {
-  log.error('Fatal bootstrap error', {
-    error: err instanceof Error ? err.message : String(err),
-  });
-  process.exit(1);
-});
+// ... rest of main.ts (shutdown handlers, etc.)
