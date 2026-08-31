@@ -9,17 +9,19 @@ import { pushCandidate } from '../../execution/queue';
 import { withRetry, isTransientError } from '../../utils/retry';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
-import { 
+import {
   ProtocolConfig,
   getHarvestableProtocols,
   getMerklPools,
   getContractInterface,
 } from './protocolRegistry';
+// ✅ Import Beefy discovery
+import { discoverBeefyHarvestCandidates } from '../../discovery/beefyDiscovery';
 
 const log = createLogger('classicIncentive');
 
 // ============================================
-// CHECK HARVEST-TRIGGERED PROTOCOLS
+// CHECK HARVEST-TRIGGERED PROTOCOLS (Hardcoded)
 // ============================================
 
 async function checkHarvestTriggered(
@@ -28,7 +30,7 @@ async function checkHarvestTriggered(
   nativePriceUsd: number
 ): Promise<OpportunityCandidate | null> {
   const contract = new ethers.Contract(protocol.address, protocol.abi || [], provider);
-  
+
   // Check pending rewards
   const rewardAmount = await checkEarned(contract, executorAddress);
   if (!rewardAmount || rewardAmount.lte(0)) return null;
@@ -52,7 +54,7 @@ async function checkMerklClaim(
   nativePriceUsd: number
 ): Promise<OpportunityCandidate | null> {
   try {
-    // 1. Query Merkl distributor for claimable amount
+    // For Merkl, we need the distributor address; currently using pool.address as placeholder
     const merklDistributor = pool.address;
 
     const contract = new ethers.Contract(merklDistributor, [
@@ -62,14 +64,12 @@ async function checkMerklClaim(
     const claimable = await contract.claimable(executorAddress, pool.rewardToken.address);
     if (!claimable || claimable.lte(0)) return null;
 
-    // 2. Simulate claim + swap
-    const rewardAmount = claimable;
-    const simulation = await simulateClaim(pool, rewardAmount, nativePriceUsd);
+    const simulation = await simulateClaim(pool, claimable, nativePriceUsd);
     if (!simulation.success || simulation.netProfitUsd < env.CLASSIC_INCENTIVE_MIN_PROFIT_USD) {
       return null;
     }
 
-    return createCandidate(pool, 'merkl-claim', rewardAmount, simulation);
+    return createCandidate(pool, 'merkl-claim', claimable, simulation);
   } catch (err) {
     log.debug(`Merkl claim check failed for ${pool.id}: ${String(err)}`);
     return null;
@@ -219,23 +219,34 @@ function createCandidate(
 // ============================================
 
 export async function discoverClassicIncentive(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
-  const candidates: OpportunityCandidate[] = [];
+  const allCandidates: OpportunityCandidate[] = [];
   const executor = executionWallet.address;
 
   log.info('🔍 Classic Incentive discovery', { executor, nativePrice: nativePriceUsd });
 
-  // 1. Check harvest-triggered protocols (Beefy, Convex, etc.)
+  // -------------------------------------------------
+  // 1. Beefy Harvest Opportunities (Caller Bounty)
+  // -------------------------------------------------
+  log.info('📡 Running Beefy discovery...');
+  const beefyCandidates = await discoverBeefyHarvestCandidates(nativePriceUsd);
+  allCandidates.push(...beefyCandidates);
+
+  // -------------------------------------------------
+  // 2. Harvest-triggered protocols (Hardcoded fallbacks / env)
+  // -------------------------------------------------
   const harvestProtocols = getHarvestableProtocols();
   log.info(`📋 Harvest-triggered protocols: ${harvestProtocols.length}`);
   for (const protocol of harvestProtocols) {
     const candidate = await checkHarvestTriggered(protocol, executor, nativePriceUsd);
     if (candidate) {
       pushCandidate(candidate);
-      candidates.push(candidate);
+      allCandidates.push(candidate);
     }
   }
 
-  // 2. Check Merkl claimable rewards (Gamma pools)
+  // -------------------------------------------------
+  // 3. Merkl claimable rewards (Gamma pools)
+  // -------------------------------------------------
   const merklPools = getMerklPools();
   log.info(`📋 Merkl pools (for claim checking): ${merklPools.length}`);
   // Limit to top 50 by TVL to avoid overload
@@ -244,10 +255,10 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
     const candidate = await checkMerklClaim(pool, executor, nativePriceUsd);
     if (candidate) {
       pushCandidate(candidate);
-      candidates.push(candidate);
+      allCandidates.push(candidate);
     }
   }
 
-  log.info(`📦 Classic Incentive found ${candidates.length} candidates`);
-  return candidates;
+  log.info(`📦 Classic Incentive found ${allCandidates.length} total candidates`);
+  return allCandidates;
 }
