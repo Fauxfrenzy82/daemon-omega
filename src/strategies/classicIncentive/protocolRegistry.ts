@@ -8,7 +8,7 @@ import { env } from '../../config/env';
 const log = createLogger('protocolRegistry');
 
 // ============================================
-// TYPES
+// TYPES (Now exported for use in other files)
 // ============================================
 
 export interface HarvestFunction {
@@ -18,10 +18,10 @@ export interface HarvestFunction {
 }
 
 export type RewardType = 
-  | 'harvest-triggered'   // Caller receives value for calling
-  | 'keeper-incentive'    // Caller gets keeper fee
-  | 'position-based'      // Rewards tied to positions (SKIP)
-  | 'claim-with-proof';   // Merkl-style (SKIP)
+  | 'harvest-triggered'
+  | 'keeper-incentive'
+  | 'position-based'
+  | 'claim-with-proof';
 
 export interface ProtocolConfig {
   id: string;
@@ -82,7 +82,6 @@ export const HARVEST_ABI = [
 // HARVESTABLE PROTOCOLS (Priority 1)
 // ============================================
 
-// 1. Beefy Finance - Caller gets performance fee share
 const BEEFY_PROTOCOLS: ProtocolConfig[] = [
   {
     id: 'beefy-wbtc-wmatic',
@@ -96,7 +95,7 @@ const BEEFY_PROTOCOLS: ProtocolConfig[] = [
     rewardToken: TOKENS.WBTC,
     entryToken: TOKENS.USDC,
     rewardType: 'harvest-triggered',
-    callerIncentiveBps: 200, // 20% of performance fee
+    callerIncentiveBps: 200,
     skipForCallerHarvest: false,
     abi: BEEFY_ABI,
   },
@@ -122,7 +121,6 @@ const BEEFY_PROTOCOLS: ProtocolConfig[] = [
 // HARVESTABLE PROTOCOLS (Priority 2)
 // ============================================
 
-// 2. Convex - Keeper incentives
 const CONVEX_PROTOCOLS: ProtocolConfig[] = [
   {
     id: 'convex-rewards',
@@ -141,7 +139,6 @@ const CONVEX_PROTOCOLS: ProtocolConfig[] = [
   },
 ];
 
-// 3. Harvest Finance - Strategy caller economics
 const HARVEST_PROTOCOLS: ProtocolConfig[] = [
   {
     id: 'harvest-finance',
@@ -164,7 +161,6 @@ const HARVEST_PROTOCOLS: ProtocolConfig[] = [
 // POSITION-BASED PROTOCOLS (SKIP)
 // ============================================
 
-// These are NOT harvestable - rewards belong to position holders
 const POSITION_BASED_PROTOCOLS: ProtocolConfig[] = [
   {
     id: 'morpho-blue',
@@ -188,7 +184,6 @@ const POSITION_BASED_PROTOCOLS: ProtocolConfig[] = [
     address: '0x929EC64c34a17401F460460D4B9390518E5B473e',
     functions: [
       { name: 'claimAllRewards', signature: 'claimAllRewards(address[],address)' },
-      { name: 'claimRewards', signature: 'claimRewards(address[],uint256,address)' },
     ],
     rewardToken: TOKENS.AAVE,
     entryToken: TOKENS.USDC,
@@ -296,17 +291,10 @@ export function createFarmProtocol(
 // MASTER PROTOCOL REGISTRY
 // ============================================
 
-// Hardcoded harvestable protocols
 export const HARVESTABLE_PROTOCOLS: ProtocolConfig[] = [
   ...BEEFY_PROTOCOLS,
   ...CONVEX_PROTOCOLS,
   ...HARVEST_PROTOCOLS,
-];
-
-// All protocols (including position-based - for reference only)
-export const ALL_PROTOCOLS: ProtocolConfig[] = [
-  ...HARVESTABLE_PROTOCOLS,
-  ...POSITION_BASED_PROTOCOLS,
 ];
 
 // ============================================
@@ -329,9 +317,7 @@ export function getDiscoveredProtocols(): ProtocolConfig[] {
 // ============================================
 
 export function getHarvestableProtocols(): ProtocolConfig[] {
-  // Combine hardcoded + discovered
   const all = [...HARVESTABLE_PROTOCOLS, ...discoveredProtocols];
-  // Filter out invalid addresses and position-based
   return all.filter(p => 
     !p.skipForCallerHarvest && 
     ethers.utils.isAddress(p.address) &&
@@ -353,19 +339,9 @@ export function isHarvestable(protocol: ProtocolConfig): boolean {
 // ============================================
 
 const HARVEST_KEYWORDS = [
-  'harvest',
-  'compound',
-  'earn',
-  'claim',
-  'claimRewards',
-  'getReward',
-  'updateReward',
-  'withdrawRewards',
-  'process',
-  'tend',
-  'reinvest',
-  'collect',
-  'gather',
+  'harvest', 'compound', 'earn', 'claim', 'claimRewards',
+  'getReward', 'updateReward', 'withdrawRewards', 'process',
+  'tend', 'reinvest', 'collect', 'gather',
 ];
 
 export function isHarvestLikeFunction(functionName: string): boolean {
@@ -381,7 +357,6 @@ export function getContractInterface(protocol: ProtocolConfig): ethers.utils.Int
   if (protocol.abi && protocol.abi.length > 0) {
     return new ethers.utils.Interface(protocol.abi);
   }
-  // Build minimal interface from functions
   const abi = protocol.functions.map(f => ({
     type: 'function',
     name: f.name,
