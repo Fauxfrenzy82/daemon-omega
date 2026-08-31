@@ -41,7 +41,7 @@ function normalizeEnsoBaseUrl(url: string): string {
 
 export const env = {
   // ============================================
-  // BLOCKCHAIN / RPC
+  // BLOCKCHAIN / RPC (REQUIRED)
   // ============================================
   RPC_URL: required('RPC_URL'),
   RPC_WS_URL: optional('RPC_WS_URL', ''),
@@ -54,29 +54,64 @@ export const env = {
   PRIVATE_MEMPOOL_URL: optional('PRIVATE_MEMPOOL_URL', 'https://private-mempool.polygon.technology'),
 
   // ============================================
-  // WALLETS
+  // WALLETS (REQUIRED)
   // ============================================
   EXECUTION_PRIVATE_KEY: required('EXECUTION_PRIVATE_KEY'),
   TREASURY_ADDRESS: required('TREASURY_ADDRESS'),
 
   // ============================================
-  // ENSO (Primary Execution)
+  // ENSO (REQUIRED)
   // ============================================
   ENSO_API_KEY: required('ENSO_API_KEY'),
   ENSO_BASE_URL: normalizeEnsoBaseUrl(optional('ENSO_BASE_URL', 'https://api.enso.build/api')),
   USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true),
+  ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800),
 
   // ============================================
-  // DEX AGGREGATORS (Quote Sources)
+  // DEX AGGREGATORS
   // ============================================
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
   OPENOCEAN_API_URL: optional('OPENOCEAN_API_URL', 'https://open-api.openocean.finance/v3/polygon'),
   ZEROEX_API_KEY: optional('ZEROEX_API_KEY', ''),
 
   // ============================================
-  // DATABASE
+  // DATABASE (REQUIRED)
   // ============================================
   DATABASE_URL: required('DATABASE_URL'),
+
+  // ============================================
+  // SUBGRAPH (For QuickSwap Discovery)
+  // ============================================
+  SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
+
+  // ============================================
+  // CLASSIC INCENTIVE - PROTOCOL ADDRESSES (Optional)
+  // ============================================
+  // Priority 1: Beefy Finance
+  BEEFY_VAULT_ADDRESS: optional('BEEFY_VAULT_ADDRESS', ''),
+  BEEFY_WETH_VAULT: optional('BEEFY_WETH_VAULT', ''),
+
+  // Priority 2: Convex / Harvest Finance
+  CONVEX_ADDRESS: optional('CONVEX_ADDRESS', ''),
+  HARVEST_VAULT_ADDRESS: optional('HARVEST_VAULT_ADDRESS', ''),
+
+  // QuickSwap Farm (optional override)
+  QUICKSWAP_FARM_ADDRESS: optional('QUICKSWAP_FARM_ADDRESS', ''),
+
+  // ============================================
+  // POSITION-BASED PROTOCOLS (SKIPPED - Reference Only)
+  // ============================================
+  BALANCER_GAUGE_ADDRESS: optional('BALANCER_GAUGE_ADDRESS', ''),
+  CURVE_GAUGE_ADDRESS: optional('CURVE_GAUGE_ADDRESS', ''),
+  MERKL_ADDRESS: optional('MERKL_ADDRESS', ''),
+  MORPHO_ADDRESS: optional('MORPHO_ADDRESS', ''),
+
+  // ============================================
+  // CLASSIC INCENTIVE CONFIG
+  // ============================================
+  CLASSIC_INCENTIVE_MIN_PROFIT_USD: optionalNumber('CLASSIC_INCENTIVE_MIN_PROFIT_USD', 0.05),
+  CLASSIC_INCENTIVE_MAX_PROTOCOLS: optionalNumber('CLASSIC_INCENTIVE_MAX_PROTOCOLS', 20),
+  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
 
   // ============================================
   // RISK / THRESHOLDS
@@ -132,44 +167,11 @@ export const env = {
   STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', false),
 
   // ============================================
-  // CLASSIC INCENTIVE - SELF-DISCOVERY
-  // ============================================
-  // These are OPTIONAL - the bot discovers them automatically
-  // Only set if you want to manually override specific addresses
-  BEEFY_VAULT_ADDRESS: optional('BEEFY_VAULT_ADDRESS', ''),
-  BEEFY_WETH_VAULT: optional('BEEFY_WETH_VAULT', ''),
-  CONVEX_ADDRESS: optional('CONVEX_ADDRESS', ''),
-  HARVEST_VAULT_ADDRESS: optional('HARVEST_VAULT_ADDRESS', ''),
-  QUICKSWAP_FARM_ADDRESS: optional('QUICKSWAP_FARM_ADDRESS', ''),
-
-  // ============================================
-  // CLASSIC INCENTIVE - POSITION-BASED (SKIPPED)
-  // ============================================
-  // These are NOT harvested - only kept for reference
-  BALANCER_GAUGE_ADDRESS: optional('BALANCER_GAUGE_ADDRESS', ''),
-  CURVE_GAUGE_ADDRESS: optional('CURVE_GAUGE_ADDRESS', ''),
-  MERKL_ADDRESS: optional('MERKL_ADDRESS', ''),
-  MORPHO_ADDRESS: optional('MORPHO_ADDRESS', ''),
-
-  // ============================================
-  // CLASSIC INCENTIVE CONFIG
-  // ============================================
-  CLASSIC_INCENTIVE_MIN_PROFIT_USD: optionalNumber('CLASSIC_INCENTIVE_MIN_PROFIT_USD', 0.05),
-  CLASSIC_INCENTIVE_MAX_PROTOCOLS: optionalNumber('CLASSIC_INCENTIVE_MAX_PROTOCOLS', 20),
-  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
-
-  // ============================================
-  // SUBGRAPH (for QuickSwap discovery)
-  // ============================================
-  SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
-
-  // ============================================
-  // OPTIMIZER
+  // OPTIMIZER / WORKERS
   // ============================================
   OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
   WORKER_POOL_SIZE: optionalNumber('WORKER_POOL_SIZE', 3),
   LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
-  ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800),
 
   // ============================================
   // PAIRS
