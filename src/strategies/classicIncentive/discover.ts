@@ -15,14 +15,14 @@ import {
   getMerklPools,
   getContractInterface,
 } from './protocolRegistry';
-// ✅ Import Beefy discovery
+// ✅ Beefy discovery
 import { discoverBeefyHarvestCandidates } from '../../discovery/beefyDiscovery';
 
 const log = createLogger('classicIncentive');
 
-// ============================================
-// CHECK HARVEST-TRIGGERED PROTOCOLS (Hardcoded)
-// ============================================
+// ============================================================
+// 1. CHECK HARDCODED HARVEST-TRIGGERED PROTOCOLS (fallbacks)
+// ============================================================
 
 async function checkHarvestTriggered(
   protocol: ProtocolConfig,
@@ -36,7 +36,7 @@ async function checkHarvestTriggered(
   if (!rewardAmount || rewardAmount.lte(0)) return null;
 
   // Simulate harvest
-  const simulation = await simulateHarvest(protocol, rewardAmount, nativePriceUsd);
+  const simulation = await simulateHarvestGeneric(protocol, rewardAmount, nativePriceUsd);
   if (!simulation.success || simulation.netProfitUsd < env.CLASSIC_INCENTIVE_MIN_PROFIT_USD) {
     return null;
   }
@@ -44,9 +44,9 @@ async function checkHarvestTriggered(
   return createCandidate(protocol, 'harvest', rewardAmount, simulation);
 }
 
-// ============================================
-// CHECK MERKL CLAIMABLE REWARDS
-// ============================================
+// ============================================================
+// 2. CHECK MERKL CLAIMABLE REWARDS
+// ============================================================
 
 async function checkMerklClaim(
   pool: ProtocolConfig,
@@ -64,7 +64,7 @@ async function checkMerklClaim(
     const claimable = await contract.claimable(executorAddress, pool.rewardToken.address);
     if (!claimable || claimable.lte(0)) return null;
 
-    const simulation = await simulateClaim(pool, claimable, nativePriceUsd);
+    const simulation = await simulateClaimGeneric(pool, claimable, nativePriceUsd);
     if (!simulation.success || simulation.netProfitUsd < env.CLASSIC_INCENTIVE_MIN_PROFIT_USD) {
       return null;
     }
@@ -76,9 +76,9 @@ async function checkMerklClaim(
   }
 }
 
-// ============================================
-// HELPER: Check earned on contract
-// ============================================
+// ============================================================
+// 3. HELPERS
+// ============================================================
 
 async function checkEarned(contract: ethers.Contract, executor: string): Promise<ethers.BigNumber | null> {
   const methods = ['earned', 'pendingReward', 'pendingRewards', 'claimable_tokens'];
@@ -95,11 +95,7 @@ async function checkEarned(contract: ethers.Contract, executor: string): Promise
   return null;
 }
 
-// ============================================
-// SIMULATE HARVEST / CLAIM
-// ============================================
-
-async function simulateHarvest(
+async function simulateHarvestGeneric(
   protocol: ProtocolConfig,
   rewardAmount: ethers.BigNumber,
   nativePriceUsd: number
@@ -143,12 +139,11 @@ async function simulateHarvest(
   }
 }
 
-async function simulateClaim(
+async function simulateClaimGeneric(
   protocol: ProtocolConfig,
   rewardAmount: ethers.BigNumber,
   nativePriceUsd: number
 ): Promise<any> {
-  // Similar to simulateHarvest, but for Merkl claim
   try {
     const rewardTokenPrice = await getLiveTokenPriceUsd(protocol.rewardToken);
     const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, protocol.rewardToken.decimals)) * rewardTokenPrice;
@@ -183,10 +178,6 @@ async function simulateClaim(
   }
 }
 
-// ============================================
-// CREATE CANDIDATE
-// ============================================
-
 function createCandidate(
   protocol: ProtocolConfig,
   actionType: 'harvest' | 'merkl-claim',
@@ -214,9 +205,9 @@ function createCandidate(
   };
 }
 
-// ============================================
-// MAIN DISCOVERY
-// ============================================
+// ============================================================
+// 4. MAIN DISCOVERY FUNCTION
+// ============================================================
 
 export async function discoverClassicIncentive(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const allCandidates: OpportunityCandidate[] = [];
@@ -232,7 +223,7 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
   allCandidates.push(...beefyCandidates);
 
   // -------------------------------------------------
-  // 2. Harvest-triggered protocols (Hardcoded fallbacks / env)
+  // 2. Harvest-triggered protocols (hardcoded fallbacks)
   // -------------------------------------------------
   const harvestProtocols = getHarvestableProtocols();
   log.info(`📋 Harvest-triggered protocols: ${harvestProtocols.length}`);
