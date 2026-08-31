@@ -13,7 +13,6 @@ import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 import { fetchNativePriceUsd } from './config/priceFeeds';
 import { discoverAllProtocols } from './config/protocolDiscovery';
-import { setDiscoveredProtocols } from './strategies/classicIncentive/protocolRegistry';
 
 const log = createLogger('main');
 
@@ -41,8 +40,10 @@ async function bootstrap(): Promise<void> {
     classicIncentiveEnabled: env.STRATEGY_CLASSIC_ENABLED,
   });
 
+  // ✅ Initialize database schema
   await initSchema();
 
+  // ✅ Step 1: Initialize Enso client
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
@@ -53,40 +54,28 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
+  // ✅ Step 2: Run protocol discovery (only if Classic Incentive is enabled)
   if (env.STRATEGY_CLASSIC_ENABLED && env.MASTER_STRATEGY_ENABLED) {
     try {
-      log.info('🔍 Running protocol self-discovery...');
-      const discovered = await discoverAllProtocols();
-
-      // Transform DiscoveredProtocol[] to ProtocolConfig[]
-      const protocolConfigs = discovered.map(d => ({
-        id: d.id,
-        name: d.name,
-        priority: d.priority,
-        address: d.address,
-        functions: d.functionNames.map(name => ({ name, signature: `${name}()` })),
-        rewardToken: d.rewardToken,
-        entryToken: d.entryToken,
-        rewardType: 'harvest-triggered' as const,
-        skipForCallerHarvest: false,
-        abi: [],
-        callerIncentiveBps: d.protocol === 'beefy' ? 200 : undefined,
-      }));
-
-      setDiscoveredProtocols(protocolConfigs);
-      log.info(`✅ Protocol discovery complete: ${protocolConfigs.length} protocols registered`);
+      log.info('🔍 Running protocol discovery...');
+      await discoverAllProtocols();
+      log.info('✅ Protocol discovery complete');
     } catch (err) {
       log.error('Failed to discover protocols', {
         error: err instanceof Error ? err.message : String(err),
       });
+      // Non-fatal: continue with hardcoded fallbacks
     }
   }
 
+  // ✅ Step 3: Start health server
   startHealthServer();
 
+  // ✅ Step 4: Get initial native price
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
+  // ✅ Step 5: Start worker pool
   if (isAnyStrategyEnabled()) {
     startWorkerPool();
     log.info('Worker pool started');
@@ -94,10 +83,13 @@ async function bootstrap(): Promise<void> {
     log.warn('⚠️ No strategies enabled — worker pool NOT started');
   }
 
+  // ✅ Step 6: Start scan loop
   startScanLoop();
 
+  // ✅ Step 7: Send system started alert
   await alertSystemStarted(executionWallet.address);
 
+  // ✅ Step 8: Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await fetchNativePriceUsd();
@@ -107,6 +99,7 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
+  // ✅ Step 9: Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -116,6 +109,7 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
+  // ✅ Step 10: Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
@@ -135,13 +129,16 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
+// ✅ Process signal handlers
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
+// ✅ Unhandled rejection handler
 process.on('unhandledRejection', (reason) => {
   log.error('Unhandled promise rejection', { reason: String(reason) });
 });
 
+// ✅ Bootstrap the system
 bootstrap().catch((err) => {
   log.error('Fatal bootstrap error', {
     error: err instanceof Error ? err.message : String(err),
