@@ -25,279 +25,191 @@ const FACTORY_ABI = [
 ];
 
 /**
- * ABI for Gamma Hypervisor
+ * ✅ FIXED: Query only fields that actually exist in the QuickSwap V3 subgraph schema
+ * No feeTier, no rewards — these fields don't exist in this schema
  */
-const HYPERVISOR_ABI = [
-  'function pool() external view returns (address)',
-  'function token0() external view returns (address)',
-  'function token1() external view returns (address)',
-  'function totalSupply() external view returns (uint256)',
-  'function getReward() external',
-  'function earned(address account) external view returns (uint256)',
-];
-
-/**
- * Known token pairs to discover farms for
- */
-const TARGET_PAIRS: Record<string, { tokenA: TokenInfo; tokenB: TokenInfo; fee: number }> = {
-  'WETH-USDC': { tokenA: TOKENS.WETH, tokenB: TOKENS.USDC, fee: 3000 },
-  'WBTC-USDC': { tokenA: TOKENS.WBTC, tokenB: TOKENS.USDC, fee: 3000 },
-  'WMATIC-USDC': { tokenA: TOKENS.WMATIC, tokenB: TOKENS.USDC, fee: 3000 },
-  'AAVE-USDC': { tokenA: TOKENS.AAVE, tokenB: TOKENS.USDC, fee: 3000 },
-  'USDC-USDT': { tokenA: TOKENS.USDC, tokenB: TOKENS.USDT, fee: 500 },
-};
-
-/**
- * ✅ CORRECTED: Discover Gamma farms using the correct subgraph schema
- * The QuickSwap V3 subgraph has pools with rewards, not a top-level "incentives" field
- */
-export async function discoverGammaFarms(): Promise<Record<string, string>> {
-  const farms: Record<string, string> = {};
-  
+export async function discoverGammaPools(): Promise<{
+  id: string;
+  token0: { id: string; symbol: string; decimals: string };
+  token1: { id: string; symbol: string; decimals: string };
+  liquidity: string;
+  token0Price: string;
+  token1Price: string;
+  totalValueLockedUSD: string;
+}[]> {
   const subgraphApiKey = env.SUBGRAPH_API_KEY;
   if (!subgraphApiKey) {
     log.warn('❌ SUBGRAPH_API_KEY is not set!');
-    return farms;
+    return [];
   }
-  
+
   const subgraphId = '5AK9Y4tk27ZWrPKvSAUQmffXWyQvjWqyJ2GNEZUWTirU';
   const endpoint = `https://gateway.thegraph.com/api/${subgraphApiKey}/subgraphs/id/${subgraphId}`;
-  
-  log.info('🔍 Discovering QuickSwap V3 Gamma farms...');
 
-  // ✅ CORRECTED QUERY: Query pools with rewards directly
+  log.info('🔍 Discovering QuickSwap V3 pools...');
+
+  // ✅ CORRECT QUERY: Only fields that exist in the schema
   const query = `
     {
       pools(
-        where: { totalValueLockedUSD_gt: "1000" }
-        first: 20
+        first: 1000
         orderBy: totalValueLockedUSD
         orderDirection: desc
       ) {
         id
-        feeTier
-        totalValueLockedUSD
         token0 {
           id
           symbol
           decimals
-          name
         }
         token1 {
           id
           symbol
           decimals
-          name
         }
-        rewards {
-          id
-          token {
-            id
-            symbol
-            decimals
-          }
-          amount
-          startTimestamp
-          endTimestamp
-        }
+        liquidity
+        token0Price
+        token1Price
+        totalValueLockedUSD
       }
     }
   `;
 
   try {
-    log.info('📡 Querying QuickSwap subgraph for pools with rewards...');
     const response = await axios.post(endpoint, { query }, { timeout: 15000 });
-    
+
     if (response.data?.errors) {
       log.error('❌ Subgraph errors:', {
         errors: JSON.stringify(response.data.errors, null, 2),
       });
-      
-      // ✅ Try alternative query if the first one fails
-      log.info('🔄 Trying alternative query...');
-      const altQuery = `
-        {
-          pools(
-            first: 20
-            orderBy: totalValueLockedUSD
-            orderDirection: desc
-          ) {
-            id
-            token0 { id symbol decimals }
-            token1 { id symbol decimals }
-            feeTier
-            totalValueLockedUSD
-          }
-        }
-      `;
-      
-      const altResponse = await axios.post(endpoint, { query: altQuery }, { timeout: 15000 });
-      
-      if (altResponse.data?.errors) {
-        log.error('❌ Alternative query also failed:', {
-          errors: JSON.stringify(altResponse.data.errors, null, 2),
-        });
-        return farms;
-      }
-      
-      const pools = altResponse.data?.data?.pools || [];
-      log.info(`📊 Found ${pools.length} pools via alternative query`);
-      
-      for (const pool of pools) {
-        if (!pool.id) continue;
-        const pairId = `${pool.token0?.symbol}/${pool.token1?.symbol}`;
-        farms[pairId] = pool.id;
-        log.debug(`Added pool: ${pairId} -> ${pool.id} (TVL: $${pool.totalValueLockedUSD})`);
-      }
-      
-      return farms;
+      return [];
     }
-    
+
     const pools = response.data?.data?.pools || [];
-    log.info(`📊 Found ${pools.length} pools with rewards`);
-    
-    if (pools.length === 0) {
-      log.warn('⚠️ No pools found in subgraph response');
-      return farms;
-    }
-
-    for (const pool of pools) {
-      if (!pool.id) continue;
-      
-      const pairId = `${pool.token0?.symbol}/${pool.token1?.symbol}`;
-      farms[pairId] = pool.id;
-      log.debug(`Added Gamma farm: ${pairId} -> ${pool.id} (TVL: $${pool.totalValueLockedUSD})`);
-    }
-
+    log.info(`📊 Found ${pools.length} pools with TVL > 0`);
+    return pools;
   } catch (err: any) {
     log.error('❌ Subgraph query failed:', {
       status: err?.response?.status,
-      statusText: err?.response?.statusText,
-      data: err?.response?.data ? JSON.stringify(err.response.data) : null,
       message: err?.message,
     });
+    return [];
   }
-
-  log.info(`🔍 Discovered ${Object.keys(farms).length} Gamma farms`);
-  return farms;
 }
 
 /**
- * Discover QuickSwap farms via on-chain factory
- * Fallback method that doesn't rely on subgraph
+ * Discover pools on-chain as fallback
  */
-export async function discoverGammaFarmsOnChain(): Promise<Record<string, string>> {
-  const farms: Record<string, string> = {};
-  
+export async function discoverPoolsOnChain(): Promise<{
+  id: string;
+  token0: { id: string; symbol: string; decimals: string };
+  token1: { id: string; symbol: string; decimals: string };
+}[]> {
+  const pools: {
+    id: string;
+    token0: { id: string; symbol: string; decimals: string };
+    token1: { id: string; symbol: string; decimals: string };
+  }[] = [];
+
   try {
-    log.info('🔍 Discovering Gamma farms via on-chain factory...');
+    log.info('🔍 Discovering pools on-chain...');
     const factory = new ethers.Contract(QUICKSWAP_V3_FACTORY, FACTORY_ABI, provider);
-    
-    // Try to get all pools
+
     let poolCount = 0;
     try {
       const count = await factory.allPoolsLength();
       poolCount = Number(count);
-      log.info(`Found ${poolCount} pools in factory`);
-    } catch (err) {
-      log.warn('Could not get pool count from factory');
-      return farms;
+    } catch {
+      return pools;
     }
-    
-    // Limit to first 20 pools to avoid rate limits
-    const maxPools = Math.min(poolCount, 20);
-    
+
+    const maxPools = Math.min(poolCount, 50);
+
     for (let i = 0; i < maxPools; i++) {
       try {
         const poolAddress = await factory.allPools(i);
-        if (poolAddress && poolAddress !== ethers.constants.AddressZero) {
-          // Try to get token info from the pool
-          const pool = new ethers.Contract(poolAddress, [
-            'function token0() view returns (address)',
-            'function token1() view returns (address)',
-          ], provider);
-          
-          const token0 = await pool.token0();
-          const token1 = await pool.token1();
-          
-          // Map to known tokens
-          let pairId = `pool-${i}`;
-          for (const [id, config] of Object.entries(TARGET_PAIRS)) {
-            if (token0.toLowerCase() === config.tokenA.address.toLowerCase() &&
-                token1.toLowerCase() === config.tokenB.address.toLowerCase()) {
-              pairId = id;
-              break;
-            }
-          }
-          
-          farms[pairId] = poolAddress;
-          log.debug(`Added on-chain pool: ${pairId} -> ${poolAddress}`);
-        }
-      } catch (err) {
-        // Skip failed pools
+        if (!poolAddress || poolAddress === ethers.constants.AddressZero) continue;
+
+        const pool = new ethers.Contract(poolAddress, [
+          'function token0() view returns (address)',
+          'function token1() view returns (address)',
+        ], provider);
+
+        const token0 = await pool.token0();
+        const token1 = await pool.token1();
+
+        pools.push({
+          id: poolAddress,
+          token0: { id: token0, symbol: 'Unknown', decimals: '18' },
+          token1: { id: token1, symbol: 'Unknown', decimals: '18' },
+        });
+      } catch {
+        continue;
       }
     }
+
+    log.info(`🔍 Discovered ${pools.length} pools on-chain`);
   } catch (err) {
     log.warn('On-chain discovery failed:', {
       error: err instanceof Error ? err.message : String(err),
     });
   }
-  
-  return farms;
+
+  return pools;
 }
 
 /**
- * Generate RewardPositions from discovered farms
+ * Generate reward positions from discovered pools
+ * This is the adapter layer for Merkl/Gamma rewards
  */
 export async function generateRewardPositions(): Promise<any[]> {
   const positions: any[] = [];
-  
-  // 1. Add hardcoded farms
+
+  // 1. Add hardcoded farms (Aave RewardsController)
   positions.push({
     id: 'aave-rewards',
     positionAddress: '0x5f4d15d761528c57a5c30c43c1dab26fc5452731',
     rewardToken: TOKENS.AAVE,
     entryToken: TOKENS.USDC,
     protocol: 'aave',
+    rewardType: 'harvest-triggered',
   });
-  
-  // 2. Discover Gamma farms via subgraph
-  const gammaFarms = await discoverGammaFarms();
-  
-  // 3. If subgraph fails, try on-chain discovery
-  if (Object.keys(gammaFarms).length === 0) {
-    log.info('Subgraph returned 0 farms, trying on-chain discovery...');
-    const onChainFarms = await discoverGammaFarmsOnChain();
-    for (const [pairId, address] of Object.entries(onChainFarms)) {
-      const id = `quickswap-gamma-${pairId.toLowerCase()}`;
-      const rewardToken = TARGET_PAIRS[pairId]?.tokenA || TOKENS.WMATIC;
-      const entryToken = TARGET_PAIRS[pairId]?.tokenB || TOKENS.USDC;
-      
+
+  // 2. Discover pools from subgraph
+  const pools = await discoverGammaPools();
+
+  if (pools.length === 0) {
+    log.info('No pools from subgraph, trying on-chain...');
+    const onChainPools = await discoverPoolsOnChain();
+    for (const pool of onChainPools) {
+      const pairId = `${pool.token0.symbol}/${pool.token1.symbol}`;
       positions.push({
-        id,
-        positionAddress: address,
-        rewardToken,
-        entryToken,
-        protocol: 'quickswap-gamma',
+        id: `quickswap-pool-${pairId.toLowerCase()}`,
+        positionAddress: pool.id,
+        rewardToken: TOKENS.QUICK,
+        entryToken: TOKENS.USDC,
+        protocol: 'quickswap-pool',
+        rewardType: 'merkl-claim', // Merkl-distributed, not harvest-triggered
+        requiresPosition: true, // Requires LP position to claim
       });
     }
   } else {
-    for (const [pairId, address] of Object.entries(gammaFarms)) {
-      const id = `quickswap-gamma-${pairId.toLowerCase()}`;
-      const rewardToken = TARGET_PAIRS[pairId]?.tokenA || TOKENS.WMATIC;
-      const entryToken = TARGET_PAIRS[pairId]?.tokenB || TOKENS.USDC;
-      
+    for (const pool of pools) {
+      const pairId = `${pool.token0.symbol}/${pool.token1.symbol}`;
       positions.push({
-        id,
-        positionAddress: address,
-        rewardToken,
-        entryToken,
-        protocol: 'quickswap-gamma',
+        id: `quickswap-pool-${pairId.toLowerCase()}`,
+        positionAddress: pool.id,
+        rewardToken: TOKENS.QUICK,
+        entryToken: TOKENS.USDC,
+        protocol: 'quickswap-pool',
+        rewardType: 'merkl-claim',
+        requiresPosition: true,
+        tvlUsd: pool.totalValueLockedUSD,
       });
     }
   }
-  
-  // 4. Add Beefy and Balancer farms if addresses are provided
+
+  // 3. Add Beefy vaults from env (harvest-triggered)
   const beefyAddress = env.BEEFY_VAULT_ADDRESS;
   if (beefyAddress && ethers.utils.isAddress(beefyAddress)) {
     positions.push({
@@ -306,20 +218,24 @@ export async function generateRewardPositions(): Promise<any[]> {
       rewardToken: TOKENS.WBTC,
       entryToken: TOKENS.USDC,
       protocol: 'beefy',
+      rewardType: 'harvest-triggered',
+      requiresPosition: false,
     });
   }
-  
-  const balancerGauge = env.BALANCER_GAUGE_ADDRESS;
-  if (balancerGauge && ethers.utils.isAddress(balancerGauge)) {
+
+  const beefyWethAddress = env.BEEFY_WETH_VAULT;
+  if (beefyWethAddress && ethers.utils.isAddress(beefyWethAddress)) {
     positions.push({
-      id: 'balancer-wmatic-usdc',
-      positionAddress: balancerGauge,
-      rewardToken: TOKENS.WMATIC,
+      id: 'beefy-weth-usdc',
+      positionAddress: beefyWethAddress,
+      rewardToken: TOKENS.WETH,
       entryToken: TOKENS.USDC,
-      protocol: 'balancer',
+      protocol: 'beefy',
+      rewardType: 'harvest-triggered',
+      requiresPosition: false,
     });
   }
-  
-  log.info(`📊 Total farms configured: ${positions.length}`);
+
+  log.info(`📊 Total positions configured: ${positions.length}`);
   return positions;
 }
