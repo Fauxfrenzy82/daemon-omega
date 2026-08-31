@@ -18,11 +18,11 @@ export interface HarvestFunction {
 }
 
 export type RewardType = 
-  | 'harvest-triggered'   // Caller receives value (Beefy)
-  | 'keeper-incentive'    // Caller gets keeper fee (Convex)
-  | 'merkl-claim'         // Merkl-distributed rewards (Gamma)
-  | 'position-based'      // Rewards tied to positions (skip)
-  | 'claim-with-proof';   // Merkl-style (skip)
+  | 'harvest-triggered'
+  | 'keeper-incentive'
+  | 'merkl-claim'
+  | 'position-based'
+  | 'claim-with-proof';
 
 export interface ProtocolConfig {
   id: string;
@@ -36,7 +36,7 @@ export interface ProtocolConfig {
   callerIncentiveBps?: number;
   skipForCallerHarvest: boolean;
   abi?: string[];
-  requiresPosition?: boolean; // ✅ NEW: For Merkl/Gamma
+  requiresPosition?: boolean;
   tvlUsd?: string;
 }
 
@@ -67,11 +67,24 @@ export const HARVEST_ABI = [
   'function profitSharingNumerator() view returns (uint256)',
 ];
 
-// Merkl distributor ABI (for Gamma rewards)
 export const MERKL_ABI = [
   'function claim(bytes32[] calldata proof, bytes32[] calldata proofFlags, bytes calldata data) external',
   'function getReward(address) external',
   'function claimable(address, address) view returns (uint256)',
+];
+
+export const GAMMA_ABI = [
+  'function getReward() external',
+  'function harvest() external',
+  'function compound() external',
+  'function earned(address) view returns (uint256)',
+  'function totalSupply() view returns (uint256)',
+];
+
+export const FARM_ABI = [
+  'function getReward() external',
+  'function pendingReward(uint256, address) view returns (uint256)',
+  'function userInfo(uint256, address) view returns (uint256, uint256)',
 ];
 
 // ============================================
@@ -154,14 +167,72 @@ const HARVEST_PROTOCOLS: ProtocolConfig[] = [
 ];
 
 // ============================================
+// FALLBACK PROTOCOLS (Always Available)
+// ============================================
+
+const FALLBACK_PROTOCOLS: ProtocolConfig[] = [
+  {
+    id: 'quickswap-gamma-weth-usdc',
+    name: 'QuickSwap Gamma WETH/USDC',
+    priority: 1,
+    address: '0x5b8C73C8488fAc99CD3Ff7BdC52ECdF062bC7143',
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+    ],
+    rewardToken: TOKENS.WETH,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+    requiresPosition: false,
+  },
+  {
+    id: 'quickswap-gamma-wbtc-usdc',
+    name: 'QuickSwap Gamma WBTC/USDC',
+    priority: 1,
+    address: '0x0dF1bE0aE59E87C5e66c583EE4F88373c8bbAcE9',
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+    ],
+    rewardToken: TOKENS.WBTC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+    requiresPosition: false,
+  },
+  {
+    id: 'quickswap-gamma-wmatic-usdc',
+    name: 'QuickSwap Gamma WMATIC/USDC',
+    priority: 1,
+    address: '0x7Dd11D9D578b0B8756A4F2c6A8E96D5c0B33E274',
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+    ],
+    rewardToken: TOKENS.WMATIC,
+    entryToken: TOKENS.USDC,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+    requiresPosition: false,
+  },
+];
+
+// ============================================
 // ADAPTER 2: MERKL-CLAIM (Gamma / QuickSwap ALM)
 // ============================================
 
-// These are NOT harvest-triggered — they require LP positions
-// They are discovered dynamically from subgraph
 let merklProtocols: ProtocolConfig[] = [];
 
-export function setMerklProtocols(pools: { id: string; token0: any; token1: any; tvlUsd?: string }[]): void {
+export function setMerklProtocols(pools: { 
+  id: string; 
+  token0: { id: string; symbol: string; decimals: string }; 
+  token1: { id: string; symbol: string; decimals: string };
+  totalValueLockedUSD?: string;
+}[]): void {
   merklProtocols = pools.map(pool => ({
     id: `merkl-${pool.id}`,
     name: `Merkl Pool ${pool.token0.symbol}/${pool.token1.symbol}`,
@@ -173,10 +244,10 @@ export function setMerklProtocols(pools: { id: string; token0: any; token1: any;
     rewardToken: TOKENS.QUICK,
     entryToken: TOKENS.USDC,
     rewardType: 'merkl-claim',
-    skipForCallerHarvest: true, // ✅ NOT harvest-triggered
+    skipForCallerHarvest: true,
     abi: MERKL_ABI,
-    requiresPosition: true, // ✅ Requires LP position
-    tvlUsd: pool.tvlUsd,
+    requiresPosition: true,
+    tvlUsd: pool.totalValueLockedUSD || '0',
   }));
 
   log.info(`✅ Registered ${merklProtocols.length} Merkl/Gamma protocols`);
@@ -221,6 +292,7 @@ const POSITION_BASED_PROTOCOLS: ProtocolConfig[] = [
 
 // ✅ Harvest-triggered protocols (caller gets paid)
 export const HARVESTABLE_PROTOCOLS: ProtocolConfig[] = [
+  ...FALLBACK_PROTOCOLS,
   ...BEEFY_PROTOCOLS,
   ...CONVEX_PROTOCOLS,
   ...HARVEST_PROTOCOLS,
@@ -251,6 +323,65 @@ export function getMerklProtocols(): ProtocolConfig[] {
   );
 }
 
+// ✅ Check if a protocol is harvestable
+export function isHarvestable(protocol: ProtocolConfig): boolean {
+  return !protocol.skipForCallerHarvest && 
+    (protocol.rewardType === 'harvest-triggered' || protocol.rewardType === 'keeper-incentive');
+}
+
+// ============================================
+// PROTOCOL FACTORIES
+// ============================================
+
+export function createGammaProtocol(
+  pairId: string,
+  address: string,
+  rewardToken: TokenInfo,
+  entryToken: TokenInfo
+): ProtocolConfig {
+  return {
+    id: `quickswap-gamma-${pairId.toLowerCase()}`,
+    name: `QuickSwap Gamma ${pairId}`,
+    priority: 1,
+    address: address,
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+      { name: 'compound', signature: 'compound()' },
+    ],
+    rewardToken: rewardToken,
+    entryToken: entryToken,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: GAMMA_ABI,
+    requiresPosition: false,
+  };
+}
+
+export function createFarmProtocol(
+  poolId: string,
+  address: string,
+  rewardToken: TokenInfo,
+  entryToken: TokenInfo
+): ProtocolConfig {
+  return {
+    id: `quickswap-farm-${poolId.toLowerCase()}`,
+    name: `QuickSwap Farm ${poolId}`,
+    priority: 1,
+    address: address,
+    functions: [
+      { name: 'getReward', signature: 'getReward()' },
+      { name: 'harvest', signature: 'harvest()' },
+    ],
+    rewardToken: rewardToken,
+    entryToken: entryToken,
+    rewardType: 'harvest-triggered',
+    skipForCallerHarvest: false,
+    abi: FARM_ABI,
+    requiresPosition: false,
+  };
+}
+
 // ============================================
 // HELPERS
 // ============================================
@@ -272,4 +403,11 @@ export function getContractInterface(protocol: ProtocolConfig): ethers.utils.Int
     stateMutability: 'view',
   }));
   return new ethers.utils.Interface(abi);
+}
+
+// ✅ Export setDiscoveredProtocols for backward compatibility
+export function setDiscoveredProtocols(protocols: ProtocolConfig[]): void {
+  // This is a no-op now since we use setMerklProtocols for discovery
+  // Kept for backward compatibility
+  log.info(`setDiscoveredProtocols called with ${protocols.length} protocols (no-op)`);
 }
