@@ -9,4 +9,5 @@ export {
   getHarvestableProtocols,
   isHarvestable,
   isHarvestLikeFunction,
+  getContractInterface,
 } from './protocolRegistry';
