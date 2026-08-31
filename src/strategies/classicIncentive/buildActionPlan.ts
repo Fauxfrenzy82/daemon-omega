@@ -1,197 +1,91 @@
+// src/strategies/classicIncentive/buildActionPlan.ts
+
 import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo } from '../../config/tokens';
+import { TOKENS } from '../../config/tokens';
 import { executionWallet } from '../../treasury/wallets';
-import { activeChain } from '../../config/chains';
 import { createLogger } from '../../utils/logger';
-import { getEnsoClient } from '../../execution/ensoClient';
+import { ProtocolConfig, getContractInterface } from './protocolRegistry';
 
 const log = createLogger('buildActionPlan');
 
-// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon (lowercase, 40 chars)
+// ✅ CORRECT: Aave V3 Pool Addresses Provider on Polygon
 const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
-function getTokenPriceUsd(token: TokenInfo): number {
-  if (['USDC', 'USDC.e', 'USDT', 'DAI'].includes(token.symbol)) return 1.0;
-  const priceMap: Record<string, number> = {
-    WMATIC: 0.1,
-    WETH:   3000,
-    WBTC:   60000,
-    AAVE:   150,
-    QUICK:  0.05,
-  };
-  return priceMap[token.symbol] ?? 0.01;
-}
+// ✅ Use Morpho for 0% flashloan fee
+const DEFAULT_FLASHLOAN_PROTOCOL = 'morpho-markets-v1';
 
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
 ): Promise<ActionPlan> {
-  const type = candidate.params.type;
-  switch (type) {
-    case 'aaveIncentive':
-      return buildAaveIncentivePlan(candidate, options);
-    case 'quickswapV3':
-      return buildQuickSwapV3Plan(candidate, options);
-    default:
-      throw new Error(`Unknown incentive type: ${type}`);
-  }
-}
+  const protocol = candidate.params.protocol as ProtocolConfig;
+  const functionName = candidate.params.functionName as string;
+  const rewardAmount = candidate.params.rewardAmount as string;
+  const rewardToken = candidate.params.rewardToken as TokenInfo;
+  const entryToken = candidate.params.entryToken as TokenInfo;
 
-async function buildAaveIncentivePlan(
-  candidate: OpportunityCandidate,
-  options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
-): Promise<ActionPlan> {
-  const { asset, borrowAsset, borrowAmount, positionSize } = candidate.params;
+  const flashLoanToken = options?.flashLoanToken || entryToken;
+  const flashLoanProvider = options?.flashLoanProvider || { 
+    name: 'Morpho', 
+    protocol: DEFAULT_FLASHLOAN_PROTOCOL as const 
+  };
 
-  const flashLoanToken: TokenInfo = options?.flashLoanToken || asset;
-  const flashLoanProvider = { protocol: 'aave-v3' as const };
+  // Minimal flashloan amount (1 wei) — just enough to trigger the callback
+  // The harvest function itself doesn't need flashloan funds; the flashloan
+  // is used as a mechanism to bundle multiple actions atomically.
+  const flashLoanAmount = '1';
 
-  const collateralPriceUsd = getTokenPriceUsd(flashLoanToken);
-  const collateralUnits = positionSize / collateralPriceUsd;
-  const flashLoanAmount: string = ethers.utils
-    .parseUnits(
-      collateralUnits.toFixed(flashLoanToken.decimals),
-      flashLoanToken.decimals
-    )
-    .toString();
-
-  const primaryAddress = AAVE_V3_POOL_ADDRESSES_PROVIDER;
-
-  log.info('BUILDING AAVE INCENTIVE PLAN', {
-    collateral: flashLoanToken.symbol,
-    collateralAddress: flashLoanToken.address,
-    borrowAsset: borrowAsset.symbol,
-    borrowAssetAddress: borrowAsset.address,
-    positionSizeUsd: positionSize,
-    collateralPriceUsd,
-    flashLoanAmount,
-    borrowAmount,
+  log.info('🪣 Building harvest action plan (minimal flashloan)', {
+    protocol: protocol.id,
+    functionName,
+    rewardToken: rewardToken.symbol,
+    entryToken: entryToken.symbol,
     flashLoanProvider: flashLoanProvider.protocol,
-    executionWalletAddress: executionWallet.address,
-    primaryAddress,
+    flashLoanAmount: '1 wei (minimal)',
   });
 
-  // ✅ Step 1: Deposit - uses tokenIn/amountIn
-  const depositStep: ActionStep = {
-    type: 'deposit',
-    protocol: 'aave-v3',
-    tokenIn: flashLoanToken.address,
-    amountIn: flashLoanAmount,
-    onBehalfOf: executionWallet.address,
-    primaryAddress,
+  // ✅ Step 1: Harvest the reward
+  // This calls the protocol's harvest/claim function
+  const harvestStep: ActionStep = {
+    type: 'call',
+    protocol: 'custom',
+    target: protocol.address,
+    data: encodeHarvestCall(protocol, functionName),
+    value: '0',
+    useOutput: true,
   };
 
-  log.info('DEPOSIT STEP CREATED', {
-    token: flashLoanToken.symbol,
-    amount: flashLoanAmount,
-    onBehalfOf: executionWallet.address,
-    primaryAddress,
-  });
-
-  // ✅ Step 2: Borrow - uses tokenIn/tokenOut/amountOut
-  const borrowStep: ActionStep = {
-    type: 'borrow',
-    protocol: 'aave-v3',
-    tokenIn: flashLoanToken.address,
-    tokenOut: borrowAsset.address,
-    amountOut: borrowAmount,
-    onBehalfOf: executionWallet.address,
-    interestRateMode: 2,
-    primaryAddress,
-  };
-
-  log.info('BORROW STEP CREATED', {
-    collateral: flashLoanToken.symbol,
-    borrowToken: borrowAsset.symbol,
-    amount: borrowAmount,
-    onBehalfOf: executionWallet.address,
-    primaryAddress,
-  });
-
-  const callback: ActionStep[] = [depositStep, borrowStep];
-
-  // Step 3: Swap - uses tokenIn/tokenOut/amountIn
-  if (borrowAsset.address.toLowerCase() !== flashLoanToken.address.toLowerCase()) {
-    const swapStep: ActionStep = {
-      type: 'swap',
-      protocol: 'enso',
-      tokenIn: borrowAsset.address,
-      tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 1 },
-      slippage: '100',
-    };
-    callback.push(swapStep);
-  }
-
-  // ✅ Step 4: Flashloan - uses flashloanToken/flashloanAmount
-  const flashloanStep: ActionStep = {
-    type: 'flashloan',
-    protocol: flashLoanProvider.protocol,
-    flashloanToken: flashLoanToken.address,
-    flashloanAmount: flashLoanAmount,
-    primaryAddress,
-    callback,
-  };
-
-  log.info('FULL ACTION PLAN CREATED', {
-    flashLoanProvider: flashLoanProvider.protocol,
-    primaryAddress,
-    plan: JSON.stringify({ flashLoanToken, flashLoanAmount, steps: [flashloanStep] }, null, 2),
-  });
-
-  return {
-    flashLoanToken,
-    flashLoanAmount,
-    steps: [flashloanStep],
-  };
-}
-
-async function buildQuickSwapV3Plan(
-  candidate: OpportunityCandidate,
-  options?: { flashLoanToken?: TokenInfo; flashLoanProvider?: FlashLoanProvider }
-): Promise<ActionPlan> {
-  const { token0, token1, positionSize } = candidate.params;
-
-  const flashLoanToken: TokenInfo = options?.flashLoanToken || token0;
-  const flashLoanProvider = { protocol: 'aave-v3' as const };
-
-  const flashLoanAmount: string = ethers.utils
-    .parseUnits(
-      (positionSize / getTokenPriceUsd(token0)).toFixed(token0.decimals),
-      token0.decimals
-    )
-    .toString();
-
-  const primaryAddress = AAVE_V3_POOL_ADDRESSES_PROVIDER;
-
-  const buyStep: ActionStep = {
+  // ✅ Step 2: Swap reward token → entry token (USDC)
+  const swapStep: ActionStep = {
     type: 'swap',
     protocol: 'enso',
-    tokenIn: flashLoanToken.address,
-    tokenOut: token1.address,
-    amountIn: flashLoanAmount,
-    slippage: '100',
-  };
-
-  const sellStep: ActionStep = {
-    type: 'swap',
-    protocol: 'enso',
-    tokenIn: token1.address,
-    tokenOut: flashLoanToken.address,
+    tokenIn: rewardToken.address,
+    tokenOut: entryToken.address,
     amountIn: { useOutputOfCallAt: 0 },
     slippage: '100',
   };
 
+  // ✅ Step 3: Flashloan with callback
   const flashloanStep: ActionStep = {
     type: 'flashloan',
     protocol: flashLoanProvider.protocol,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress,
-    callback: [buyStep, sellStep],
+    primaryAddress: AAVE_V3_POOL_ADDRESSES_PROVIDER,
+    callback: [harvestStep, swapStep],
   };
+
+  log.info('✅ Harvest action plan built', {
+    protocol: protocol.id,
+    functionName,
+    rewardToken: rewardToken.symbol,
+    entryToken: entryToken.symbol,
+    flashloanProtocol: flashLoanProvider.protocol,
+    callbackActionCount: 2,
+  });
 
   return {
     flashLoanToken,
@@ -199,3 +93,15 @@ async function buildQuickSwapV3Plan(
     steps: [flashloanStep],
   };
 }
+
+function encodeHarvestCall(protocol: ProtocolConfig, functionName: string): string {
+  const iface = getContractInterface(protocol);
+  const fn = protocol.functions.find(f => f.name === functionName);
+  
+  if (!fn) {
+    throw new Error(`Function ${functionName} not found in protocol ${protocol.id}`);
+  }
+
+  const executorAddress = executionWallet.address;
+
+  // Special cases for specific protocols
