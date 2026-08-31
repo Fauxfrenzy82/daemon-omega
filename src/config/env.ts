@@ -1,3 +1,5 @@
+// src/config/env.ts
+
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -38,110 +40,149 @@ function normalizeEnsoBaseUrl(url: string): string {
 }
 
 export const env = {
-  // Blockchain / RPC
+  // ============================================
+  // BLOCKCHAIN / RPC
+  // ============================================
   RPC_URL: required('RPC_URL'),
   RPC_WS_URL: optional('RPC_WS_URL', ''),
   CHAIN_ID: optionalNumber('CHAIN_ID', 137),
 
-  // 🔥 NEW: Polygon Private Mempool RPC for transaction submission
+  // ============================================
+  // PRIVATE MEMPOOL (MEV Protection)
+  // ============================================
   PRIVATE_MEMPOOL_RPC: optional('PRIVATE_MEMPOOL_RPC', 'https://private-mempool.polygon.technology'),
-
-  // Private Mempool
   PRIVATE_MEMPOOL_URL: optional('PRIVATE_MEMPOOL_URL', 'https://private-mempool.polygon.technology'),
 
-  // Wallets
+  // ============================================
+  // WALLETS
+  // ============================================
   EXECUTION_PRIVATE_KEY: required('EXECUTION_PRIVATE_KEY'),
   TREASURY_ADDRESS: required('TREASURY_ADDRESS'),
 
-  // --- Enso ---
+  // ============================================
+  // ENSO (Primary Execution)
+  // ============================================
   ENSO_API_KEY: required('ENSO_API_KEY'),
   ENSO_BASE_URL: normalizeEnsoBaseUrl(optional('ENSO_BASE_URL', 'https://api.enso.build/api')),
+  USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true),
 
-  // ParaSwap / OpenOcean
+  // ============================================
+  // DEX AGGREGATORS (Quote Sources)
+  // ============================================
   PARASWAP_API_URL: optional('PARASWAP_API_URL', 'https://apiv5.paraswap.io'),
   OPENOCEAN_API_URL: optional('OPENOCEAN_API_URL', 'https://open-api.openocean.finance/v3/polygon'),
   ZEROEX_API_KEY: optional('ZEROEX_API_KEY', ''),
 
-  // Database
+  // ============================================
+  // DATABASE
+  // ============================================
   DATABASE_URL: required('DATABASE_URL'),
 
-  // Risk / thresholds
-  DEFAULT_MIN_PROFIT_USD: optionalNumber('MIN_PROFIT_USD', 0.05),
-  DEFAULT_MIN_SPREAD_BPS: optionalNumber('MIN_SPREAD_BPS', 2),
+  // ============================================
+  // RISK / THRESHOLDS
+  // ============================================
+  DEFAULT_MIN_PROFIT_USD: optionalNumber('DEFAULT_MIN_PROFIT_USD', 0.05),
+  DEFAULT_MIN_SPREAD_BPS: optionalNumber('DEFAULT_MIN_SPREAD_BPS', 2),
   MAX_POSITION_SIZE_USD: optionalNumber('MAX_POSITION_SIZE_USD', 25000),
   MAX_CONCURRENT_TRADES: optionalNumber('MAX_CONCURRENT_TRADES', 3),
   MAX_SLIPPAGE_BPS: optionalNumber('MAX_SLIPPAGE_BPS', 300),
   MAX_PRICE_IMPACT_BPS: optionalNumber('MAX_PRICE_IMPACT_BPS', 300),
 
-  // Circuit breaker
+  // ============================================
+  // CIRCUIT BREAKER
+  // ============================================
   MAX_CONSECUTIVE_LOSSES: optionalNumber('MAX_CONSECUTIVE_LOSSES', 999),
   CIRCUIT_BREAKER_LOOKBACK_MINUTES: optionalNumber('CIRCUIT_BREAKER_LOOKBACK_MINUTES', 5),
   MAX_GAS_PRICE_GWEI: optionalNumber('MAX_GAS_PRICE_GWEI', 300),
   CIRCUIT_BREAKER_COOLDOWN_MS: optionalNumber('CIRCUIT_BREAKER_COOLDOWN_MS', 15 * 60 * 1000),
 
-  // Sweep
+  // ============================================
+  // SWEEP (Profit Collection)
+  // ============================================
   SWEEP_ENABLED: optionalBool('SWEEP_ENABLED', true),
   SWEEP_MIN_BALANCE_USD: optionalNumber('SWEEP_MIN_BALANCE_USD', 2),
   SWEEP_KEEP_GAS_RESERVE_USD: optionalNumber('SWEEP_KEEP_GAS_RESERVE_USD', 1),
   SWEEP_TARGET_SYMBOL: optional('SWEEP_TARGET_SYMBOL', 'USDC'),
   SWEEP_DUST_THRESHOLD_USD: optionalNumber('SWEEP_DUST_THRESHOLD_USD', 0.01),
 
-  // Alerts
+  // ============================================
+  // ALERTS (Discord)
+  // ============================================
   DISCORD_WEBHOOK_URL: optional('DISCORD_WEBHOOK_URL', ''),
 
-  // Scanner
+  // ============================================
+  // SCANNER
+  // ============================================
   SCAN_INTERVAL_MS: optionalNumber('SCAN_INTERVAL_MS', 15000),
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
 
   // ============================================
-  // MASTER TOGGLE — Set to false to disable ALL strategies
+  // MASTER STRATEGY TOGGLE
   // ============================================
   MASTER_STRATEGY_ENABLED: optionalBool('MASTER_STRATEGY_ENABLED', true),
 
   // ============================================
-  // STRATEGY TOGGLES — Set to true/false per strategy
+  // STRATEGY TOGGLES
   // ============================================
-  // Classic Incentive — Aave V3 + QuickSwap V3 incentive programs
   STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', true),
-
-  // LP Entry/Exit — DEX round-trip arbitrage
   STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', false),
-
-  // Vault Arbitrage — StataToken wrapper arbitrage
   STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', false),
-
-  // Debt Position — Aave V3 liquidation arbitrage
   STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', false),
-
-  // Harvest + Spot Sell — claim rewards and sell
   STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', false),
 
-  // Enso route
-  USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true),
+  // ============================================
+  // CLASSIC INCENTIVE - SELF-DISCOVERY
+  // ============================================
+  // These are OPTIONAL - the bot discovers them automatically
+  // Only set if you want to manually override specific addresses
+  BEEFY_VAULT_ADDRESS: optional('BEEFY_VAULT_ADDRESS', ''),
+  BEEFY_WETH_VAULT: optional('BEEFY_WETH_VAULT', ''),
+  CONVEX_ADDRESS: optional('CONVEX_ADDRESS', ''),
+  HARVEST_VAULT_ADDRESS: optional('HARVEST_VAULT_ADDRESS', ''),
+  QUICKSWAP_FARM_ADDRESS: optional('QUICKSWAP_FARM_ADDRESS', ''),
+
+  // ============================================
+  // CLASSIC INCENTIVE - POSITION-BASED (SKIPPED)
+  // ============================================
+  // These are NOT harvested - only kept for reference
+  BALANCER_GAUGE_ADDRESS: optional('BALANCER_GAUGE_ADDRESS', ''),
+  CURVE_GAUGE_ADDRESS: optional('CURVE_GAUGE_ADDRESS', ''),
+  MERKL_ADDRESS: optional('MERKL_ADDRESS', ''),
+  MORPHO_ADDRESS: optional('MORPHO_ADDRESS', ''),
+
+  // ============================================
+  // CLASSIC INCENTIVE CONFIG
+  // ============================================
+  CLASSIC_INCENTIVE_MIN_PROFIT_USD: optionalNumber('CLASSIC_INCENTIVE_MIN_PROFIT_USD', 0.05),
+  CLASSIC_INCENTIVE_MAX_PROTOCOLS: optionalNumber('CLASSIC_INCENTIVE_MAX_PROTOCOLS', 20),
+  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
+
+  // ============================================
+  // SUBGRAPH (for QuickSwap discovery)
+  // ============================================
+  SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
+
+  // ============================================
+  // OPTIMIZER
+  // ============================================
+  OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
+  WORKER_POOL_SIZE: optionalNumber('WORKER_POOL_SIZE', 3),
+  LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
   ENSO_REQUEST_DELAY_MS: optionalNumber('ENSO_REQUEST_DELAY_MS', 800),
+
+  // ============================================
+  // PAIRS
+  // ============================================
   PRIMARY_PAIR_IDS: optional('PRIMARY_PAIR_IDS', 'WETH-USDC,WBTC-USDC,WMATIC-USDC,USDCe-USDT,DAI-USDC'),
   SECONDARY_PAIR_IDS: optional('SECONDARY_PAIR_IDS', 'LINK-USDC,AAVE-USDC,GHST-USDC,QUICK-USDC'),
   SECONDARY_MAX_POSITION_USD: optionalNumber('SECONDARY_MAX_POSITION_USD', 100),
   MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 100000),
 
-  // Optimizer
-  OPTIMIZER_SAMPLES: optionalNumber('OPTIMIZER_SAMPLES', 4),
-  WORKER_POOL_SIZE: optionalNumber('WORKER_POOL_SIZE', 3),
-  LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
-
-  // Subgraph
-  SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
-
-  // Classic Incentive position size
-  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
-
-  // 🔥 NEW: Harvest + Spot Sell flashloan amount in USD
+  // ============================================
+  // HARVEST (if enabled)
+  // ============================================
   HARVEST_FLASHLOAN_AMOUNT_USD: optionalNumber('HARVEST_FLASHLOAN_AMOUNT_USD', 5000),
-
-  // 🔥 NEW: Maximum safe % of pool depth for flashloan (1-2%)
   HARVEST_MAX_POOL_DEPTH_PCT: optionalNumber('HARVEST_MAX_POOL_DEPTH_PCT', 1.5),
-
-  // 🔥 NEW: Flashloan protocol to use (morpho-markets-v1, aave-v3, balancer-v3)
   HARVEST_FLASHLOAN_PROTOCOL: optional('HARVEST_FLASHLOAN_PROTOCOL', 'morpho-markets-v1'),
 };
