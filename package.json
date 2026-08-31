@@ -1,7 +1,7 @@
 {
   "name": "chronos-protocolink",
   "version": "1.0.0",
-  "description": "DeFi arbitrage system using Enso for execution.",
+  "description": "DeFi arbitrage system using Enso for execution and Protocolink for sweeps.",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "npm install",
