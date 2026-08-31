@@ -13,17 +13,17 @@ import { withRetry, isTransientError } from '../utils/retry';
 
 const log = createLogger('beefyDiscovery');
 
-// Beefy API endpoint for Polygon
-const BEEFY_API_URL = 'https://api.beefy.finance/config/polygon';
+// ✅ CORRECT: Use the /vaults endpoint as documented
+const BEEFY_API_URL = 'https://api.beefy.finance/vaults';
 
-// Beefy vault ABI (minimal)
+// Beefy vault ABI
 const STRATEGY_ABI = [
   'function harvest() external',
   'function earned(address) view returns (uint256)',
   'function rewardToken() view returns (address)',
 ];
 
-// Beefy strategy interface for type safety
+// Updated interface matching the actual API response
 interface BeefyVault {
   id: string;
   name: string;
@@ -31,11 +31,15 @@ interface BeefyVault {
   tokenAddress: string;
   earnedToken: string;
   earnedTokenAddress: string;
+  earnContractAddress: string;
   strategy: string;
   status: string; // 'active' or 'eol'
+  chain: string; // 'polygon', 'ethereum', etc.
+  network: string; // 'polygon', 'ethereum', etc.
   platformId: string;
-  chainId: number;
+  assets: string[];
   lastHarvest: number;
+  pricePerFullShare: string;
 }
 
 /**
@@ -43,19 +47,56 @@ interface BeefyVault {
  */
 async function fetchBeefyVaults(): Promise<BeefyVault[]> {
   try {
-    log.info('📡 Fetching Beefy Polygon vaults from API...');
+    log.info(`📡 Fetching Beefy vaults from: ${BEEFY_API_URL}`);
     const response = await withRetry(
-      () => axios.get<Record<string, BeefyVault>>(BEEFY_API_URL, { timeout: 10000 }),
+      () => axios.get(BEEFY_API_URL, { timeout: 10000 }),
       { label: 'beefy.api', shouldRetry: isTransientError, retries: 2 }
     );
 
-    const vaults = response.data;
-    const activeVaults = Object.values(vaults).filter(
-      v => v.status === 'active' && v.chainId === 137 && v.strategy
+    // The API returns an object with vault IDs as keys
+    const data = response.data;
+    
+    // Log the structure to help debug
+    log.debug('API response structure', {
+      type: typeof data,
+      isArray: Array.isArray(data),
+      keys: typeof data === 'object' && !Array.isArray(data) ? Object.keys(data).slice(0, 5) : null,
+    });
+
+    // Convert object to array if needed
+    let vaultsArray: BeefyVault[] = [];
+    if (Array.isArray(data)) {
+      vaultsArray = data;
+    } else if (data && typeof data === 'object') {
+      vaultsArray = Object.values(data);
+    } else {
+      log.warn('Unexpected response format', { data });
+      return [];
+    }
+
+    log.info(`📊 Raw vault count: ${vaultsArray.length}`);
+
+    // Filter for Polygon + active
+    const polygonVaults = vaultsArray.filter(v => 
+      (v.chain === 'polygon' || v.network === 'polygon') && 
+      v.status === 'active' &&
+      v.strategy &&
+      ethers.utils.isAddress(v.strategy)
     );
 
-    log.info(`📊 Found ${activeVaults.length} active Polygon vaults`);
-    return activeVaults;
+    log.info(`📊 Found ${polygonVaults.length} active Polygon vaults`);
+    
+    // Log a sample for debugging
+    if (polygonVaults.length > 0) {
+      log.debug('Sample vault', {
+        id: polygonVaults[0].id,
+        chain: polygonVaults[0].chain,
+        strategy: polygonVaults[0].strategy,
+        status: polygonVaults[0].status,
+      });
+    }
+
+    return polygonVaults;
   } catch (err) {
     log.error('❌ Failed to fetch Beefy vaults:', {
       error: err instanceof Error ? err.message : String(err),
@@ -70,24 +111,10 @@ async function fetchBeefyVaults(): Promise<BeefyVault[]> {
 async function strategySupportsHarvest(strategyAddress: string): Promise<boolean> {
   try {
     const contract = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
-    // Check if harvest() exists by calling it statically (will revert if not)
     await contract.callStatic.harvest();
     return true;
   } catch {
     return false;
-  }
-}
-
-/**
- * Get the reward token address from the strategy
- */
-async function getRewardToken(strategyAddress: string): Promise<string | null> {
-  try {
-    const contract = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
-    const token = await contract.rewardToken();
-    return token;
-  } catch {
-    return null;
   }
 }
 
@@ -113,7 +140,6 @@ async function getPendingReward(
 async function simulateHarvest(strategyAddress: string, executorAddress: string): Promise<boolean> {
   try {
     const contract = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
-    // Use eth_call to simulate without changing state
     await contract.callStatic.harvest({ from: executorAddress });
     return true;
   } catch {
@@ -122,20 +148,18 @@ async function simulateHarvest(strategyAddress: string, executorAddress: string)
 }
 
 /**
- * Convert a token address to our TokenInfo if known, else create a placeholder
+ * Convert a token address to our TokenInfo if known
  */
 function getTokenInfo(address: string, symbol?: string): TokenInfo {
-  // Check if it's one of our known tokens
   for (const [key, token] of Object.entries(TOKENS)) {
     if (token.address.toLowerCase() === address.toLowerCase()) {
       return token;
     }
   }
-  // Fallback: create a dynamic token info (decimals may be unknown; we'll fetch on-chain)
   return {
     chainId: 137,
     address: address,
-    decimals: 18, // default, will be updated later
+    decimals: 18,
     symbol: symbol || 'UNKNOWN',
     name: 'Unknown Token',
   };
@@ -157,52 +181,59 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
     return [];
   }
 
-  // 2. Process each vault
-  for (const vault of vaults) {
+  log.info(`📋 Processing ${vaults.length} vaults...`);
+
+  let checkedCount = 0;
+  let supportedCount = 0;
+  let rewardFoundCount = 0;
+  let profitableCount = 0;
+
+  // Limit to first 50 to avoid rate limits
+  const limitedVaults = vaults.slice(0, 50);
+
+  for (const vault of limitedVaults) {
     try {
+      checkedCount++;
+
       const strategyAddress = vault.strategy;
-      if (!ethers.utils.isAddress(strategyAddress)) {
+      if (!strategyAddress || !ethers.utils.isAddress(strategyAddress)) {
         log.debug(`Skipping vault ${vault.id}: invalid strategy address`);
         continue;
       }
 
-      // 2a. Check if strategy supports harvest
+      // Check if strategy supports harvest
       const hasHarvest = await strategySupportsHarvest(strategyAddress);
       if (!hasHarvest) {
         log.debug(`Skipping vault ${vault.id}: strategy does not support harvest()`);
         continue;
       }
+      supportedCount++;
 
-      // 2b. Get pending reward for executor
+      // Get pending reward for executor
       const rewardAmount = await getPendingReward(strategyAddress, executorAddress);
       if (!rewardAmount || rewardAmount.isZero()) {
         log.debug(`Skipping vault ${vault.id}: no pending reward for executor`);
         continue;
       }
+      rewardFoundCount++;
 
-      // 2c. Simulate harvest to ensure it succeeds
+      // Simulate harvest
       const harvestSimSuccess = await simulateHarvest(strategyAddress, executorAddress);
       if (!harvestSimSuccess) {
         log.debug(`Skipping vault ${vault.id}: harvest simulation failed`);
         continue;
       }
 
-      // 2d. Determine reward token
+      // Determine reward token
       let rewardTokenAddress = vault.earnedTokenAddress;
       if (!rewardTokenAddress || !ethers.utils.isAddress(rewardTokenAddress)) {
-        // Try to get from strategy
-        const tokenFromStrategy = await getRewardToken(strategyAddress);
-        if (tokenFromStrategy && ethers.utils.isAddress(tokenFromStrategy)) {
-          rewardTokenAddress = tokenFromStrategy;
-        } else {
-          log.debug(`Skipping vault ${vault.id}: cannot determine reward token`);
-          continue;
-        }
+        log.debug(`Skipping vault ${vault.id}: cannot determine reward token`);
+        continue;
       }
 
       const rewardToken = getTokenInfo(rewardTokenAddress, vault.earnedToken || 'REWARD');
 
-      // 2e. Get reward token price via Enso quote
+      // Get reward token price via Enso quote
       const amountIn = rewardAmount.toString();
       const quote = await getEnsoRouteQuote(rewardToken, TOKENS.USDC, amountIn);
       if (!quote) {
@@ -210,42 +241,38 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
         continue;
       }
 
-      // 2f. Calculate gas cost for harvest + swap
+      // Calculate gas cost
       const gasPrice = await provider.getGasPrice();
-      // Estimate gas for harvest call (simulate to get gas usage)
       let harvestGasEstimate: ethers.BigNumber;
       try {
         const contract = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
         harvestGasEstimate = await contract.estimateGas.harvest({ from: executorAddress });
-        // Add 20% buffer
         harvestGasEstimate = harvestGasEstimate.mul(120).div(100);
       } catch {
-        // Fallback: use a typical gas value
         harvestGasEstimate = ethers.BigNumber.from(200000);
       }
 
-      // Add gas for swap (estimated via Enso quote if available, else fallback)
       const swapGas = ethers.BigNumber.from(quote.raw?.gas || 150000);
       const totalGas = harvestGasEstimate.add(swapGas);
       const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(totalGas)));
       const gasCostUsd = gasCostNative * nativePriceUsd;
 
-      // 2g. Calculate gross and net profit
+      // Calculate gross and net profit
       const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, rewardToken.decimals)) * quote.price;
-      const swapCostBps = 10; // 0.1% slippage buffer
+      const swapCostBps = 10;
       const swapCostUsd = rewardUsd * (swapCostBps / 10000);
       const netProfitUsd = rewardUsd - gasCostUsd - swapCostUsd;
 
-      // 2h. If profitable, create candidate
       const minProfit = env.CLASSIC_INCENTIVE_MIN_PROFIT_USD || env.DEFAULT_MIN_PROFIT_USD || 0.05;
       if (netProfitUsd < minProfit) {
         log.debug(`Skipping vault ${vault.id}: net profit $${netProfitUsd.toFixed(4)} below threshold`);
         continue;
       }
+      profitableCount++;
 
       const candidate: OpportunityCandidate = {
         id: `beefy-${vault.id}-${Date.now()}`,
-        strategy: 'classicIncentive', // we'll treat it as classic incentive for now
+        strategy: 'classicIncentive',
         protocol: 'beefy',
         params: {
           source: 'beefy',
@@ -266,7 +293,6 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
         sourceTimestamp: Date.now(),
       };
 
-      // Push to queue
       pushCandidate(candidate);
       candidates.push(candidate);
 
@@ -284,6 +310,8 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
     }
   }
 
+  log.info(`📊 Beefy discovery stats: ${checkedCount} checked, ${supportedCount} supported, ${rewardFoundCount} with rewards, ${profitableCount} profitable`);
   log.info(`📦 Beefy discovery complete: ${candidates.length} candidates found`);
+
   return candidates;
 }
