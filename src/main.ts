@@ -18,12 +18,26 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const HOURLY_SUMMARY_MS = 60 * 60 * 1000;
 const DAILY_SUMMARY_MS = 24 * 60 * 60 * 1000;
 
+// Helper to check if any strategy is enabled
+function isAnyStrategyEnabled(): boolean {
+  if (!env.MASTER_STRATEGY_ENABLED) return false;
+  return (
+    env.STRATEGY_CLASSIC_ENABLED ||
+    env.STRATEGY_LP_ENABLED ||
+    env.STRATEGY_VAULT_ENABLED ||
+    env.STRATEGY_DEBT_ENABLED ||
+    env.STRATEGY_HARVEST_ENABLED
+  );
+}
+
 async function bootstrap(): Promise<void> {
   log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v2)', {
     env: env.NODE_ENV,
     executionWallet: executionWallet.address,
     discordAlerts: isDiscordConfigured() ? 'enabled' : 'disabled',
     gasReserveUsd: env.SWEEP_KEEP_GAS_RESERVE_USD,
+    masterEnabled: env.MASTER_STRATEGY_ENABLED,
+    classicIncentiveEnabled: env.STRATEGY_CLASSIC_ENABLED,
   });
 
   // ✅ Initialize database schema
@@ -40,15 +54,19 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
-  // ✅ Step 2: Initialize farms (auto-discovers Gamma farms)
-  try {
-    await initializeFarms();
-    log.info('Farms initialized successfully');
-  } catch (err) {
-    log.error('Failed to initialize farms', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    // Non-fatal: continue without farms
+  // ✅ Step 2: Initialize farms ONLY if Harvest is enabled
+  if (env.STRATEGY_HARVEST_ENABLED && env.MASTER_STRATEGY_ENABLED) {
+    try {
+      await initializeFarms();
+      log.info('Farms initialized successfully');
+    } catch (err) {
+      log.error('Failed to initialize farms', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Non-fatal: continue without farms
+    }
+  } else {
+    log.info('Skipping farm initialization (Harvest strategy disabled or master toggle off)');
   }
 
   // ✅ Step 3: Start health server
@@ -59,7 +77,13 @@ async function bootstrap(): Promise<void> {
   log.info('Initial native token price fetched', { nativePrice });
 
   // ✅ Step 5: Start worker pool (so workers are ready for candidates)
-  startWorkerPool();
+  // Only start if at least one strategy is enabled
+  if (isAnyStrategyEnabled()) {
+    startWorkerPool();
+    log.info('Worker pool started');
+  } else {
+    log.warn('⚠️ No strategies enabled — worker pool NOT started. Set MASTER_STRATEGY_ENABLED=true and/or individual strategy flags to true.');
+  }
 
   // ✅ Step 6: Start scan loop (workers are already waiting)
   startScanLoop();
