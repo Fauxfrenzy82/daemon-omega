@@ -94,12 +94,28 @@ export const env = {
   LOG_LEVEL: optional('LOG_LEVEL', 'info'),
   NODE_ENV: optional('NODE_ENV', 'production'),
 
-  // Strategy toggles
-  STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', true),
-  STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', true),
-  STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', true),
-  STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', true),
+  // ============================================
+  // MASTER TOGGLE — Set to false to disable ALL strategies
+  // ============================================
+  MASTER_STRATEGY_ENABLED: optionalBool('MASTER_STRATEGY_ENABLED', true),
+
+  // ============================================
+  // STRATEGY TOGGLES — Set to true/false per strategy
+  // ============================================
+  // Classic Incentive — Aave V3 + QuickSwap V3 incentive programs
   STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', true),
+
+  // LP Entry/Exit — DEX round-trip arbitrage
+  STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', false),
+
+  // Vault Arbitrage — StataToken wrapper arbitrage
+  STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', false),
+
+  // Debt Position — Aave V3 liquidation arbitrage
+  STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', false),
+
+  // Harvest + Spot Sell — claim rewards and sell
+  STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', false),
 
   // Enso route
   USE_ENSO_ROUTE_PRIMARY: optionalBool('USE_ENSO_ROUTE_PRIMARY', true),
