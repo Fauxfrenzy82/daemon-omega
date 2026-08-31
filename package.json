@@ -1,7 +1,7 @@
 {
   "name": "chronos-protocolink",
   "version": "1.0.0",
-  "description": "DeFi arbitrage system using Enso for execution and Protocolink for sweeps.",
+  "description": "DeFi arbitrage system using Enso for execution.",
   "main": "dist/main.js",
   "scripts": {
     "prebuild": "npm install",
@@ -9,6 +9,9 @@
     "start": "node dist/main.js",
     "dev": "ts-node src/main.ts",
     "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": "20.18.0"
   },
   "dependencies": {
     "@ensofinance/sdk": "^2.5.0",
@@ -21,9 +24,6 @@
     "pg": "^8.12.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   },
   "license": "UNLICENSED",
   "private": true
