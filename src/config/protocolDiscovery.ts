@@ -2,7 +2,7 @@
 
 import { createLogger } from '../utils/logger';
 import { discoverGammaPools, discoverPoolsOnChain } from './farmDiscovery';
-import { registerMerklPools } from '../strategies/classicIncentive/protocolRegistry';
+import { setMerklProtocols } from '../strategies/classicIncentive/protocolRegistry';
 
 const log = createLogger('protocolDiscovery');
 
@@ -26,13 +26,13 @@ export async function discoverAllProtocols(): Promise<void> {
       token1: p.token1,
       totalValueLockedUSD: p.totalValueLockedUSD || '0',
     }));
-    registerMerklPools(converted);
+    setMerklProtocols(converted);
     log.info(`✅ Registered ${converted.length} Merkl pools for later incentive checking`);
     return;
   }
 
   // 2. Register pools (not yet checked for Merkl incentives)
-  registerMerklPools(pools);
+  setMerklProtocols(pools);
   log.info(`✅ Registered ${pools.length} Merkl pools – will check claimable rewards in scan cycle`);
   log.info('✅ Protocol discovery complete');
 }
