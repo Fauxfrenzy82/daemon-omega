@@ -11,72 +11,29 @@ import { withRetry, isTransientError } from '../../utils/retry';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
 import { 
-  ProtocolConfig, 
+  ProtocolConfig,
   getHarvestableProtocols,
   getContractInterface,
   isHarvestLikeFunction,
   isHarvestable,
-  createGammaProtocol,
-  createFarmProtocol,
 } from './protocolRegistry';
-import { discoverGammaFarms } from '../../config/farmDiscovery';
 
 const log = createLogger('classicIncentive');
 
 // ============================================
-// STEP 1: DYNAMIC PROTOCOL DISCOVERY
+// STEP 1: DISCOVER PROTOCOLS
 // ============================================
 
 async function discoverProtocols(): Promise<ProtocolConfig[]> {
   const protocols: ProtocolConfig[] = [];
 
-  // 1. Add hardcoded harvestable protocols
+  // Get all harvestable protocols (includes fallbacks + env-based)
   for (const p of getHarvestableProtocols()) {
     // Skip if address is not set for optional protocols
     if (p.id.startsWith('beefy') && !ethers.utils.isAddress(p.address)) continue;
     if (p.id === 'convex-rewards' && !ethers.utils.isAddress(p.address)) continue;
     if (p.id === 'harvest-finance' && !ethers.utils.isAddress(p.address)) continue;
     protocols.push(p);
-  }
-
-  // 2. Discover Gamma farms dynamically
-  try {
-    log.info('🔍 Discovering Gamma farms from subgraph...');
-    const gammaFarms = await discoverGammaFarms();
-    
-    for (const [pairId, address] of Object.entries(gammaFarms)) {
-      if (!ethers.utils.isAddress(address)) continue;
-      
-      let rewardToken = TOKENS.QUICK;
-      let entryToken = TOKENS.USDC;
-      
-      if (pairId.includes('WETH')) rewardToken = TOKENS.WETH;
-      else if (pairId.includes('WBTC')) rewardToken = TOKENS.WBTC;
-      else if (pairId.includes('WMATIC')) rewardToken = TOKENS.WMATIC;
-      else if (pairId.includes('AAVE')) rewardToken = TOKENS.AAVE;
-      
-      const protocol = createGammaProtocol(pairId, address, rewardToken, entryToken);
-      protocols.push(protocol);
-      log.info(`✅ Discovered Gamma farm: ${pairId} -> ${address}`);
-    }
-  } catch (err) {
-    log.warn('Failed to discover Gamma farms', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-
-  // 3. Discover QuickSwap farms
-  try {
-    const farmAddress = env.QUICKSWAP_FARM_ADDRESS;
-    if (farmAddress && ethers.utils.isAddress(farmAddress)) {
-      const protocol = createFarmProtocol('main', farmAddress, TOKENS.QUICK, TOKENS.USDC);
-      protocols.push(protocol);
-      log.info(`✅ Added QuickSwap farm: ${farmAddress}`);
-    }
-  } catch (err) {
-    log.debug('QuickSwap farm discovery skipped', {
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 
   const harvestable = protocols.filter(p => isHarvestable(p));
