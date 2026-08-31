@@ -104,4 +104,27 @@ function encodeHarvestCall(protocol: ProtocolConfig, functionName: string): stri
 
   const executorAddress = executionWallet.address;
 
-  // Special cases for specific protocols
+  // Special cases for specific protocols  if (protocol.id === 'aave-v3-rewards') {
+    // claimAllRewards(address[] assets, address to)
+    return iface.encodeFunctionData('claimAllRewards', [[], executorAddress]);
+  }
+
+  if (protocol.id === 'balancer-gauge') {
+    if (functionName === 'getReward') {
+      return iface.encodeFunctionData('getReward', [executorAddress]);
+    }
+    return iface.encodeFunctionData('claim_rewards', []);
+  }
+
+  // Generic: try to call with no args
+  try {
+    return iface.encodeFunctionData(functionName, []);
+  } catch {
+    // Try with executor address as arg
+    try {
+      return iface.encodeFunctionData(functionName, [executorAddress]);
+    } catch {
+      throw new Error(`Cannot encode function ${functionName} for protocol ${protocol.id}`);
+    }
+  }
+}
