@@ -11,4 +11,8 @@ export {
   isHarvestLikeFunction,
   getContractInterface,
   setDiscoveredProtocols,
+  setMerklProtocols,
+  getMerklProtocols,
+  createGammaProtocol,
+  createFarmProtocol,
 } from './protocolRegistry';
