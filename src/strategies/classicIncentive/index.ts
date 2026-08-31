@@ -2,17 +2,34 @@
 
 export { discoverClassicIncentive } from './discover';
 export { buildActionPlan } from './buildActionPlan';
-export { 
-  ProtocolConfig, 
-  RewardType, 
+export {
+  // Types
+  ProtocolConfig,
+  RewardType,
+  
+  // Constants
   HARVESTABLE_PROTOCOLS,
+  BEEFY_ABI,
+  CONVEX_ABI,
+  MERKL_ABI,
+  GAMMA_ABI,
+  FARM_ABI,
+  
+  // Getters
   getHarvestableProtocols,
+  getMerklProtocols,
+  getMerklPools,
+  
+  // Helpers
   isHarvestable,
   isHarvestLikeFunction,
   getContractInterface,
-  setDiscoveredProtocols,
+  
+  // Setters
   setMerklProtocols,
-  getMerklProtocols,
+  setDiscoveredProtocols,
+  
+  // Factories
   createGammaProtocol,
   createFarmProtocol,
 } from './protocolRegistry';
