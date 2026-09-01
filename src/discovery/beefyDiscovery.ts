@@ -15,7 +15,7 @@ const log = createLogger('beefyDiscovery');
 
 const BEEFY_API_URL = 'https://api.beefy.finance/vaults';
 
-// ✅ Expanded ABI to detect caller rewards
+// ABIs
 const STRATEGY_ABI = [
   'function harvest() external',
   'function earned(address) view returns (uint256)',
@@ -53,8 +53,11 @@ interface BeefyVault {
   pricePerFullShare: string;
 }
 
-// ✅ Valid statuses that can be harvested
+// ✅ Statuses we consider executable
 const EXECUTABLE_STATUSES = ['active', 'stable', 'experimental'];
+
+// ✅ Statuses we want to test (EOL)
+const TEST_STATUSES = ['eol'];
 
 /**
  * Fetch all Beefy vaults
@@ -75,14 +78,6 @@ async function fetchBeefyVaults(): Promise<BeefyVault[]> {
       vaultsArray = Object.values(data);
     }
 
-    const chainDistribution = vaultsArray.reduce((acc: Record<string, number>, v) => {
-      const chain = v.chain || v.network || 'unknown';
-      acc[chain] = (acc[chain] || 0) + 1;
-      return acc;
-    }, {});
-
-    log.info('📊 Chain distribution', { chainDistribution });
-
     return vaultsArray;
   } catch (err) {
     log.error('❌ Failed to fetch Beefy vaults:', {
@@ -93,128 +88,142 @@ async function fetchBeefyVaults(): Promise<BeefyVault[]> {
 }
 
 /**
- * ✅ Log status distribution for Polygon vaults
+ * ✅ NEW: Log active vault distribution across all chains
  */
-function logPolygonStatusDistribution(vaults: BeefyVault[]): void {
-  const polygonVaults = vaults.filter(v => (v.chain || v.network || '').toLowerCase() === 'polygon');
+function logActiveVaultDistribution(vaults: BeefyVault[]): void {
+  const activeVaults = vaults.filter(v => EXECUTABLE_STATUSES.includes(v.status));
   
-  if (polygonVaults.length === 0) {
-    log.warn('⚠️ No Polygon vaults found');
-    return;
-  }
-
-  const statusDistribution = polygonVaults.reduce((acc: Record<string, number>, v) => {
-    const status = v.status || 'unknown';
-    acc[status] = (acc[status] || 0) + 1;
+  const distribution = activeVaults.reduce((acc: Record<string, number>, v) => {
+    const chain = v.chain || v.network || 'unknown';
+    acc[chain] = (acc[chain] || 0) + 1;
     return acc;
   }, {});
 
-  log.info('📊 Polygon vault status distribution', { statusDistribution });
+  // Sort by count descending
+  const sorted = Object.entries(distribution).sort((a, b) => b[1] - a[1]);
 
-  // ✅ Log which statuses are executable vs skipped
-  const executable = Object.keys(statusDistribution).filter(s => EXECUTABLE_STATUSES.includes(s));
-  const skipped = Object.keys(statusDistribution).filter(s => !EXECUTABLE_STATUSES.includes(s));
-
-  log.info('✅ Executable statuses (will scan):', { statuses: executable });
-  log.info('⏭️ Skipped statuses (will ignore):', { statuses: skipped });
-
-  // Log sample vaults for each executable status
-  for (const status of executable) {
-    const samples = polygonVaults
-      .filter(v => v.status === status)
-      .slice(0, 3)
-      .map(v => ({ id: v.id, name: v.name, strategy: v.strategy }));
-
-    if (samples.length > 0) {
-      log.info(`📋 Sample ${status} vaults`, { samples });
-    }
+  log.info('📊 Active vault distribution across chains:');
+  for (const [chain, count] of sorted) {
+    log.info(`   ${chain}: ${count} vaults`);
   }
+
+  // ✅ Show which chains have the most opportunities
+  const topChains = sorted.slice(0, 5);
+  log.info(`🏆 Top 5 chains by active vaults: ${topChains.map(([c, n]) => `${c} (${n})`).join(', ')}`);
 }
 
 /**
- * ✅ CORRECT: Simulate harvest and trace what the executor receives
+ * ✅ NEW: Test EOL vaults with simulation
  */
-async function simulateHarvestAndTraceRewards(
-  strategyAddress: string,
-  vaultAddress: string,
+async function testEolVaults(
+  vaults: BeefyVault[],
   executorAddress: string,
-  rewardTokenAddress: string
-): Promise<{
-  success: boolean;
-  rewardAmount: ethers.BigNumber;
-  rewardToken: string;
-  gasEstimate: ethers.BigNumber;
-  error?: string;
-}> {
-  try {
-    const strategy = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
-    const rewardToken = new ethers.Contract(rewardTokenAddress, ERC20_ABI, provider);
+  nativePriceUsd: number,
+  limit: number = 10
+): Promise<void> {
+  const eolVaults = vaults.filter(v => 
+    v.status === 'eol' && 
+    v.chain === 'polygon' &&
+    v.strategy &&
+    ethers.utils.isAddress(v.strategy)
+  );
 
-    // Check if there's harvestable balance
-    const strategyBalance = await rewardToken.balanceOf(strategyAddress);
-    const vaultBalance = await rewardToken.balanceOf(vaultAddress);
-    const totalHarvestable = strategyBalance.add(vaultBalance);
-
-    if (totalHarvestable.isZero()) {
-      return {
-        success: false,
-        rewardAmount: ethers.BigNumber.from(0),
-        rewardToken: rewardTokenAddress,
-        gasEstimate: ethers.BigNumber.from(200000),
-        error: 'No harvestable balance',
-      };
-    }
-
-    // Estimate gas for harvest
-    let gasEstimate: ethers.BigNumber;
-    try {
-      gasEstimate = await strategy.estimateGas.harvest({ from: executorAddress });
-    } catch {
-      gasEstimate = ethers.BigNumber.from(200000);
-    }
-
-    // ✅ Estimate caller fee from Beefy's fee structure
-    // The caller fee is typically 0.05% (5 bps) of the harvest value
-    // This is the "call" fee from the /fees endpoint
-    const callerFeeBps = 5; // 0.05%
-    const callerReward = totalHarvestable.mul(callerFeeBps).div(10000);
-
-    if (callerReward.isZero()) {
-      return {
-        success: false,
-        rewardAmount: ethers.BigNumber.from(0),
-        rewardToken: rewardTokenAddress,
-        gasEstimate,
-        error: 'Caller reward too small',
-      };
-    }
-
-    // ✅ Try to simulate harvest to verify it won't revert
-    try {
-      await strategy.callStatic.harvest({ from: executorAddress });
-    } catch (err) {
-      // Harvest simulation failed - might still work with different params
-      log.debug('Harvest simulation failed, but continuing with estimate', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    return {
-      success: true,
-      rewardAmount: callerReward,
-      rewardToken: rewardTokenAddress,
-      gasEstimate,
-    };
-
-  } catch (err) {
-    return {
-      success: false,
-      rewardAmount: ethers.BigNumber.from(0),
-      rewardToken: rewardTokenAddress,
-      gasEstimate: ethers.BigNumber.from(200000),
-      error: err instanceof Error ? err.message : String(err),
-    };
+  if (eolVaults.length === 0) {
+    log.info('📭 No EOL vaults to test on Polygon');
+    return;
   }
+
+  log.info(`🧪 Testing ${Math.min(eolVaults.length, limit)} EOL Polygon vaults...`);
+
+  let tested = 0;
+  let hasHarvestFunction = 0;
+  let hasBalance = 0;
+  let simulationSuccess = 0;
+
+  for (const vault of eolVaults.slice(0, limit)) {
+    try {
+      tested++;
+      const strategyAddress = vault.strategy;
+      const vaultAddress = vault.earnContractAddress;
+      const rewardTokenAddress = vault.earnedTokenAddress;
+
+      if (!rewardTokenAddress || !ethers.utils.isAddress(rewardTokenAddress)) {
+        log.debug(`Skipping ${vault.id}: invalid reward token`);
+        continue;
+      }
+
+      const strategy = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
+      const rewardToken = new ethers.Contract(rewardTokenAddress, ERC20_ABI, provider);
+
+      // ✅ Check if harvest() exists
+      let hasHarvest = false;
+      try {
+        await strategy.callStatic.harvest({ from: executorAddress });
+        hasHarvest = true;
+        hasHarvestFunction++;
+      } catch {
+        // harvest() doesn't exist or reverts
+        log.debug(`  ${vault.id}: harvest() not available`);
+        continue;
+      }
+
+      // ✅ Check if there's any balance to harvest
+      const strategyBalance = await rewardToken.balanceOf(strategyAddress);
+      const vaultBalance = await rewardToken.balanceOf(vaultAddress);
+      const totalHarvestable = strategyBalance.add(vaultBalance);
+
+      if (totalHarvestable.isZero()) {
+        log.debug(`  ${vault.id}: no harvestable balance`);
+        continue;
+      }
+      hasBalance++;
+
+      // ✅ Try to get caller fee estimate
+      // The caller fee is typically 0.05% (5 bps)
+      const callerFeeBps = 5;
+      const callerReward = totalHarvestable.mul(callerFeeBps).div(10000);
+
+      if (callerReward.isZero()) {
+        log.debug(`  ${vault.id}: caller reward too small`);
+        continue;
+      }
+
+      // ✅ Get gas estimate
+      let gasEstimate: ethers.BigNumber;
+      try {
+        gasEstimate = await strategy.estimateGas.harvest({ from: executorAddress });
+      } catch {
+        gasEstimate = ethers.BigNumber.from(200000);
+      }
+
+      // ✅ Calculate potential profit
+      const rewardTokenInfo = getTokenInfo(rewardTokenAddress, vault.earnedToken || 'REWARD');
+      const gasPrice = await provider.getGasPrice();
+      const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate.mul(120).div(100))));
+      const gasCostUsd = gasCostNative * nativePriceUsd;
+
+      const rewardUsd = Number(ethers.utils.formatUnits(callerReward, rewardTokenInfo.decimals)) * 1; // placeholder price
+      const netProfitUsd = rewardUsd - gasCostUsd;
+
+      simulationSuccess++;
+
+      log.info(`✅ EOL vault ${vault.id} is harvestable!`, {
+        name: vault.name,
+        strategy: strategyAddress,
+        rewardToken: rewardTokenInfo.symbol,
+        harvestableBalance: ethers.utils.formatUnits(totalHarvestable, rewardTokenInfo.decimals),
+        estimatedCallerReward: ethers.utils.formatUnits(callerReward, rewardTokenInfo.decimals),
+        estimatedGasUsd: gasCostUsd.toFixed(4),
+        estimatedNetProfitUsd: netProfitUsd.toFixed(4),
+        status: 'EOL - but harvest works!',
+      });
+
+    } catch (err) {
+      log.debug(`  Error testing ${vault.id}: ${String(err)}`);
+    }
+  }
+
+  log.info(`📊 EOL test results: ${tested} tested, ${hasHarvestFunction} have harvest(), ${hasBalance} have balance, ${simulationSuccess} simulation successes`);
 }
 
 /**
@@ -236,6 +245,108 @@ function getTokenInfo(address: string, symbol?: string): TokenInfo {
 }
 
 /**
+ * Check if harvestable value exists
+ */
+async function getHarvestableValue(
+  strategyAddress: string,
+  vaultAddress: string,
+  rewardTokenAddress: string
+): Promise<{ hasValue: boolean; amount: ethers.BigNumber }> {
+  try {
+    const rewardToken = new ethers.Contract(rewardTokenAddress, ERC20_ABI, provider);
+    const strategy = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
+
+    const strategyBalance = await rewardToken.balanceOf(strategyAddress);
+    const vaultBalance = await rewardToken.balanceOf(vaultAddress);
+
+    let earnedAmount = ethers.BigNumber.from(0);
+    try {
+      earnedAmount = await strategy.earned(vaultAddress);
+    } catch {}
+
+    const totalHarvestable = strategyBalance.add(vaultBalance).add(earnedAmount);
+
+    return {
+      hasValue: totalHarvestable.gt(0),
+      amount: totalHarvestable,
+    };
+  } catch {
+    return { hasValue: false, amount: ethers.BigNumber.from(0) };
+  }
+}
+
+/**
+ * Simulate harvest and trace rewards
+ */
+async function simulateHarvestAndTraceRewards(
+  strategyAddress: string,
+  vaultAddress: string,
+  executorAddress: string,
+  rewardTokenAddress: string
+): Promise<{
+  success: boolean;
+  rewardAmount: ethers.BigNumber;
+  rewardToken: string;
+  gasEstimate: ethers.BigNumber;
+  error?: string;
+}> {
+  try {
+    const strategy = new ethers.Contract(strategyAddress, STRATEGY_ABI, provider);
+    const rewardToken = new ethers.Contract(rewardTokenAddress, ERC20_ABI, provider);
+
+    const strategyBalance = await rewardToken.balanceOf(strategyAddress);
+    const vaultBalance = await rewardToken.balanceOf(vaultAddress);
+    const totalHarvestable = strategyBalance.add(vaultBalance);
+
+    if (totalHarvestable.isZero()) {
+      return {
+        success: false,
+        rewardAmount: ethers.BigNumber.from(0),
+        rewardToken: rewardTokenAddress,
+        gasEstimate: ethers.BigNumber.from(200000),
+        error: 'No harvestable balance',
+      };
+    }
+
+    let gasEstimate: ethers.BigNumber;
+    try {
+      gasEstimate = await strategy.estimateGas.harvest({ from: executorAddress });
+    } catch {
+      gasEstimate = ethers.BigNumber.from(200000);
+    }
+
+    const callerFeeBps = 5;
+    const callerReward = totalHarvestable.mul(callerFeeBps).div(10000);
+
+    if (callerReward.isZero()) {
+      return {
+        success: false,
+        rewardAmount: ethers.BigNumber.from(0),
+        rewardToken: rewardTokenAddress,
+        gasEstimate,
+        error: 'Caller reward too small',
+      };
+    }
+
+    return {
+      success: true,
+      rewardAmount: callerReward,
+      rewardToken: rewardTokenAddress,
+      gasEstimate,
+    };
+
+  } catch (err) {
+    return {
+      success: false,
+      rewardAmount: ethers.BigNumber.from(0),
+      rewardToken: rewardTokenAddress,
+      gasEstimate: ethers.BigNumber.from(200000),
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * Main discovery function
  */
 export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
@@ -251,10 +362,13 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
     return [];
   }
 
-  // 2. Log status distribution for Polygon
-  logPolygonStatusDistribution(allVaults);
+  // ✅ 2. Log active vault distribution across all chains
+  logActiveVaultDistribution(allVaults);
 
-  // 3. ✅ Filter: Polygon + executable status
+  // ✅ 3. Test EOL vaults (simulation only)
+  await testEolVaults(allVaults, executorAddress, nativePriceUsd, 10);
+
+  // 4. Filter: Polygon + executable status
   const polygonVaults = allVaults.filter(v => {
     const chain = (v.chain || v.network || '').toLowerCase();
     return chain === 'polygon' && 
@@ -270,7 +384,7 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
     return [];
   }
 
-  // 4. Process vaults
+  // 5. Process executable vaults
   const limitedVaults = polygonVaults.slice(0, 50);
   let checkedCount = 0;
   let harvestableCount = 0;
@@ -288,7 +402,6 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
         continue;
       }
 
-      // 5. Simulate harvest and trace rewards
       const simulation = await simulateHarvestAndTraceRewards(
         strategyAddress,
         vaultAddress,
@@ -305,7 +418,6 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
 
       const rewardToken = getTokenInfo(rewardTokenAddress, vault.earnedToken || 'REWARD');
 
-      // 6. Quote via Enso
       const amountIn = simulation.rewardAmount.toString();
       const quote = await getEnsoRouteQuote(rewardToken, TOKENS.USDC, amountIn);
 
@@ -314,7 +426,6 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
         continue;
       }
 
-      // 7. Calculate gas + profit
       const gasPrice = await provider.getGasPrice();
       const totalGas = simulation.gasEstimate.mul(120).div(100);
       const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(totalGas)));
@@ -333,7 +444,6 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
 
       profitableCount++;
 
-      // 8. Create candidate
       const candidate: OpportunityCandidate = {
         id: `beefy-${vault.id}-${Date.now()}`,
         strategy: 'classicIncentive',
