@@ -6,208 +6,145 @@ import { provider, executionWallet } from '../../treasury/wallets';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { pushCandidate } from '../../execution/queue';
-import { withRetry, isTransientError } from '../../utils/retry';
 import { getLiveTokenPriceUsd } from '../../utils/priceUtils';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
+import { TOKENS } from '../../config/tokens';
 import {
   ProtocolConfig,
   getHarvestableProtocols,
   getMerklPools,
-  getContractInterface,
 } from './protocolRegistry';
-// ✅ Beefy discovery
 import { discoverBeefyHarvestCandidates } from '../../discovery/beefyDiscovery';
 
 const log = createLogger('classicIncentive');
 
-// ============================================================
-// 1. CHECK HARDCODED HARVEST-TRIGGERED PROTOCOLS (fallbacks)
-// ============================================================
+// ============================================
+// LP REWARD STRATEGY SIMULATION (Merkl/Gamma)
+// ============================================
 
-async function checkHarvestTriggered(
-  protocol: ProtocolConfig,
+/**
+ * Simulate LP reward claims for Merkl pools
+ * This checks if the executor has any claimable rewards
+ */
+async function simulateLpRewardClaims(
+  pools: ProtocolConfig[],
   executorAddress: string,
-  nativePriceUsd: number
-): Promise<OpportunityCandidate | null> {
-  const contract = new ethers.Contract(protocol.address, protocol.abi || [], provider);
+  nativePriceUsd: number,
+  limit: number = 100
+): Promise<{
+  totalChecked: number;
+  hasClaimable: number;
+  profitable: number;
+  avgGasCostUsd: number;
+  avgRewardUsd: number;
+  avgNetProfitUsd: number;
+  results: any[];
+}> {
+  log.info(`🧪 Simulating ${Math.min(pools.length, limit)} Merkl pools for LP rewards...`);
 
-  // Check pending rewards
-  const rewardAmount = await checkEarned(contract, executorAddress);
-  if (!rewardAmount || rewardAmount.lte(0)) return null;
+  let totalChecked = 0;
+  let hasClaimable = 0;
+  let profitable = 0;
+  let totalGasCost = 0;
+  let totalReward = 0;
+  let totalNetProfit = 0;
+  const results: any[] = [];
 
-  // Simulate harvest
-  const simulation = await simulateHarvestGeneric(protocol, rewardAmount, nativePriceUsd);
-  if (!simulation.success || simulation.netProfitUsd < env.CLASSIC_INCENTIVE_MIN_PROFIT_USD) {
-    return null;
-  }
-
-  return createCandidate(protocol, 'harvest', rewardAmount, simulation);
-}
-
-// ============================================================
-// 2. CHECK MERKL CLAIMABLE REWARDS
-// ============================================================
-
-async function checkMerklClaim(
-  pool: ProtocolConfig,
-  executorAddress: string,
-  nativePriceUsd: number
-): Promise<OpportunityCandidate | null> {
-  try {
-    // For Merkl, we need the distributor address; currently using pool.address as placeholder
-    const merklDistributor = pool.address;
-
-    const contract = new ethers.Contract(merklDistributor, [
-      'function claimable(address user, address token) view returns (uint256)',
-    ], provider);
-
-    const claimable = await contract.claimable(executorAddress, pool.rewardToken.address);
-    if (!claimable || claimable.lte(0)) return null;
-
-    const simulation = await simulateClaimGeneric(pool, claimable, nativePriceUsd);
-    if (!simulation.success || simulation.netProfitUsd < env.CLASSIC_INCENTIVE_MIN_PROFIT_USD) {
-      return null;
-    }
-
-    return createCandidate(pool, 'merkl-claim', claimable, simulation);
-  } catch (err) {
-    log.debug(`Merkl claim check failed for ${pool.id}: ${String(err)}`);
-    return null;
-  }
-}
-
-// ============================================================
-// 3. HELPERS
-// ============================================================
-
-async function checkEarned(contract: ethers.Contract, executor: string): Promise<ethers.BigNumber | null> {
-  const methods = ['earned', 'pendingReward', 'pendingRewards', 'claimable_tokens'];
-  for (const method of methods) {
+  for (const pool of pools.slice(0, limit)) {
     try {
-      if (typeof contract[method] === 'function') {
-        const result = await contract[method](executor);
-        if (result && ethers.BigNumber.isBigNumber(result) && result.gt(0)) {
-          return result;
+      totalChecked++;
+
+      // Check if the pool has a claimable function
+      const contract = new ethers.Contract(pool.address, [
+        'function claimable(address user, address token) view returns (uint256)',
+      ], provider);
+
+      let claimableAmount: ethers.BigNumber;
+      try {
+        claimableAmount = await contract.claimable(executorAddress, pool.rewardToken.address);
+      } catch {
+        // Try alternative: earned(address)
+        try {
+          const earnedContract = new ethers.Contract(pool.address, [
+            'function earned(address) view returns (uint256)',
+          ], provider);
+          claimableAmount = await earnedContract.earned(executorAddress);
+        } catch {
+          continue;
         }
       }
-    } catch {}
-  }
-  return null;
-}
 
-async function simulateHarvestGeneric(
-  protocol: ProtocolConfig,
-  rewardAmount: ethers.BigNumber,
-  nativePriceUsd: number
-): Promise<any> {
-  try {
-    const rewardTokenPrice = await getLiveTokenPriceUsd(protocol.rewardToken);
-    const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, protocol.rewardToken.decimals)) * rewardTokenPrice;
+      if (!claimableAmount || claimableAmount.isZero()) {
+        continue;
+      }
+      hasClaimable++;
 
-    const gasPrice = await provider.getGasPrice();
-    const gasEstimate = ethers.BigNumber.from(200000);
-    const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate)));
-    const gasCostUsd = gasCostNative * nativePriceUsd;
+      // Get reward token price via Enso
+      const amountIn = claimableAmount.toString();
+      const quote = await getEnsoRouteQuote(pool.rewardToken, TOKENS.USDC, amountIn);
 
-    const amountIn = rewardAmount.toString();
-    const quote = await getEnsoRouteQuote(protocol.rewardToken, protocol.entryToken, amountIn);
+      if (!quote) {
+        continue;
+      }
 
-    if (!quote) {
-      return { success: false, deltaBalance: 0, gasCostUsd, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
+      // Calculate gas cost for claim + swap
+      const gasPrice = await provider.getGasPrice();
+      const gasEstimate = ethers.BigNumber.from(300000); // Typical claim gas
+      const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate.mul(120).div(100))));
+      const gasCostUsd = gasCostNative * nativePriceUsd;
+
+      // Calculate profit
+      const rewardUsd = Number(ethers.utils.formatUnits(claimableAmount, pool.rewardToken.decimals)) * quote.price;
+      const swapCostBps = 10;
+      const swapCostUsd = rewardUsd * (swapCostBps / 10000);
+      const netProfitUsd = rewardUsd - gasCostUsd - swapCostUsd;
+
+      if (netProfitUsd > env.DEFAULT_MIN_PROFIT_USD) {
+        profitable++;
+        totalGasCost += gasCostUsd;
+        totalReward += rewardUsd;
+        totalNetProfit += netProfitUsd;
+
+        results.push({
+          poolId: pool.id,
+          rewardToken: pool.rewardToken.symbol,
+          rewardUsd: rewardUsd.toFixed(4),
+          gasCostUsd: gasCostUsd.toFixed(4),
+          netProfitUsd: netProfitUsd.toFixed(4),
+        });
+      }
+    } catch (err) {
+      // Skip errors
     }
-
-    const swapCostBps = 10;
-    const swapCostUsd = rewardUsd * (swapCostBps / 10000);
-
-    let callerIncentiveUsd = rewardUsd;
-    if (protocol.callerIncentiveBps) {
-      callerIncentiveUsd = rewardUsd * (protocol.callerIncentiveBps / 10000);
-    }
-
-    const netProfitUsd = callerIncentiveUsd - gasCostUsd - swapCostUsd;
-
-    return {
-      success: netProfitUsd > 0,
-      deltaBalance: callerIncentiveUsd,
-      gasCostUsd,
-      swapCostUsd,
-      callerIncentiveUsd,
-      netProfitUsd,
-    };
-  } catch (err) {
-    return { success: false, deltaBalance: 0, gasCostUsd: 0, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
   }
-}
 
-async function simulateClaimGeneric(
-  protocol: ProtocolConfig,
-  rewardAmount: ethers.BigNumber,
-  nativePriceUsd: number
-): Promise<any> {
-  try {
-    const rewardTokenPrice = await getLiveTokenPriceUsd(protocol.rewardToken);
-    const rewardUsd = Number(ethers.utils.formatUnits(rewardAmount, protocol.rewardToken.decimals)) * rewardTokenPrice;
+  const avgGasCostUsd = profitable > 0 ? totalGasCost / profitable : 0;
+  const avgRewardUsd = profitable > 0 ? totalReward / profitable : 0;
+  const avgNetProfitUsd = profitable > 0 ? totalNetProfit / profitable : 0;
 
-    const gasPrice = await provider.getGasPrice();
-    const gasEstimate = ethers.BigNumber.from(250000);
-    const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasEstimate)));
-    const gasCostUsd = gasCostNative * nativePriceUsd;
+  log.info('📊 LP Reward simulation results:', {
+    totalChecked,
+    hasClaimable,
+    profitable,
+    avgGasCostUsd: avgGasCostUsd.toFixed(4),
+    avgRewardUsd: avgRewardUsd.toFixed(4),
+    avgNetProfitUsd: avgNetProfitUsd.toFixed(4),
+  });
 
-    const amountIn = rewardAmount.toString();
-    const quote = await getEnsoRouteQuote(protocol.rewardToken, protocol.entryToken, amountIn);
-
-    if (!quote) {
-      return { success: false, deltaBalance: 0, gasCostUsd, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
-    }
-
-    const swapCostBps = 10;
-    const swapCostUsd = rewardUsd * (swapCostBps / 10000);
-
-    const netProfitUsd = rewardUsd - gasCostUsd - swapCostUsd;
-
-    return {
-      success: netProfitUsd > 0,
-      deltaBalance: rewardUsd,
-      gasCostUsd,
-      swapCostUsd,
-      callerIncentiveUsd: rewardUsd,
-      netProfitUsd,
-    };
-  } catch (err) {
-    return { success: false, deltaBalance: 0, gasCostUsd: 0, swapCostUsd: 0, callerIncentiveUsd: 0, netProfitUsd: 0 };
-  }
-}
-
-function createCandidate(
-  protocol: ProtocolConfig,
-  actionType: 'harvest' | 'merkl-claim',
-  rewardAmount: ethers.BigNumber,
-  simulation: any
-): OpportunityCandidate {
   return {
-    id: `${actionType}-${protocol.id}-${Date.now()}`,
-    strategy: 'classicIncentive',
-    protocol: protocol.id,
-    params: {
-      protocol,
-      actionType,
-      rewardAmount: rewardAmount.toString(),
-      rewardToken: protocol.rewardToken,
-      entryToken: protocol.entryToken,
-      callerIncentiveUsd: simulation.callerIncentiveUsd || simulation.deltaBalance,
-      simulation,
-    },
-    estimatedGrossProfitUsd: simulation.deltaBalance,
-    estimatedNetProfitUsd: simulation.netProfitUsd,
-    estimatedCostUsd: simulation.gasCostUsd + simulation.swapCostUsd,
-    actionPlan: null,
-    sourceTimestamp: Date.now(),
+    totalChecked,
+    hasClaimable,
+    profitable,
+    avgGasCostUsd,
+    avgRewardUsd,
+    avgNetProfitUsd,
+    results,
   };
 }
 
-// ============================================================
-// 4. MAIN DISCOVERY FUNCTION
-// ============================================================
+// ============================================
+// MAIN DISCOVERY
+// ============================================
 
 export async function discoverClassicIncentive(nativePriceUsd: number): Promise<OpportunityCandidate[]> {
   const allCandidates: OpportunityCandidate[] = [];
@@ -216,40 +153,72 @@ export async function discoverClassicIncentive(nativePriceUsd: number): Promise<
   log.info('🔍 Classic Incentive discovery', { executor, nativePrice: nativePriceUsd });
 
   // -------------------------------------------------
-  // 1. Beefy Harvest Opportunities (Caller Bounty)
+  // 1. Beefy Harvest Opportunities (Multi-Chain)
   // -------------------------------------------------
   log.info('📡 Running Beefy discovery...');
   const beefyCandidates = await discoverBeefyHarvestCandidates(nativePriceUsd);
   allCandidates.push(...beefyCandidates);
 
   // -------------------------------------------------
-  // 2. Harvest-triggered protocols (hardcoded fallbacks)
+  // 2. LP Reward Strategy (Merkl/Gamma on Polygon)
   // -------------------------------------------------
-  const harvestProtocols = getHarvestableProtocols();
-  log.info(`📋 Harvest-triggered protocols: ${harvestProtocols.length}`);
-  for (const protocol of harvestProtocols) {
-    const candidate = await checkHarvestTriggered(protocol, executor, nativePriceUsd);
-    if (candidate) {
-      pushCandidate(candidate);
-      allCandidates.push(candidate);
-    }
-  }
-
-  // -------------------------------------------------
-  // 3. Merkl claimable rewards (Gamma pools)
-  // -------------------------------------------------
+  log.info('📡 Running LP Reward simulation on Polygon...');
   const merklPools = getMerklPools();
-  log.info(`📋 Merkl pools (for claim checking): ${merklPools.length}`);
-  // Limit to top 50 by TVL to avoid overload
-  const topPools = merklPools.slice(0, 50);
-  for (const pool of topPools) {
-    const candidate = await checkMerklClaim(pool, executor, nativePriceUsd);
-    if (candidate) {
+
+  if (merklPools.length > 0) {
+    log.info(`📋 Merkl pools available: ${merklPools.length}`);
+
+    const lpResults = await simulateLpRewardClaims(
+      merklPools,
+      executor,
+      nativePriceUsd,
+      1000 // Simulate up to 1000 pools
+    );
+
+    // Create candidates from profitable LP claims
+    for (const result of lpResults.results) {
+      const pool = merklPools.find(p => p.id === result.poolId);
+      if (!pool) continue;
+
+      const candidate: OpportunityCandidate = {
+        id: `merkl-${pool.id}-${Date.now()}`,
+        strategy: 'classicIncentive',
+        protocol: 'merkl',
+        params: {
+          source: 'merkl',
+          poolId: pool.id,
+          rewardToken: pool.rewardToken,
+          rewardAmount: '0',
+          nativePriceUsd,
+          gasCostUsd: parseFloat(result.gasCostUsd),
+          swapCostUsd: 0,
+          netProfitUsd: parseFloat(result.netProfitUsd),
+        },
+        estimatedGrossProfitUsd: parseFloat(result.rewardUsd),
+        estimatedNetProfitUsd: parseFloat(result.netProfitUsd),
+        estimatedCostUsd: parseFloat(result.gasCostUsd),
+        actionPlan: null,
+        sourceTimestamp: Date.now(),
+      };
+
       pushCandidate(candidate);
       allCandidates.push(candidate);
     }
+
+    log.info(`📊 LP Reward simulation complete: ${lpResults.profitable} profitable claims out of ${lpResults.totalChecked} checked`);
   }
 
-  log.info(`📦 Classic Incentive found ${allCandidates.length} total candidates`);
+  // -------------------------------------------------
+  // 3. Final Summary
+  // -------------------------------------------------
+  log.info('📊 ===== FINAL DISCOVERY SUMMARY =====');
+  log.info(`Total candidates found: ${allCandidates.length}`);
+  log.info(`  - Beefy: ${beefyCandidates.length}`);
+  log.info(`  - LP Rewards: ${allCandidates.length - beefyCandidates.length}`);
+
+  if (allCandidates.length === 0) {
+    log.warn('⚠️ No candidates found - check your configuration and RPC connectivity');
+  }
+
   return allCandidates;
 }
