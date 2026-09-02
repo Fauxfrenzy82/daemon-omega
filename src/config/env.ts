@@ -80,7 +80,7 @@ export const env = {
   DATABASE_URL: required('DATABASE_URL'),
 
   // ============================================
-  // SUBGRAPH (For QuickSwap Discovery – kept but unused)
+  // SUBGRAPH (kept but unused)
   // ============================================
   SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
 
@@ -157,6 +157,8 @@ export const env = {
   ARBITRAGE_TEST_AMOUNTS: optional('ARBITRAGE_TEST_AMOUNTS', '25000,50000,100000,250000'),
   ARBITRAGE_MIN_PROFIT_USD: optionalNumber('ARBITRAGE_MIN_PROFIT_USD', 0.50),
   ARBITRAGE_RATE_LIMIT_MS: optionalNumber('ARBITRAGE_RATE_LIMIT_MS', 150),
+  // ✅ Morpho Blue flashloan provider (0% fee)
+  FLASHLOAN_PROVIDER: optional('FLASHLOAN_PROVIDER', 'morpho'),
 
   // ============================================
   // VAULT ARBITRAGE CONFIG
