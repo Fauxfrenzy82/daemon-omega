@@ -64,7 +64,7 @@ async function fetchMorphoRates(): Promise<Record<string, { supplyApy: number; b
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
     });
-    const json = await res.json();
+    const json: any = await res.json(); // ✅ FIX: explicitly type as 'any'
     const items = json.data?.markets?.items || [];
     const rates: Record<string, { supplyApy: number; borrowApy: number }> = {};
 
