@@ -1,3 +1,5 @@
+// src/scanner/scanLoop.ts
+
 import { createLogger } from '../utils/logger';
 import { recordScanCycle } from '../utils/healthServer';
 import { evaluateCircuitBreaker, isBreakerTripped } from '../risk/circuitBreaker';
@@ -5,11 +7,8 @@ import { hasExecutionCapacity } from '../execution/concurrency';
 import { env } from '../config/env';
 import { fetchNativePriceUsd } from '../config/priceFeeds';
 import { OpportunityCandidate } from '../strategies/common/opportunityCandidate';
-import { discoverLPEntryExit } from '../strategies/lpEntryExit/discover';
-import { discoverVaultArb } from '../strategies/vaultArb/discover';
-import { discoverDebtPosition } from '../strategies/debtPosition/discover';
-import { discoverHarvestShort } from '../strategies/harvestShort/discover';
-import { discoverClassicIncentive } from '../strategies/classicIncentive/discover';
+import { discoverArbitrage } from '../strategies/arbitrage/discover';
+// import { discoverClassicIncentive } from '../strategies/classicIncentive/discover';
 
 const log = createLogger('scanLoop');
 
@@ -24,35 +23,18 @@ function isStrategyEnabled(strategyEnvVar: boolean): boolean {
 
 // All strategies with their enabled status derived from env + master toggle
 const discoverers = [
+  // Temporarily disabled Classic Incentive
+  // { 
+  //   name: 'Classic Incentive', 
+  //   fn: discoverClassicIncentive, 
+  //   enabled: isStrategyEnabled(env.STRATEGY_CLASSIC_ENABLED),
+  //   description: 'Instant‑claim incentive programs'
+  // },
   { 
-    name: 'LP Entry/Exit', 
-    fn: discoverLPEntryExit, 
-    enabled: isStrategyEnabled(env.STRATEGY_LP_ENABLED),
-    description: 'DEX round‑trip arbitrage'
-  },
-  { 
-    name: 'Vault Arbitrage', 
-    fn: discoverVaultArb, 
-    enabled: isStrategyEnabled(env.STRATEGY_VAULT_ENABLED),
-    description: 'ERC‑4626 StataToken wrapper arbitrage'
-  },
-  { 
-    name: 'Debt Position', 
-    fn: discoverDebtPosition, 
-    enabled: isStrategyEnabled(env.STRATEGY_DEBT_ENABLED),
-    description: 'Aave V3 liquidation arbitrage'
-  },
-  { 
-    name: 'Harvest + Spot Sell', 
-    fn: discoverHarvestShort, 
-    enabled: isStrategyEnabled(env.STRATEGY_HARVEST_ENABLED),
-    description: 'Claim rewards and sell immediately'
-  },
-  { 
-    name: 'Classic Incentive', 
-    fn: discoverClassicIncentive, 
-    enabled: isStrategyEnabled(env.STRATEGY_CLASSIC_ENABLED),
-    description: 'Instant‑claim incentive programs'
+    name: 'Arbitrage', 
+    fn: discoverArbitrage, 
+    enabled: true,
+    description: 'Triangular + Cross-DEX arbitrage'
   },
 ];
 
@@ -109,8 +91,6 @@ async function runScanCycle(): Promise<void> {
       try {
         log.info(`🔍 Running strategy: ${discoverer.name} (${discoverer.description})`);
         candidates = await discoverer.fn(cachedNativePrice);
-        // The discover functions already call pushCandidate, so we don't need to push here
-        // but we keep for summary
         log.debug(`Strategy ${discoverer.name} found ${candidates.length} candidates`);
       } catch (err) {
         status = 'error';
@@ -149,7 +129,6 @@ export function startScanLoop(): void {
   if (loopTimer) return;
   const interval = env.SCAN_INTERVAL_MS ?? 15000;
   log.info('Starting scan loop', { intervalMs: interval });
-  // Start first cycle immediately
   runScanCycle().catch((err) => {
     log.error('Scan cycle error', { error: err instanceof Error ? err.message : String(err) });
   });
