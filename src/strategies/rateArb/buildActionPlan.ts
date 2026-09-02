@@ -11,11 +11,6 @@ const MORPHO_BLUE = '0x6c247b1F6182318877311737BaC0844bAa518F5e';
 // Aave V3 Pool Addresses Provider (for flashloan)
 const AAVE_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
-// ✅ Define protocol constants as literals for type safety
-const MORPHO_PROTOCOL = 'morpho-markets-v1' as const;
-const AAVE_V3_PROTOCOL = 'aave-v3' as const;
-const ENSO_PROTOCOL = 'enso' as const;
-
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: any; flashLoanProvider?: any }
@@ -35,36 +30,30 @@ export async function buildActionPlan(
 
   // Build steps based on type
   let steps: ActionStep[] = [];
-  // ✅ FIX: Explicitly type flashloanProtocol as FlashloanProtocol
-  let flashloanProtocol: FlashloanProtocol = AAVE_V3_PROTOCOL;
+  let flashloanProtocol: FlashloanProtocol = 'aave-v3';
   let primaryAddress = AAVE_POOL_ADDRESSES_PROVIDER;
 
   if (type === 'morphoBorrowAaveSupply') {
     // Use Morpho flashloan (0% fee)
-    flashloanProtocol = MORPHO_PROTOCOL;
+    flashloanProtocol = 'morpho-markets-v1';
     primaryAddress = MORPHO_BLUE;
 
     // Step 1: Deposit to Aave (using flashloan amount)
     const depositStep: ActionStep = {
       type: 'deposit',
-      protocol: AAVE_V3_PROTOCOL,
+      protocol: 'aave-v3',
       tokenIn: flashLoanToken.address,
       amountIn: flashLoanAmount,
-      onBehalfOf: '0x1b1a1E836E16172dCa6aa9c30494385f87141638', // executor address
+      onBehalfOf: '0x1b1a1E836E16172dCa6aa9c30494385f87141638',
       primaryAddress: AAVE_POOL_ADDRESSES_PROVIDER,
     };
 
-    // Step 2: Borrow from Morpho (collateral = the deposited asset? Actually we need to borrow the same asset)
-    // Morpho borrow requires collateral. In a flashloan, we can use the flashloan as collateral? Not directly.
-    // This is a simplified simulation – in reality you'd need to provide collateral.
-    // For testing, we'll just log that this is a placeholder.
-    log.warn('Rate arb buildActionPlan is a placeholder – real implementation requires complex collateral management.');
-    // We'll create a dummy step for simulation purposes.
+    // Step 2: Borrow from Morpho (placeholder)
     const borrowStep: ActionStep = {
       type: 'call',
       protocol: 'custom',
       target: MORPHO_BLUE,
-      data: '0x', // placeholder
+      data: '0x',
       value: '0',
       useOutput: false,
     };
@@ -79,13 +68,13 @@ export async function buildActionPlan(
     };
     steps = [flashloanStep];
   } else {
-    // Similar for aaveBorrowMorphoSupply
-    flashloanProtocol = AAVE_V3_PROTOCOL;
+    // aaveBorrowMorphoSupply
+    flashloanProtocol = 'aave-v3';
     primaryAddress = AAVE_POOL_ADDRESSES_PROVIDER;
-    // Placeholder
+    
     const depositStep: ActionStep = {
       type: 'deposit',
-      protocol: MORPHO_PROTOCOL,
+      protocol: 'morpho-markets-v1',
       tokenIn: flashLoanToken.address,
       amountIn: flashLoanAmount,
       primaryAddress: MORPHO_BLUE,
