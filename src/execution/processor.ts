@@ -13,6 +13,7 @@ import { buildActionPlan as buildVaultActionPlan } from '../strategies/vaultArb/
 import { buildActionPlan as buildDebtActionPlan } from '../strategies/debtPosition/buildActionPlan';
 import { buildActionPlan as buildHarvestActionPlan } from '../strategies/harvestShort/buildActionPlan';
 import { buildActionPlan as buildArbitragePlan } from '../strategies/arbitrage/buildActionPlan';
+import { buildActionPlan as buildRateArbPlan } from '../strategies/rateArb/buildActionPlan'; // ✅ ADD THIS
 import { canStartNewTrade, hasExecutionCapacity } from './concurrency';
 import { incrementActiveTrades, decrementActiveTrades } from './queue';
 import { isBreakerTripped } from '../risk/circuitBreaker';
@@ -22,7 +23,6 @@ const log = createLogger('processor');
 
 /**
  * Build action plan for a candidate based on its strategy type
- * ✅ FIXED: Accepts options as second parameter (now optional)
  */
 async function buildActionPlanForCandidate(
   candidate: OpportunityCandidate,
@@ -41,6 +41,8 @@ async function buildActionPlanForCandidate(
       return buildClassicIncentivePlan(candidate, options);
     case 'arbitrage':
       return buildArbitragePlan(candidate, options);
+    case 'rateArb': // ✅ ADD THIS CASE
+      return buildRateArbPlan(candidate, options);
     default:
       throw new Error(`Unknown strategy: ${candidate.strategy}`);
   }
@@ -71,7 +73,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
     // 1. Build action plan
     let plan;
     try {
-      // 🔥 Use Morpho as the flashloan provider (0% fee)
       plan = await buildActionPlanForCandidate(candidate, {
         flashLoanToken: candidate.params.flashLoanToken || candidate.params.asset || candidate.params.tokenA,
         flashLoanProvider: { name: 'Morpho', protocol: 'morpho-markets-v1' },
