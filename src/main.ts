@@ -1,5 +1,4 @@
 // src/main.ts
-
 import { env } from './config/env';
 import { initSchema, closePool } from './db/client';
 import { initEnsoClient } from './execution/ensoClient';
@@ -19,9 +18,6 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const HOURLY_SUMMARY_MS = 60 * 60 * 1000;
 const DAILY_SUMMARY_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Check if any strategy is enabled (only arbitrage and vaultArb are active)
- */
 function isAnyStrategyEnabled(): boolean {
   if (!env.MASTER_STRATEGY_ENABLED) return false;
   return (
@@ -31,7 +27,7 @@ function isAnyStrategyEnabled(): boolean {
 }
 
 async function bootstrap(): Promise<void> {
-  log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v3 - Triangular & Vault Arbitrage only)', {
+  log.info('Starting Chronos/Enso arbitrage system (Morpho Flashloan integrated)', {
     env: env.NODE_ENV,
     executionWallet: executionWallet.address,
     discordAlerts: isDiscordConfigured() ? 'enabled' : 'disabled',
@@ -40,44 +36,31 @@ async function bootstrap(): Promise<void> {
     vaultArbEnabled: env.STRATEGY_VAULT_ARB_ENABLED,
   });
 
-  // ✅ Initialize database schema
   await initSchema();
-
-  // ✅ Step 1: Initialize Enso client
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
   } catch (err) {
-    log.error('Failed to initialize Enso client', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.error('Failed to initialize Enso client', { error: String(err) });
     process.exit(1);
   }
 
-  // ✅ Step 2: No protocol discovery needed – we only use Enso routes
-
-  // ✅ Step 3: Start health server
   startHealthServer();
 
-  // ✅ Step 4: Get initial native price
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // ✅ Step 5: Start worker pool only if any strategy is enabled
   if (isAnyStrategyEnabled()) {
     startWorkerPool();
     log.info('Worker pool started');
   } else {
-    log.warn('⚠️ No strategies enabled — worker pool NOT started');
+    log.warn('No strategies enabled — worker pool NOT started');
   }
 
-  // ✅ Step 6: Start scan loop
   startScanLoop();
 
-  // ✅ Step 7: Send system started alert
   await alertSystemStarted(executionWallet.address);
 
-  // ✅ Step 8: Sweep interval
   setInterval(async () => {
     try {
       const currentPrice = await fetchNativePriceUsd();
@@ -87,7 +70,6 @@ async function bootstrap(): Promise<void> {
     }
   }, SWEEP_INTERVAL_MS);
 
-  // ✅ Step 9: Hourly summary
   setInterval(async () => {
     try {
       const summary = await getHourlySummary();
@@ -97,7 +79,6 @@ async function bootstrap(): Promise<void> {
     }
   }, HOURLY_SUMMARY_MS);
 
-  // ✅ Step 10: Daily summary
   setInterval(async () => {
     try {
       const summary = await getDailySummary();
@@ -107,7 +88,7 @@ async function bootstrap(): Promise<void> {
     }
   }, DAILY_SUMMARY_MS);
 
-  log.info('✅ System running with Triangular Arbitrage + Vault Arbitrage only');
+  log.info('✅ System running with Triangular Arbitrage (Morpho) + Vault Arbitrage');
 }
 
 async function shutdown(signal: string): Promise<void> {
@@ -117,19 +98,14 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
-// ✅ Process signal handlers
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-// ✅ Unhandled rejection handler
 process.on('unhandledRejection', (reason) => {
   log.error('Unhandled promise rejection', { reason: String(reason) });
 });
 
-// ✅ Bootstrap the system
 bootstrap().catch((err) => {
-  log.error('Fatal bootstrap error', {
-    error: err instanceof Error ? err.message : String(err),
-  });
+  log.error('Fatal bootstrap error', { error: String(err) });
   process.exit(1);
 });
