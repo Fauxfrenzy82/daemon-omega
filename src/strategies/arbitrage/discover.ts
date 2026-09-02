@@ -13,6 +13,23 @@ import { TOKENS, TokenInfo } from '../../config/tokens';
 const log = createLogger('arbitrage');
 
 // ============================================
+// RATE LIMITING
+// ============================================
+
+// Simple rate limiter for Enso API (10 requests per second)
+let lastRequestTime = 0;
+const MIN_REQUEST_INTERVAL_MS = 120; // ~8.3 requests per second (under 10)
+
+async function rateLimit(): Promise<void> {
+  const now = Date.now();
+  const elapsed = now - lastRequestTime;
+  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+    await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed));
+  }
+  lastRequestTime = Date.now();
+}
+
+// ============================================
 // TYPES
 // ============================================
 
@@ -35,21 +52,17 @@ interface ArbitrageResult {
 async function simulateFlashloanArbitrage(
   amountUsd: number,
   nativePriceUsd: number,
-  morphoFeeBps: number = 0 // Morpho = 0% fee
+  morphoFeeBps: number = 0
 ): Promise<{
   gasCostUsd: number;
   flashloanFeeUsd: number;
   totalCostUsd: number;
 }> {
-  // Estimate gas for flashloan + swaps (typically higher for arbitrage)
   const gasPrice = await provider.getGasPrice();
-  const gasUnits = ethers.BigNumber.from(600000); // 600k gas for complex arbitrage
+  const gasUnits = ethers.BigNumber.from(600000);
   const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasUnits)));
   const gasCostUsd = gasCostNative * nativePriceUsd;
-
-  // Flashloan fee (Morpho = 0%)
   const flashloanFeeUsd = amountUsd * (morphoFeeBps / 10000);
-
   return {
     gasCostUsd,
     flashloanFeeUsd,
@@ -74,7 +87,6 @@ async function findTriangularArbitrage(
     TOKENS.DAI,
   ];
 
-  // Pre-calculate flashloan costs
   const costs = await simulateFlashloanArbitrage(amountUsd, nativePriceUsd);
 
   for (let i = 0; i < tokens.length; i++) {
@@ -87,37 +99,32 @@ async function findTriangularArbitrage(
         const tokenC = tokens[k];
 
         try {
-          // Skip if any token is the same as the entry token
           if (tokenA.address === tokenC.address) continue;
 
-          // Step 1: USDC → TokenA
+          // Rate limit before each Enso call
+          await rateLimit();
           const amountInA = ethers.utils.parseUnits(
             amountUsd.toString(),
             tokenA.decimals
           ).toString();
-
           const quoteA = await getEnsoRouteQuote(TOKENS.USDC, tokenA, amountInA);
           if (!quoteA) continue;
 
-          // Step 2: TokenA → TokenB
+          await rateLimit();
           const quoteB = await getEnsoRouteQuote(tokenA, tokenB, quoteA.amountOut);
           if (!quoteB) continue;
 
-          // Step 3: TokenB → TokenC (usually USDC)
+          await rateLimit();
           const quoteC = await getEnsoRouteQuote(tokenB, tokenC, quoteB.amountOut);
           if (!quoteC) continue;
 
-          // Calculate profit
           const startUsd = amountUsd;
           const endUsd = Number(quoteC.amountOut) / 10 ** tokenC.decimals;
           const grossProfitUsd = endUsd - startUsd;
-
-          // Only consider positive gross profit
           if (grossProfitUsd <= 0) continue;
 
           const netProfitUsd = grossProfitUsd - costs.totalCostUsd;
 
-          // Log significant results
           if (netProfitUsd > 0.01) {
             log.info(`🔍 Triangular: ${TOKENS.USDC.symbol} → ${tokenA.symbol} → ${tokenB.symbol} → ${tokenC.symbol}`, {
               amountUsd,
@@ -152,22 +159,20 @@ async function findTriangularArbitrage(
 }
 
 // ============================================
-// CROSS-DEX ARBITRAGE
+// CROSS-DEX ARBITRAGE (with limited venues)
 // ============================================
 
 async function findCrossDexArbitrage(
   amountUsd: number,
   nativePriceUsd: number
 ): Promise<ArbitrageResult | null> {
+  // Use only the most reliable venues to reduce API calls
   const tokenPairs = [
     { tokenA: TOKENS.USDC, tokenB: TOKENS.WETH },
     { tokenA: TOKENS.USDC, tokenB: TOKENS.WBTC },
     { tokenA: TOKENS.USDC, tokenB: TOKENS.WMATIC },
     { tokenA: TOKENS.USDC, tokenB: TOKENS.USDT },
-    { tokenA: TOKENS.USDC, tokenB: TOKENS.DAI },
     { tokenA: TOKENS.WETH, tokenB: TOKENS.WBTC },
-    { tokenA: TOKENS.WETH, tokenB: TOKENS.WMATIC },
-    { tokenA: TOKENS.WBTC, tokenB: TOKENS.WMATIC },
   ];
 
   const costs = await simulateFlashloanArbitrage(amountUsd, nativePriceUsd);
@@ -179,7 +184,8 @@ async function findCrossDexArbitrage(
         pair.tokenA.decimals
       ).toString();
 
-      // Get buy quotes (tokenA → tokenB)
+      // Rate limit before each venue fetch
+      await rateLimit();
       const buyQuotes = await getAllVenueQuotes(
         pair.tokenA,
         pair.tokenB,
@@ -188,12 +194,12 @@ async function findCrossDexArbitrage(
 
       if (buyQuotes.length < 2) continue;
 
-      // Get sell quotes (tokenB → tokenA)
-      // Use the best buy quote's output as input for sell
-      const bestBuy = buyQuotes.reduce((a, b) => 
+      const bestBuy = buyQuotes.reduce((a, b) =>
         Number(a.amountOut) > Number(b.amountOut) ? a : b
       );
 
+      // Rate limit before sell quotes
+      await rateLimit();
       const sellQuotes = await getAllVenueQuotes(
         pair.tokenB,
         pair.tokenA,
@@ -202,7 +208,6 @@ async function findCrossDexArbitrage(
 
       if (sellQuotes.length < 1) continue;
 
-      // Find best spread
       const spread = findBestVenueSpread(
         `${pair.tokenA.symbol}-${pair.tokenB.symbol}`,
         buyQuotes,
@@ -211,7 +216,6 @@ async function findCrossDexArbitrage(
 
       if (!spread || spread.spreadBps < 5) continue;
 
-      // Calculate profit
       const grossProfitUsd = amountUsd * (spread.spreadBps / 10000);
       const netProfitUsd = grossProfitUsd - costs.totalCostUsd;
 
@@ -286,7 +290,7 @@ export async function discoverArbitrage(nativePriceUsd: number): Promise<Opportu
     totalCandidates: candidates.length,
     byAmount: testAmounts.map(amount => ({
       amount,
-      found: candidates.filter(c => 
+      found: candidates.filter(c =>
         c.params.amountUsd === amount
       ).length,
     })),
