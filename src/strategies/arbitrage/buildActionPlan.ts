@@ -9,8 +9,9 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('arbitrage-build');
 
+// Use Aave V3 as flashloan provider (more reliable than Morpho)
 const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
-const MORPHO_PROTOCOL = 'morpho-markets-v1';
+const FLASHLOAN_PROTOCOL = 'aave-v3'; // Change from morpho-markets-v1
 
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
@@ -19,13 +20,12 @@ export async function buildActionPlan(
   const params = candidate.params;
   const type = params.type;
 
-  // Use Morpho for 0% flashloan fee
+  // Use Aave V3 as flashloan provider
   const flashLoanProvider = options?.flashLoanProvider || {
-    name: 'Morpho',
-    protocol: MORPHO_PROTOCOL,
+    name: 'Aave V3',
+    protocol: FLASHLOAN_PROTOCOL as const,
   };
 
-  // Determine flashloan token (USDC is the entry token for most arbitrage)
   const flashLoanToken = options?.flashLoanToken || TOKENS.USDC;
   const flashLoanAmount = ethers.utils.parseUnits(
     params.amountUsd.toString(),
@@ -35,10 +35,7 @@ export async function buildActionPlan(
   let steps: ActionStep[] = [];
 
   if (type === 'triangular') {
-    // Triangular: USDC → TokenA → TokenB → USDC
     const [entryToken, tokenA, tokenB, exitToken] = params.tokenPath;
-    
-    // Find the actual token objects
     const tokenAInfo = getTokenBySymbol(tokenA);
     const tokenBInfo = getTokenBySymbol(tokenB);
 
@@ -80,12 +77,10 @@ export async function buildActionPlan(
 
     steps = [flashloanStep];
   } else if (type === 'crossdex') {
-    // Cross-DEX: Buy on venue A, sell on venue B
     const [tokenA, tokenB] = params.tokenPath;
     const tokenAInfo = getTokenBySymbol(tokenA);
     const tokenBInfo = getTokenBySymbol(tokenB);
 
-    // Use the specific venues from the quote
     const buyVenue = params.details.spread.buyVenue;
     const sellVenue = params.details.spread.sellVenue;
 
@@ -146,7 +141,6 @@ function getTokenBySymbol(symbol: string): TokenInfo {
     'WMATIC': TOKENS.WMATIC,
     'AAVE': TOKENS.AAVE,
   };
-  
   const token = tokenMap[symbol];
   if (!token) throw new Error(`Unknown token symbol: ${symbol}`);
   return token;
