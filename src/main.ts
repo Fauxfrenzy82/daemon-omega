@@ -12,7 +12,6 @@ import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 import { fetchNativePriceUsd } from './config/priceFeeds';
-import { discoverAllProtocols } from './config/protocolDiscovery';
 
 const log = createLogger('main');
 
@@ -20,24 +19,25 @@ const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const HOURLY_SUMMARY_MS = 60 * 60 * 1000;
 const DAILY_SUMMARY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Check if any strategy is enabled (only arbitrage and vaultArb are active)
+ */
 function isAnyStrategyEnabled(): boolean {
   if (!env.MASTER_STRATEGY_ENABLED) return false;
   return (
-    env.STRATEGY_CLASSIC_ENABLED ||
-    env.STRATEGY_LP_ENABLED ||
-    env.STRATEGY_VAULT_ENABLED ||
-    env.STRATEGY_DEBT_ENABLED ||
-    env.STRATEGY_HARVEST_ENABLED
+    env.STRATEGY_ARBITRAGE_ENABLED ||
+    env.STRATEGY_VAULT_ARB_ENABLED
   );
 }
 
 async function bootstrap(): Promise<void> {
-  log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v3)', {
+  log.info('Starting Chronos/Enso arbitrage system (Daemon Omega v3 - Triangular & Vault Arbitrage only)', {
     env: env.NODE_ENV,
     executionWallet: executionWallet.address,
     discordAlerts: isDiscordConfigured() ? 'enabled' : 'disabled',
     masterEnabled: env.MASTER_STRATEGY_ENABLED,
-    classicIncentiveEnabled: env.STRATEGY_CLASSIC_ENABLED,
+    arbitrageEnabled: env.STRATEGY_ARBITRAGE_ENABLED,
+    vaultArbEnabled: env.STRATEGY_VAULT_ARB_ENABLED,
   });
 
   // ✅ Initialize database schema
@@ -54,21 +54,7 @@ async function bootstrap(): Promise<void> {
     process.exit(1);
   }
 
-  // ✅ Step 2: Run protocol discovery (Merkl pools via subgraph)
-  // This runs once at startup to register Merkl pools for later claim checking.
-  // Beefy discovery runs during each scan cycle (inside discoverClassicIncentive).
-  if (env.STRATEGY_CLASSIC_ENABLED && env.MASTER_STRATEGY_ENABLED) {
-    try {
-      log.info('🔍 Running protocol discovery...');
-      await discoverAllProtocols();
-      log.info('✅ Protocol discovery complete');
-    } catch (err) {
-      log.error('Failed to discover protocols', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      // Non-fatal: continue with fallbacks
-    }
-  }
+  // ✅ Step 2: No protocol discovery needed – we only use Enso routes
 
   // ✅ Step 3: Start health server
   startHealthServer();
@@ -77,7 +63,7 @@ async function bootstrap(): Promise<void> {
   const nativePrice = await fetchNativePriceUsd();
   log.info('Initial native token price fetched', { nativePrice });
 
-  // ✅ Step 5: Start worker pool
+  // ✅ Step 5: Start worker pool only if any strategy is enabled
   if (isAnyStrategyEnabled()) {
     startWorkerPool();
     log.info('Worker pool started');
@@ -121,7 +107,7 @@ async function bootstrap(): Promise<void> {
     }
   }, DAILY_SUMMARY_MS);
 
-  log.info('✅ System running with self-discovered protocols');
+  log.info('✅ System running with Triangular Arbitrage + Vault Arbitrage only');
 }
 
 async function shutdown(signal: string): Promise<void> {
