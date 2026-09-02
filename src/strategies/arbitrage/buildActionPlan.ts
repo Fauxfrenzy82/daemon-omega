@@ -1,5 +1,6 @@
 // src/strategies/arbitrage/buildActionPlan.ts
 
+import { ethers } from 'ethers';
 import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
 import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo } from '../../config/tokens';
@@ -21,7 +22,7 @@ export async function buildActionPlan(
   // Use Morpho for 0% flashloan fee
   const flashLoanProvider = options?.flashLoanProvider || {
     name: 'Morpho',
-    protocol: MORPHO_PROTOCOL as const,
+    protocol: MORPHO_PROTOCOL,
   };
 
   // Determine flashloan token (USDC is the entry token for most arbitrage)
