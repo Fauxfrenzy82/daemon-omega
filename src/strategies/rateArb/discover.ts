@@ -64,21 +64,39 @@ async function fetchMorphoRates(): Promise<Record<string, { supplyApy: number; b
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
     });
-    const json: any = await res.json(); // ✅ FIX: explicitly type as 'any'
-    const items = json.data?.markets?.items || [];
+    
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+    }
+    
+    const json: any = await res.json();
+    
+    // ✅ Check if data exists and has the expected structure
+    if (!json.data || !json.data.markets || !json.data.markets.items) {
+      log.warn('Morpho API returned unexpected structure', { data: json });
+      return {};
+    }
+    
+    const items = json.data.markets.items;
     const rates: Record<string, { supplyApy: number; borrowApy: number }> = {};
 
     for (const item of items) {
+      // ✅ Add null checks for each field
+      if (!item || !item.loanAsset || !item.loanAsset.symbol) {
+        log.debug('Skipping invalid Morpho market item', { item });
+        continue;
+      }
+      
       const symbol = item.loanAsset.symbol;
       if (!ASSETS.find(a => a.symbol === symbol)) continue;
+      
       // Morpho rates are already in percentage (e.g., 0.05 = 5%)
-      rates[`${symbol}-${item.collateralAsset.symbol}`] = {
-        supplyApy: item.state.supplyApy * 100,
-        borrowApy: item.state.borrowApy * 100,
-      };
       // Store a generic entry (first collateral found)
       if (!rates[symbol]) {
-        rates[symbol] = { supplyApy: item.state.supplyApy * 100, borrowApy: item.state.borrowApy * 100 };
+        rates[symbol] = { 
+          supplyApy: item.state?.supplyApy ? item.state.supplyApy * 100 : 0, 
+          borrowApy: item.state?.borrowApy ? item.state.borrowApy * 100 : 0 
+        };
       }
     }
     return rates;
