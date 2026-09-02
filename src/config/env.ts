@@ -80,38 +80,22 @@ export const env = {
   DATABASE_URL: required('DATABASE_URL'),
 
   // ============================================
-  // SUBGRAPH (For QuickSwap Discovery)
+  // SUBGRAPH (For QuickSwap Discovery – kept but unused)
   // ============================================
   SUBGRAPH_API_KEY: optional('SUBGRAPH_API_KEY', ''),
 
   // ============================================
-  // CLASSIC INCENTIVE - PROTOCOL ADDRESSES (Optional)
+  // CLASSIC INCENTIVE – PROTOCOL ADDRESSES (kept but disabled)
   // ============================================
-  // Priority 1: Beefy Finance
   BEEFY_VAULT_ADDRESS: optional('BEEFY_VAULT_ADDRESS', ''),
   BEEFY_WETH_VAULT: optional('BEEFY_WETH_VAULT', ''),
-
-  // Priority 2: Convex / Harvest Finance
   CONVEX_ADDRESS: optional('CONVEX_ADDRESS', ''),
   HARVEST_VAULT_ADDRESS: optional('HARVEST_VAULT_ADDRESS', ''),
-
-  // QuickSwap Farm (optional override)
   QUICKSWAP_FARM_ADDRESS: optional('QUICKSWAP_FARM_ADDRESS', ''),
-
-  // ============================================
-  // POSITION-BASED PROTOCOLS (SKIPPED - Reference Only)
-  // ============================================
   BALANCER_GAUGE_ADDRESS: optional('BALANCER_GAUGE_ADDRESS', ''),
   CURVE_GAUGE_ADDRESS: optional('CURVE_GAUGE_ADDRESS', ''),
   MERKL_ADDRESS: optional('MERKL_ADDRESS', ''),
   MORPHO_ADDRESS: optional('MORPHO_ADDRESS', ''),
-
-  // ============================================
-  // CLASSIC INCENTIVE CONFIG
-  // ============================================
-  CLASSIC_INCENTIVE_MIN_PROFIT_USD: optionalNumber('CLASSIC_INCENTIVE_MIN_PROFIT_USD', 0.05),
-  CLASSIC_INCENTIVE_MAX_PROTOCOLS: optionalNumber('CLASSIC_INCENTIVE_MAX_PROTOCOLS', 20),
-  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
 
   // ============================================
   // RISK / THRESHOLDS
@@ -158,13 +142,33 @@ export const env = {
   MASTER_STRATEGY_ENABLED: optionalBool('MASTER_STRATEGY_ENABLED', true),
 
   // ============================================
-  // STRATEGY TOGGLES
+  // STRATEGY TOGGLES – Only arbitrage and vaultArb are enabled
   // ============================================
-  STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', true),
+  STRATEGY_ARBITRAGE_ENABLED: optionalBool('STRATEGY_ARBITRAGE_ENABLED', true),
+  STRATEGY_VAULT_ARB_ENABLED: optionalBool('STRATEGY_VAULT_ARB_ENABLED', true),
   STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', false),
-  STRATEGY_VAULT_ENABLED: optionalBool('STRATEGY_VAULT_ENABLED', false),
   STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', false),
   STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', false),
+  STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', false),
+
+  // ============================================
+  // ARBITRAGE (TRIANGULAR) CONFIG
+  // ============================================
+  ARBITRAGE_TEST_AMOUNTS: optional('ARBITRAGE_TEST_AMOUNTS', '25000,50000,100000,250000'),
+  ARBITRAGE_MIN_PROFIT_USD: optionalNumber('ARBITRAGE_MIN_PROFIT_USD', 0.50),
+  ARBITRAGE_RATE_LIMIT_MS: optionalNumber('ARBITRAGE_RATE_LIMIT_MS', 150),
+
+  // ============================================
+  // VAULT ARBITRAGE CONFIG
+  // ============================================
+  VAULT_ARB_MIN_PROFIT_USD: optionalNumber('VAULT_ARB_MIN_PROFIT_USD', 0.50),
+
+  // ============================================
+  // CLASSIC INCENTIVE (kept but disabled)
+  // ============================================
+  CLASSIC_INCENTIVE_MIN_PROFIT_USD: optionalNumber('CLASSIC_INCENTIVE_MIN_PROFIT_USD', 0.05),
+  CLASSIC_INCENTIVE_MAX_PROTOCOLS: optionalNumber('CLASSIC_INCENTIVE_MAX_PROTOCOLS', 20),
+  CLASSIC_INCENTIVE_POSITION_SIZE_USD: optionalNumber('CLASSIC_INCENTIVE_POSITION_SIZE_USD', 5000),
 
   // ============================================
   // OPTIMIZER / WORKERS
@@ -174,7 +178,7 @@ export const env = {
   LP_MAX_PAIRS_PER_CYCLE: optionalNumber('LP_MAX_PAIRS_PER_CYCLE', 5),
 
   // ============================================
-  // PAIRS
+  // PAIRS (kept for reference)
   // ============================================
   PRIMARY_PAIR_IDS: optional('PRIMARY_PAIR_IDS', 'WETH-USDC,WBTC-USDC,WMATIC-USDC,USDCe-USDT,DAI-USDC'),
   SECONDARY_PAIR_IDS: optional('SECONDARY_PAIR_IDS', 'LINK-USDC,AAVE-USDC,GHST-USDC,QUICK-USDC'),
@@ -182,7 +186,7 @@ export const env = {
   MAX_OPPORTUNITY_AGE_MS: optionalNumber('MAX_OPPORTUNITY_AGE_MS', 100000),
 
   // ============================================
-  // HARVEST (if enabled)
+  // HARVEST (if ever re‑enabled)
   // ============================================
   HARVEST_FLASHLOAN_AMOUNT_USD: optionalNumber('HARVEST_FLASHLOAN_AMOUNT_USD', 5000),
   HARVEST_MAX_POOL_DEPTH_PCT: optionalNumber('HARVEST_MAX_POOL_DEPTH_PCT', 1.5),
