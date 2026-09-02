@@ -58,17 +58,14 @@ async function findTriangular(amountUsd: number, nativePrice: number) {
   const gasUnits = 300000;
   const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasUnits)));
   const gasCostUsd = gasCostNative * nativePrice;
-  // ✅ Morpho Blue flashloan fee = 0%
-  const flashloanFeeUsd = 0;
+  const flashloanFeeUsd = 0; // Morpho Blue = 0%
 
   for (let i = 0; i < TOKENS_FOR_TRI.length; i++) {
     for (let j = 0; j < TOKENS_FOR_TRI.length; j++) {
       if (i === j) continue;
       const A = TOKENS_FOR_TRI[i];
       const B = TOKENS_FOR_TRI[j];
-      // Skip if either is USDC (already the entry/exit)
       if (A.address === TOKENS.USDC.address || B.address === TOKENS.USDC.address) continue;
-      // Path: USDC → A → B → USDC
       const amtA = ethers.utils.parseUnits(start.toString(), A.decimals).toString();
       const q1 = await cachedQuote(TOKENS.USDC, A, amtA);
       if (!q1) continue;
@@ -111,10 +108,9 @@ export async function discoverArbitrage(nativePrice: number) {
   const candidates: OpportunityCandidate[] = [];
   cache.clear();
 
-  const amounts = (env.ARBITRAGE_TEST_AMOUNTS || '25000,50000,100000,250000')
-    .split(',')
-    .map(Number)
-    .filter(n => n > 0);
+  // ✅ TEST SMALLER AMOUNTS: 500, 1000, 2000, 5000
+  // Override env variable for this test
+  const amounts = [500, 1000, 2000, 5000];
 
   for (const amount of amounts) {
     const result = await findTriangular(amount, nativePrice);
