@@ -6,7 +6,7 @@ import { hasExecutionCapacity } from '../execution/concurrency';
 import { env } from '../config/env';
 import { fetchNativePriceUsd } from '../config/priceFeeds';
 import { OpportunityCandidate } from '../strategies/common/opportunityCandidate';
-import { discoverArbitrage } from '../strategies/arbitrage/discover';
+import { discoverRateArbitrage } from '../strategies/rateArb/discover';
 import { discoverVaultArb } from '../strategies/vaultArb/discover';
 
 const log = createLogger('scanLoop');
@@ -18,10 +18,10 @@ let scanStartTime = 0;
 
 const discoverers = [
   {
-    name: 'Triangular Arbitrage',
-    fn: discoverArbitrage,
-    enabled: env.STRATEGY_ARBITRAGE_ENABLED ?? true,
-    description: 'USDC → TokenA → TokenB → USDC (Morpho flashloan)',
+    name: 'Rate Arbitrage',
+    fn: discoverRateArbitrage,
+    enabled: true,
+    description: 'Aave vs Morpho rate spread',
   },
   {
     name: 'Vault Arbitrage',
