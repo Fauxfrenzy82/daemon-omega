@@ -14,14 +14,14 @@ const log = createLogger('scanLoop');
 let loopTimer: NodeJS.Timeout | null = null;
 let isScanning = false;
 let cachedNativePrice = 0.5;
-let scanStartTime = 0; // ✅ Added
+let scanStartTime = 0;
 
 const discoverers = [
   {
     name: 'Triangular Arbitrage',
     fn: discoverArbitrage,
     enabled: env.STRATEGY_ARBITRAGE_ENABLED ?? true,
-    description: 'USDC → TokenA → TokenB → USDC',
+    description: 'USDC → TokenA → TokenB → USDC (Morpho flashloan)',
   },
   {
     name: 'Vault Arbitrage',
@@ -34,7 +34,7 @@ const discoverers = [
 async function runScanCycle() {
   if (isScanning) return;
   isScanning = true;
-  scanStartTime = Date.now(); // ✅ Set start time
+  scanStartTime = Date.now();
   try {
     recordScanCycle();
     cachedNativePrice = await fetchNativePriceUsd();
@@ -60,7 +60,7 @@ async function runScanCycle() {
     }
     log.info('📊 Scan cycle summary', {
       results,
-      durationMs: Date.now() - scanStartTime, // ✅ Now defined
+      durationMs: Date.now() - scanStartTime,
     });
   } finally {
     isScanning = false;
