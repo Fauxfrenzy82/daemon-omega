@@ -9,8 +9,14 @@ const log = createLogger('buildActionPlan');
  * ⚠️ TEMPORARILY DISABLED
  * Classic Incentive buildActionPlan is temporarily disabled while arbitrage is being tested.
  * To re-enable, uncomment the original implementation and remove this placeholder.
+ * 
+ * @param _candidate - The opportunity candidate (unused while disabled)
+ * @param _options - Optional flashloan parameters (unused while disabled)
  */
-export async function buildActionPlan(_candidate: OpportunityCandidate): Promise<ActionPlan> {
+export async function buildActionPlan(
+  _candidate: OpportunityCandidate,
+  _options?: { flashLoanToken?: any; flashLoanProvider?: any }
+): Promise<ActionPlan> {
   log.warn('⏸️ Classic Incentive buildActionPlan is temporarily disabled');
   throw new Error('Classic Incentive strategy is temporarily disabled');
 }
