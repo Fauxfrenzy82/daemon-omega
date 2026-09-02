@@ -11,6 +11,11 @@ const MORPHO_BLUE = '0x6c247b1F6182318877311737BaC0844bAa518F5e';
 // Aave V3 Pool Addresses Provider (for flashloan)
 const AAVE_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
 
+// ✅ Define protocol constants as literals for type safety
+const MORPHO_PROTOCOL = 'morpho-markets-v1' as const;
+const AAVE_V3_PROTOCOL = 'aave-v3' as const;
+const ENSO_PROTOCOL = 'enso' as const;
+
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: any; flashLoanProvider?: any }
@@ -30,19 +35,18 @@ export async function buildActionPlan(
 
   // Build steps based on type
   let steps: ActionStep[] = [];
-  let flashloanProtocol = 'aave-v3'; // default
+  let flashloanProtocol = AAVE_V3_PROTOCOL;
   let primaryAddress = AAVE_POOL_ADDRESSES_PROVIDER;
 
   if (type === 'morphoBorrowAaveSupply') {
-    // Flashloan from Aave? Actually we need to use Morpho flashloan (0% fee)
-    // But Morpho flashloan is not yet supported by Enso? We'll assume it is.
-    flashloanProtocol = 'morpho-markets-v1';
+    // Use Morpho flashloan (0% fee)
+    flashloanProtocol = MORPHO_PROTOCOL;
     primaryAddress = MORPHO_BLUE;
 
     // Step 1: Deposit to Aave (using flashloan amount)
     const depositStep: ActionStep = {
       type: 'deposit',
-      protocol: 'aave-v3',
+      protocol: AAVE_V3_PROTOCOL,
       tokenIn: flashLoanToken.address,
       amountIn: flashLoanAmount,
       onBehalfOf: '0x1b1a1E836E16172dCa6aa9c30494385f87141638', // executor address
@@ -75,12 +79,12 @@ export async function buildActionPlan(
     steps = [flashloanStep];
   } else {
     // Similar for aaveBorrowMorphoSupply
-    flashloanProtocol = 'aave-v3';
+    flashloanProtocol = AAVE_V3_PROTOCOL;
     primaryAddress = AAVE_POOL_ADDRESSES_PROVIDER;
     // Placeholder
     const depositStep: ActionStep = {
       type: 'deposit',
-      protocol: 'morpho-markets-v1',
+      protocol: MORPHO_PROTOCOL,
       tokenIn: flashLoanToken.address,
       amountIn: flashLoanAmount,
       primaryAddress: MORPHO_BLUE,
@@ -108,6 +112,7 @@ export async function buildActionPlan(
     type,
     amountUsd,
     asset: assetSymbol,
+    flashloanProtocol,
   });
 
   return {
