@@ -11,7 +11,7 @@ const log = createLogger('arbitrage-build');
 
 // Use Aave V3 as flashloan provider (more reliable than Morpho)
 const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
-const FLASHLOAN_PROTOCOL = 'aave-v3'; // Change from morpho-markets-v1
+const FLASHLOAN_PROTOCOL = 'aave-v3';
 
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
@@ -20,10 +20,10 @@ export async function buildActionPlan(
   const params = candidate.params;
   const type = params.type;
 
-  // Use Aave V3 as flashloan provider
+  // ✅ FIX: Remove 'as const' - use the variable directly
   const flashLoanProvider = options?.flashLoanProvider || {
     name: 'Aave V3',
-    protocol: FLASHLOAN_PROTOCOL as const,
+    protocol: FLASHLOAN_PROTOCOL,
   };
 
   const flashLoanToken = options?.flashLoanToken || TOKENS.USDC;
