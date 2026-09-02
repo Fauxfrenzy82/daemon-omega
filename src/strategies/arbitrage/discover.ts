@@ -58,7 +58,8 @@ async function findTriangular(amountUsd: number, nativePrice: number) {
   const gasUnits = 300000;
   const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasUnits)));
   const gasCostUsd = gasCostNative * nativePrice;
-  const flashloanFeeUsd = amountUsd * 0.0009; // Aave V3 0.09%
+  // ✅ Morpho Blue flashloan fee = 0%
+  const flashloanFeeUsd = 0;
 
   for (let i = 0; i < TOKENS_FOR_TRI.length; i++) {
     for (let j = 0; j < TOKENS_FOR_TRI.length; j++) {
