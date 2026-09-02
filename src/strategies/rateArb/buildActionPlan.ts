@@ -1,6 +1,6 @@
 // src/strategies/rateArb/buildActionPlan.ts
 import { ethers } from 'ethers';
-import { OpportunityCandidate, ActionPlan, ActionStep } from '../common/opportunityCandidate';
+import { OpportunityCandidate, ActionPlan, ActionStep, FlashloanProtocol } from '../common/opportunityCandidate';
 import { TOKENS } from '../../config/tokens';
 import { createLogger } from '../../utils/logger';
 
@@ -35,7 +35,8 @@ export async function buildActionPlan(
 
   // Build steps based on type
   let steps: ActionStep[] = [];
-  let flashloanProtocol = AAVE_V3_PROTOCOL;
+  // ✅ FIX: Explicitly type flashloanProtocol as FlashloanProtocol
+  let flashloanProtocol: FlashloanProtocol = AAVE_V3_PROTOCOL;
   let primaryAddress = AAVE_POOL_ADDRESSES_PROVIDER;
 
   if (type === 'morphoBorrowAaveSupply') {
