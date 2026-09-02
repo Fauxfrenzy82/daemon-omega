@@ -7,7 +7,7 @@ import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { pushCandidate } from '../../execution/queue';
 import { getEnsoRouteQuote } from '../../scanner/sources/ensoRoute';
-import { getAllDirectVenueQuotes, findBestVenueSpread } from '../../scanner/sources/ensoMultiVenue';
+import { getAllVenueQuotes, findBestVenueSpread } from '../../scanner/sources/ensoMultiVenue';
 import { TOKENS, TokenInfo } from '../../config/tokens';
 
 const log = createLogger('arbitrage');
@@ -180,7 +180,7 @@ async function findCrossDexArbitrage(
       ).toString();
 
       // Get buy quotes (tokenA → tokenB)
-      const buyQuotes = await getAllDirectVenueQuotes(
+      const buyQuotes = await getAllVenueQuotes(
         pair.tokenA,
         pair.tokenB,
         amountIn
@@ -194,7 +194,7 @@ async function findCrossDexArbitrage(
         Number(a.amountOut) > Number(b.amountOut) ? a : b
       );
 
-      const sellQuotes = await getAllDirectVenueQuotes(
+      const sellQuotes = await getAllVenueQuotes(
         pair.tokenB,
         pair.tokenA,
         bestBuy.amountOut
