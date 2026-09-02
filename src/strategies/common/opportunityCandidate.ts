@@ -1,8 +1,10 @@
+// src/strategies/common/opportunityCandidate.ts
+
 import { TokenInfo } from '../../config/tokens';
 
 export interface OpportunityCandidate {
   id: string;
-  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive';
+  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive' | 'arbitrage';
   protocol: string;
   params: Record<string, any>;
   estimatedGrossProfitUsd: number;
@@ -32,7 +34,6 @@ export type ActionStep =
   | {
       type: 'flashloan';
       protocol: FlashloanProtocol;
-      // ✅ All fields optional for backward compatibility
       flashloanToken?: string;
       flashloanAmount?: string;
       token?: string;
