@@ -362,7 +362,19 @@ export async function discoverBeefyHarvestCandidates(nativePriceUsd: number): Pr
   const targetChains = ['base', 'ethereum', 'optimism', 'arbitrum', 'polygon', 'bsc'];
 
   // 4. Run simulations for each chain
-  const allResults = [];
+  const allResults: {
+    chain: string;
+    totalTested: number;
+    hasHarvest: number;
+    hasBalance: number;
+    profitable: number;
+    avgGasCostUsd: number;
+    avgRewardUsd: number;
+    avgNetProfitUsd: number;
+    maxNetProfitUsd: number;
+    minNetProfitUsd: number;
+    results: any[];
+  }[] = [];
 
   for (const chain of targetChains) {
     const chainVaults = (vaultsByChain[chain] || []).filter(v => 
