@@ -14,6 +14,7 @@ const log = createLogger('scanLoop');
 let loopTimer: NodeJS.Timeout | null = null;
 let isScanning = false;
 let cachedNativePrice = 0.5;
+let scanStartTime = 0; // ✅ Added
 
 const discoverers = [
   {
@@ -33,6 +34,7 @@ const discoverers = [
 async function runScanCycle() {
   if (isScanning) return;
   isScanning = true;
+  scanStartTime = Date.now(); // ✅ Set start time
   try {
     recordScanCycle();
     cachedNativePrice = await fetchNativePriceUsd();
@@ -56,7 +58,10 @@ async function runScanCycle() {
         results[d.name] = { count: 0, status: 'error', error: String(err) };
       }
     }
-    log.info('📊 Scan cycle summary', { results, durationMs: Date.now() - start });
+    log.info('📊 Scan cycle summary', {
+      results,
+      durationMs: Date.now() - scanStartTime, // ✅ Now defined
+    });
   } finally {
     isScanning = false;
     loopTimer = setTimeout(runScanCycle, env.SCAN_INTERVAL_MS ?? 15000);
