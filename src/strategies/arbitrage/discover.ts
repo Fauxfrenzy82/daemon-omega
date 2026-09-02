@@ -1,7 +1,7 @@
 // src/strategies/arbitrage/discover.ts
 import { ethers } from 'ethers';
 import { OpportunityCandidate } from '../common/opportunityCandidate';
-import { provider, executionWallet } from '../../treasury/wallets';
+import { provider } from '../../treasury/wallets';
 import { createLogger } from '../../utils/logger';
 import { env } from '../../config/env';
 import { pushCandidate } from '../../execution/queue';
@@ -10,7 +10,7 @@ import { TOKENS } from '../../config/tokens';
 
 const log = createLogger('arbitrage');
 
-// ---------- Rate limiting (global) ----------
+// ---------- Rate limiting ----------
 let lastRequestTime = 0;
 const MIN_INTERVAL = env.ARBITRAGE_RATE_LIMIT_MS || 150;
 
@@ -108,8 +108,11 @@ export async function discoverArbitrage(nativePrice: number) {
   const candidates: OpportunityCandidate[] = [];
   cache.clear();
 
-  // ✅ TEST MICRO AMOUNTS: 300, 200, 100, 50
-  const amounts = [300, 200, 100, 50];
+  // ✅ All amounts to test (including tiny ones)
+  const amounts = [
+    25000, 50000, 100000, 250000,
+    300, 200, 100, 90, 70, 50, 30, 10
+  ];
 
   for (const amount of amounts) {
     const result = await findTriangular(amount, nativePrice);
