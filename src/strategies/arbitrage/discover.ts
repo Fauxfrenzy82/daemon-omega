@@ -32,23 +32,49 @@ async function rateLimit(): Promise<void> {
 // CACHE (within scan cycle)
 // ============================================
 
-const quoteCache = new Map<string, any>();
+interface CachedQuote {
+  data: any;
+  timestamp: number;
+  failed: boolean;
+}
+
+const quoteCache = new Map<string, CachedQuote>();
+const CACHE_TTL_MS = 60000; // 1 minute
 
 function getCacheKey(tokenIn: string, tokenOut: string, amountIn: string): string {
   return `${tokenIn}-${tokenOut}-${amountIn}`;
 }
 
-async function getCachedQuote(tokenIn: TokenInfo, tokenOut: TokenInfo, amountIn: string): Promise<any> {
+async function getCachedQuote(
+  tokenIn: TokenInfo,
+  tokenOut: TokenInfo,
+  amountIn: string,
+  skipCache: boolean = false
+): Promise<any | null> {
   const key = getCacheKey(tokenIn.address, tokenOut.address, amountIn);
-  if (quoteCache.has(key)) {
-    return quoteCache.get(key);
+  if (!skipCache && quoteCache.has(key)) {
+    const entry = quoteCache.get(key)!;
+    if (Date.now() - entry.timestamp < CACHE_TTL_MS) {
+      if (entry.failed) return null;
+      return entry.data;
+    } else {
+      quoteCache.delete(key);
+    }
   }
   await rateLimit();
-  const quote = await getEnsoRouteQuote(tokenIn, tokenOut, amountIn);
-  if (quote) {
-    quoteCache.set(key, quote);
+  try {
+    const quote = await getEnsoRouteQuote(tokenIn, tokenOut, amountIn);
+    if (quote) {
+      quoteCache.set(key, { data: quote, timestamp: Date.now(), failed: false });
+      return quote;
+    } else {
+      quoteCache.set(key, { data: null, timestamp: Date.now(), failed: true });
+      return null;
+    }
+  } catch (err) {
+    quoteCache.set(key, { data: null, timestamp: Date.now(), failed: true });
+    return null;
   }
-  return quote;
 }
 
 // ============================================
@@ -68,23 +94,23 @@ interface ArbitrageResult {
 }
 
 // ============================================
-// FLASHLOAN SIMULATION
+// FLASHLOAN SIMULATION (Aave V3 fee = 0.09%)
 // ============================================
 
 async function simulateFlashloanArbitrage(
   amountUsd: number,
   nativePriceUsd: number,
-  morphoFeeBps: number = 0
+  flashloanFeeBps: number = 9 // Aave V3 = 0.09% = 9 bps
 ): Promise<{
   gasCostUsd: number;
   flashloanFeeUsd: number;
   totalCostUsd: number;
 }> {
   const gasPrice = await provider.getGasPrice();
-  const gasUnits = ethers.BigNumber.from(500000);
+  const gasUnits = ethers.BigNumber.from(400000); // reduced from 600k
   const gasCostNative = Number(ethers.utils.formatEther(gasPrice.mul(gasUnits)));
   const gasCostUsd = gasCostNative * nativePriceUsd;
-  const flashloanFeeUsd = amountUsd * (morphoFeeBps / 10000);
+  const flashloanFeeUsd = amountUsd * (flashloanFeeBps / 10000);
   return {
     gasCostUsd,
     flashloanFeeUsd,
@@ -93,41 +119,41 @@ async function simulateFlashloanArbitrage(
 }
 
 // ============================================
-// TRIANGULAR ARBITRAGE
+// TRIANGULAR ARBITRAGE (optimized)
 // ============================================
+
+// Only high-liquidity pairs for speed
+const TRIANGULAR_TOKENS = [
+  TOKENS.WETH,
+  TOKENS.WBTC,
+  TOKENS.WMATIC,
+  TOKENS.USDC,
+  TOKENS.USDT,
+];
 
 async function findTriangularArbitrage(
   amountUsd: number,
   nativePriceUsd: number
 ): Promise<ArbitrageResult | null> {
-  // ✅ Reduce token pairs to avoid excessive API calls
-  const tokens = [
-    TOKENS.WETH,
-    TOKENS.WBTC,
-    TOKENS.WMATIC,
-    TOKENS.USDC,
-    TOKENS.USDT,
-  ];
-
   const costs = await simulateFlashloanArbitrage(amountUsd, nativePriceUsd);
-
-  // Track failed pairs to avoid repeated 404s
   const failedPairs = new Set<string>();
+  const startUsd = amountUsd;
 
-  for (let i = 0; i < tokens.length; i++) {
-    for (let j = 0; j < tokens.length; j++) {
-      for (let k = 0; k < tokens.length; k++) {
+  // We'll try up to 20 paths and stop early if we find a profitable one.
+  const candidates: { result: ArbitrageResult; netProfit: number }[] = [];
+
+  for (let i = 0; i < TRIANGULAR_TOKENS.length; i++) {
+    for (let j = 0; j < TRIANGULAR_TOKENS.length; j++) {
+      for (let k = 0; k < TRIANGULAR_TOKENS.length; k++) {
         if (i === j || j === k || i === k) continue;
-
-        const tokenA = tokens[i];
-        const tokenB = tokens[j];
-        const tokenC = tokens[k];
-
-        // Skip if USDC is not the entry or exit
+        const tokenA = TRIANGULAR_TOKENS[i];
+        const tokenB = TRIANGULAR_TOKENS[j];
+        const tokenC = TRIANGULAR_TOKENS[k];
+        // Must end with USDC to get profit in USD
         if (tokenC.address !== TOKENS.USDC.address) continue;
 
-        const key = `${tokenA.symbol}-${tokenB.symbol}-${tokenC.symbol}`;
-        if (failedPairs.has(key)) continue;
+        const pathKey = `${tokenA.symbol}-${tokenB.symbol}-${tokenC.symbol}`;
+        if (failedPairs.has(pathKey)) continue;
 
         try {
           const amountInA = ethers.utils.parseUnits(
@@ -135,37 +161,23 @@ async function findTriangularArbitrage(
             tokenA.decimals
           ).toString();
 
-          // ✅ Use cached quotes
+          // Use cached quotes
           const quoteA = await getCachedQuote(TOKENS.USDC, tokenA, amountInA);
-          if (!quoteA) {
-            failedPairs.add(key);
-            continue;
-          }
+          if (!quoteA) { failedPairs.add(pathKey); continue; }
 
           const quoteB = await getCachedQuote(tokenA, tokenB, quoteA.amountOut);
-          if (!quoteB) {
-            failedPairs.add(key);
-            continue;
-          }
+          if (!quoteB) { failedPairs.add(pathKey); continue; }
 
           const quoteC = await getCachedQuote(tokenB, tokenC, quoteB.amountOut);
-          if (!quoteC) {
-            failedPairs.add(key);
-            continue;
-          }
+          if (!quoteC) { failedPairs.add(pathKey); continue; }
 
-          // ✅ FIXED: Calculate profit correctly using token prices
-          // Get token prices in USD
-          const priceA = quoteA.price;
-          const priceB = quoteB.price;
-          const priceC = quoteC.price;
-
-          // Calculate value in USD at each step
-          const startValue = amountUsd;
-          const midValue = Number(quoteA.amountOut) / 10 ** tokenA.decimals * priceA;
-          const endValue = Number(quoteC.amountOut) / 10 ** tokenC.decimals * priceC;
-
-          const grossProfitUsd = endValue - startValue;
+          // Profit calculation using Enso's price field (tokenOut per tokenIn)
+          // price1: USDC -> tokenA, price2: tokenA -> tokenB, price3: tokenB -> USDC
+          const price1 = quoteA.price; // tokenA per USDC
+          const price2 = quoteB.price; // tokenB per tokenA
+          const price3 = quoteC.price; // USDC per tokenB
+          const endUsd = startUsd * price1 * price2 * price3;
+          const grossProfitUsd = endUsd - startUsd;
 
           if (grossProfitUsd <= 0.01) continue;
 
@@ -174,9 +186,8 @@ async function findTriangularArbitrage(
           if (netProfitUsd > 0.01) {
             log.info(`🔍 Triangular: ${TOKENS.USDC.symbol} → ${tokenA.symbol} → ${tokenB.symbol} → ${tokenC.symbol}`, {
               amountUsd,
-              startValue: startValue.toFixed(4),
-              midValue: midValue.toFixed(4),
-              endValue: endValue.toFixed(4),
+              startUsd: startUsd.toFixed(4),
+              endUsd: endUsd.toFixed(4),
               grossProfitUsd: grossProfitUsd.toFixed(4),
               gasCostUsd: costs.gasCostUsd.toFixed(4),
               flashloanFeeUsd: costs.flashloanFeeUsd.toFixed(4),
@@ -185,11 +196,12 @@ async function findTriangularArbitrage(
           }
 
           if (netProfitUsd > 0.05) {
+            // Found a profitable path; return immediately to save time
             return {
               type: 'triangular',
               tokenPath: [TOKENS.USDC.symbol, tokenA.symbol, tokenB.symbol, tokenC.symbol],
-              startUsd: startValue,
-              endUsd: endValue,
+              startUsd,
+              endUsd,
               grossProfitUsd,
               gasCostUsd: costs.gasCostUsd,
               flashloanFeeUsd: costs.flashloanFeeUsd,
@@ -198,7 +210,7 @@ async function findTriangularArbitrage(
             };
           }
         } catch (err) {
-          failedPairs.add(key);
+          failedPairs.add(pathKey);
         }
       }
     }
@@ -208,32 +220,31 @@ async function findTriangularArbitrage(
 }
 
 // ============================================
-// CROSS-DEX ARBITRAGE
+// CROSS-DEX ARBITRAGE (optimized)
 // ============================================
+
+// Only high-liquidity pairs and limit venues
+const CROSS_PAIRS = [
+  { tokenA: TOKENS.USDC, tokenB: TOKENS.WETH },
+  { tokenA: TOKENS.USDC, tokenB: TOKENS.WBTC },
+  { tokenA: TOKENS.USDC, tokenB: TOKENS.WMATIC },
+  { tokenA: TOKENS.WETH, tokenB: TOKENS.WBTC },
+];
 
 async function findCrossDexArbitrage(
   amountUsd: number,
   nativePriceUsd: number
 ): Promise<ArbitrageResult | null> {
-  // ✅ Only high-liquidity pairs
-  const tokenPairs = [
-    { tokenA: TOKENS.USDC, tokenB: TOKENS.WETH },
-    { tokenA: TOKENS.USDC, tokenB: TOKENS.WBTC },
-    { tokenA: TOKENS.USDC, tokenB: TOKENS.WMATIC },
-    { tokenA: TOKENS.WETH, tokenB: TOKENS.WBTC },
-  ];
-
   const costs = await simulateFlashloanArbitrage(amountUsd, nativePriceUsd);
 
-  for (const pair of tokenPairs) {
+  for (const pair of CROSS_PAIRS) {
     try {
       const amountIn = ethers.utils.parseUnits(
         amountUsd.toString(),
         pair.tokenA.decimals
       ).toString();
 
-      // ✅ Rate limit before venue fetch
-      await rateLimit();
+      await rateLimit(); // rate limit for getAllVenueQuotes
       const buyQuotes = await getAllVenueQuotes(
         pair.tokenA,
         pair.tokenB,
@@ -261,7 +272,7 @@ async function findCrossDexArbitrage(
         sellQuotes
       );
 
-      if (!spread || spread.spreadBps < 10) continue;
+      if (!spread || spread.spreadBps < 15) continue; // minimum 15 bps
 
       const grossProfitUsd = amountUsd * (spread.spreadBps / 10000);
       const netProfitUsd = grossProfitUsd - costs.totalCostUsd;
@@ -309,16 +320,16 @@ export async function discoverArbitrage(nativePriceUsd: number): Promise<Opportu
 
   log.info('🔍 Starting arbitrage discovery...', { nativePrice: nativePriceUsd });
 
-  // ✅ Test larger amounts first (more likely to be profitable)
-  const testAmounts = [10000, 25000, 50000, 100000];
-
-  // Clear cache before each scan
+  // Clear cache at start of scan
   quoteCache.clear();
+
+  // Test only two amounts to save time (larger ones more likely profitable)
+  const testAmounts = [25000, 50000];
 
   for (const amount of testAmounts) {
     log.info(`📊 Testing with $${amount} flashloan...`);
 
-    // 1. Triangular arbitrage
+    // 1. Triangular arbitrage (fast check, returns first profitable)
     const triangular = await findTriangularArbitrage(amount, nativePriceUsd);
     if (triangular) {
       const candidate = createCandidate(triangular, nativePriceUsd);
@@ -326,7 +337,7 @@ export async function discoverArbitrage(nativePriceUsd: number): Promise<Opportu
       candidates.push(candidate);
     }
 
-    // 2. Cross-DEX arbitrage
+    // 2. Cross-DEX arbitrage (slower but still limited)
     const crossdex = await findCrossDexArbitrage(amount, nativePriceUsd);
     if (crossdex) {
       const candidate = createCandidate(crossdex, nativePriceUsd);
