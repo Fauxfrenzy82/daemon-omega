@@ -8,28 +8,21 @@ import { env } from '../config/env';
 import { fetchNativePriceUsd } from '../config/priceFeeds';
 import { OpportunityCandidate } from '../strategies/common/opportunityCandidate';
 import { discoverArbitrage } from '../strategies/arbitrage/discover';
-// import { discoverClassicIncentive } from '../strategies/classicIncentive/discover';
 
 const log = createLogger('scanLoop');
 
 let loopTimer: NodeJS.Timeout | null = null;
 let isScanning = false;
 let cachedNativePrice = 0.5;
+let scanStartTime = 0;
 
 // Helper function to check if a strategy is enabled
 function isStrategyEnabled(strategyEnvVar: boolean): boolean {
   return env.MASTER_STRATEGY_ENABLED && strategyEnvVar;
 }
 
-// All strategies with their enabled status derived from env + master toggle
+// All strategies (only arbitrage active)
 const discoverers = [
-  // Temporarily disabled Classic Incentive
-  // { 
-  //   name: 'Classic Incentive', 
-  //   fn: discoverClassicIncentive, 
-  //   enabled: isStrategyEnabled(env.STRATEGY_CLASSIC_ENABLED),
-  //   description: 'Instant‑claim incentive programs'
-  // },
   { 
     name: 'Arbitrage', 
     fn: discoverArbitrage, 
@@ -39,12 +32,12 @@ const discoverers = [
 ];
 
 async function runScanCycle(): Promise<void> {
-  // Prevent overlapping cycles
   if (isScanning) {
     log.warn('Scan cycle already running, skipping this tick');
     return;
   }
   isScanning = true;
+  scanStartTime = Date.now();
 
   try {
     recordScanCycle();
@@ -69,19 +62,13 @@ async function runScanCycle(): Promise<void> {
 
     log.info('🔍 Scan cycle started', { nativePrice: cachedNativePrice });
 
-    // Filter to only enabled strategies
     const active = discoverers.filter(d => d.enabled);
-
-    // If no strategies are enabled, log once and idle
     if (active.length === 0) {
-      log.warn('⚠️ No strategies enabled — scan loop is idle. Set MASTER_STRATEGY_ENABLED=true and/or individual strategy flags to true.');
+      log.warn('⚠️ No strategies enabled — scan loop is idle.');
       return;
     }
 
     const strategyResults: Record<string, { candidates: number, status: string, note?: string }> = {};
-
-    // Log which strategies are active
-    log.info(`📋 Active strategies: ${active.map(d => d.name).join(', ')}`);
 
     for (const discoverer of active) {
       let candidates: OpportunityCandidate[] = [];
@@ -105,10 +92,12 @@ async function runScanCycle(): Promise<void> {
       };
     }
 
+    const duration = Date.now() - scanStartTime;
     log.info('📊 Scan cycle summary', {
       nativePrice: cachedNativePrice,
       totalCandidates: Object.values(strategyResults).reduce((sum, s) => sum + s.candidates, 0),
       strategies: strategyResults,
+      durationMs: duration,
     });
   } finally {
     isScanning = false;
