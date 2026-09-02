@@ -142,23 +142,22 @@ export const env = {
   MASTER_STRATEGY_ENABLED: optionalBool('MASTER_STRATEGY_ENABLED', true),
 
   // ============================================
-  // STRATEGY TOGGLES – Only arbitrage and vaultArb are enabled
+  // STRATEGY TOGGLES – Only rateArb and vaultArb are enabled
   // ============================================
-  STRATEGY_ARBITRAGE_ENABLED: optionalBool('STRATEGY_ARBITRAGE_ENABLED', true),
+  STRATEGY_RATE_ARB_ENABLED: optionalBool('STRATEGY_RATE_ARB_ENABLED', true),
   STRATEGY_VAULT_ARB_ENABLED: optionalBool('STRATEGY_VAULT_ARB_ENABLED', true),
   STRATEGY_LP_ENABLED: optionalBool('STRATEGY_LP_ENABLED', false),
   STRATEGY_DEBT_ENABLED: optionalBool('STRATEGY_DEBT_ENABLED', false),
   STRATEGY_HARVEST_ENABLED: optionalBool('STRATEGY_HARVEST_ENABLED', false),
   STRATEGY_CLASSIC_ENABLED: optionalBool('STRATEGY_CLASSIC_ENABLED', false),
+  STRATEGY_ARBITRAGE_ENABLED: optionalBool('STRATEGY_ARBITRAGE_ENABLED', false), // disabled
 
   // ============================================
-  // ARBITRAGE (TRIANGULAR) CONFIG
+  // ARBITRAGE (TRIANGULAR) CONFIG (disabled)
   // ============================================
   ARBITRAGE_TEST_AMOUNTS: optional('ARBITRAGE_TEST_AMOUNTS', '25000,50000,100000,250000'),
   ARBITRAGE_MIN_PROFIT_USD: optionalNumber('ARBITRAGE_MIN_PROFIT_USD', 0.50),
   ARBITRAGE_RATE_LIMIT_MS: optionalNumber('ARBITRAGE_RATE_LIMIT_MS', 150),
-  // ✅ Morpho Blue flashloan provider (0% fee)
-  FLASHLOAN_PROVIDER: optional('FLASHLOAN_PROVIDER', 'morpho'),
 
   // ============================================
   // VAULT ARBITRAGE CONFIG
