@@ -4,7 +4,7 @@ import { TokenInfo } from '../../config/tokens';
 
 export interface OpportunityCandidate {
   id: string;
-  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive' | 'arbitrage';
+  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive' | 'arbitrage' | 'rateArb';
   protocol: string;
   params: Record<string, any>;
   estimatedGrossProfitUsd: number;
@@ -57,7 +57,7 @@ export type ActionStep =
     }
   | {
       type: 'deposit';
-      protocol: 'aave-v3' | 'stata';
+      protocol: 'aave-v3' | 'stata' | 'morpho-markets-v1';
       token?: string;
       amount?: string | { useOutputOfCallAt: number };
       tokenIn?: string;
@@ -67,14 +67,14 @@ export type ActionStep =
     }
   | {
       type: 'withdraw';
-      protocol: 'aave-v3' | 'stata';
+      protocol: 'aave-v3' | 'stata' | 'morpho-markets-v1';
       token: string;
       amount: string | { useOutputOfCallAt: number };
       primaryAddress?: string;
     }
   | {
       type: 'borrow';
-      protocol: 'aave-v3';
+      protocol: 'aave-v3' | 'morpho-markets-v1';
       collateral?: string;
       token?: string;
       amount?: string | { useOutputOfCallAt: number };
