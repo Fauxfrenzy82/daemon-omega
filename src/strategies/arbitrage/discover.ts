@@ -108,9 +108,8 @@ export async function discoverArbitrage(nativePrice: number) {
   const candidates: OpportunityCandidate[] = [];
   cache.clear();
 
-  // ✅ TEST SMALLER AMOUNTS: 500, 1000, 2000, 5000
-  // Override env variable for this test
-  const amounts = [500, 1000, 2000, 5000];
+  // ✅ TEST MICRO AMOUNTS: 300, 200, 100, 50
+  const amounts = [300, 200, 100, 50];
 
   for (const amount of amounts) {
     const result = await findTriangular(amount, nativePrice);
