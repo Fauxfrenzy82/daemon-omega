@@ -8,8 +8,10 @@ import { createLogger } from '../../utils/logger';
 
 const log = createLogger('arbitrage-build');
 
-const AAVE_V3_POOL_ADDRESSES_PROVIDER = '0xa97684ead0e402dc232d5a977953df7ecbab3cdb';
-const FLASHLOAN_PROTOCOL = 'aave-v3';
+// ✅ Morpho Blue Polygon address (from official docs)
+const MORPHO_BLUE_POLYGON = '0x6c247b1F6182318877311737BaC0844bAa518F5e';
+// ✅ Protocol identifier for Enso – must match Enso's supported protocols
+const FLASHLOAN_PROTOCOL = 'morpho-markets-v1';
 
 export async function buildActionPlan(
   candidate: OpportunityCandidate,
@@ -56,14 +58,15 @@ export async function buildActionPlan(
     protocol: FLASHLOAN_PROTOCOL,
     flashloanToken: flashLoanToken.address,
     flashloanAmount: flashLoanAmount,
-    primaryAddress: AAVE_V3_POOL_ADDRESSES_PROVIDER,
+    primaryAddress: MORPHO_BLUE_POLYGON, // ✅ Morpho Blue on Polygon
     callback: [step1, step2, step3],
   };
 
-  log.info('Arbitrage action plan built', {
+  log.info('Arbitrage action plan built (Morpho flashloan)', {
     amountUsd: params.amountUsd,
     path: path.join('→'),
     flashloanProtocol: FLASHLOAN_PROTOCOL,
+    fee: '0%',
   });
 
   return {
