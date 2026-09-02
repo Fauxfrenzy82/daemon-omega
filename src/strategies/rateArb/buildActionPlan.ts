@@ -58,11 +58,12 @@ export async function buildActionPlan(
       useOutput: false,
     };
 
+    // ✅ FIX: Ensure flashloanStep has flashloanToken (not token)
     const flashloanStep: ActionStep = {
       type: 'flashloan',
       protocol: flashloanProtocol,
-      flashloanToken: flashLoanToken.address,
-      flashloanAmount: flashLoanAmount,
+      flashloanToken: flashLoanToken.address, // ✅ Required field
+      flashloanAmount: flashLoanAmount,       // ✅ Required field
       primaryAddress,
       callback: [depositStep, borrowStep],
     };
@@ -90,8 +91,8 @@ export async function buildActionPlan(
     const flashloanStep: ActionStep = {
       type: 'flashloan',
       protocol: flashloanProtocol,
-      flashloanToken: flashLoanToken.address,
-      flashloanAmount: flashLoanAmount,
+      flashloanToken: flashLoanToken.address, // ✅ Required field
+      flashloanAmount: flashLoanAmount,       // ✅ Required field
       primaryAddress,
       callback: [depositStep, borrowStep],
     };
