@@ -4,7 +4,7 @@ import { TokenInfo } from '../../config/tokens';
 
 export interface OpportunityCandidate {
   id: string;
-  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive' | 'arbitrage' | 'rateArb';
+  strategy: 'debtPosition' | 'vaultArb' | 'lpEntryExit' | 'harvestShort' | 'classicIncentive' | 'arbitrage' | 'rateArb' | 'crossDexArb';
   protocol: string;
   params: Record<string, any>;
   estimatedGrossProfitUsd: number;
