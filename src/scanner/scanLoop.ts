@@ -6,7 +6,7 @@ import { hasExecutionCapacity } from '../execution/concurrency';
 import { env } from '../config/env';
 import { fetchNativePriceUsd } from '../config/priceFeeds';
 import { OpportunityCandidate } from '../strategies/common/opportunityCandidate';
-import { discoverRateArbitrage } from '../strategies/rateArb/discover';
+import { discoverArbitrage } from '../strategies/arbitrage/discover';
 import { discoverVaultArb } from '../strategies/vaultArb/discover';
 
 const log = createLogger('scanLoop');
@@ -18,10 +18,10 @@ let scanStartTime = 0;
 
 const discoverers = [
   {
-    name: 'Rate Arbitrage',
-    fn: discoverRateArbitrage,
+    name: 'Cross-DEX Arbitrage',
+    fn: discoverArbitrage,
     enabled: true,
-    description: 'Aave vs Morpho rate spread',
+    description: 'Buy on one DEX, sell on another',
   },
   {
     name: 'Vault Arbitrage',
