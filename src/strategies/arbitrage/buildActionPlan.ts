@@ -80,7 +80,7 @@ export async function buildActionPlan(
       flashloanProtocol: flashLoanProvider.protocol,
     });
   } else {
-    // Fallback: triangular arbitrage (if anyone still uses it)
+    // Fallback: triangular arbitrage
     const path = params.tokenPath;
     if (!path) {
       throw new Error('No path specified for arbitrage');
