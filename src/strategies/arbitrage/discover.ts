@@ -7,22 +7,19 @@ import { pushCandidate } from '../../execution/queue';
 import { getAllVenueQuotes, findBestVenueSpread } from '../../scanner/sources/ensoMultiVenue';
 import { TOKENS, TokenInfo } from '../../config/tokens';
 import { OpportunityCandidate } from '../common/opportunityCandidate';
+import { RateLimiter } from '../../utils/rateLimiter';
 
 const log = createLogger('arbitrage');
 
 // ============================================
-// RATE LIMITING & CACHE
+// RATE LIMITING
 // ============================================
 
-let lastRequestTime = 0;
-const MIN_INTERVAL = env.ARBITRAGE_RATE_LIMIT_MS || 150;
+const ensoLimiter = new RateLimiter(8, 1000, 'enso-arbitrage');
 
-async function rateLimit() {
-  const now = Date.now();
-  const wait = MIN_INTERVAL - (now - lastRequestTime);
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastRequestTime = Date.now();
-}
+// ============================================
+// CACHE
+// ============================================
 
 const cache = new Map<string, any>();
 const CACHE_TTL = 60000;
@@ -35,7 +32,9 @@ async function cachedVenueQuotes(tokenA: TokenInfo, tokenB: TokenInfo, amount: s
   const key = getKey(tokenA.address, tokenB.address, amount);
   const entry = cache.get(key);
   if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
-  await rateLimit();
+  
+  await ensoLimiter.acquire();
+  
   try {
     const quotes = await getAllVenueQuotes(tokenA, tokenB, amount);
     cache.set(key, { data: quotes, ts: Date.now() });
@@ -46,27 +45,21 @@ async function cachedVenueQuotes(tokenA: TokenInfo, tokenB: TokenInfo, amount: s
 }
 
 // ============================================
-// TOKEN PAIRS TO TEST
+// TOKEN PAIRS
 // ============================================
 
 const CROSS_PAIRS = [
   { tokenA: TOKENS.USDC, tokenB: TOKENS.WETH },
   { tokenA: TOKENS.USDC, tokenB: TOKENS.WBTC },
   { tokenA: TOKENS.USDC, tokenB: TOKENS.WMATIC },
-  { tokenA: TOKENS.USDC, tokenB: TOKENS.USDT },
-  { tokenA: TOKENS.USDC, tokenB: TOKENS.DAI },
   { tokenA: TOKENS.WETH, tokenB: TOKENS.WBTC },
-  { tokenA: TOKENS.WETH, tokenB: TOKENS.WMATIC },
-  { tokenA: TOKENS.WBTC, tokenB: TOKENS.WMATIC },
-  { tokenA: TOKENS.WETH, tokenB: TOKENS.USDT },
-  { tokenA: TOKENS.WBTC, tokenB: TOKENS.USDT },
 ];
 
 // ============================================
-// TEST AMOUNTS
+// TEST AMOUNTS: 10, 50, 500, 1000
 // ============================================
 
-const TEST_AMOUNTS = [50, 10, 100, 500, 1000, 10000];
+const TEST_AMOUNTS = [10, 50, 500, 1000];
 
 // ============================================
 // MAIN DISCOVERY
