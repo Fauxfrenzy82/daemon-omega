@@ -13,7 +13,7 @@ import { buildActionPlan as buildVaultActionPlan } from '../strategies/vaultArb/
 import { buildActionPlan as buildDebtActionPlan } from '../strategies/debtPosition/buildActionPlan';
 import { buildActionPlan as buildHarvestActionPlan } from '../strategies/harvestShort/buildActionPlan';
 import { buildActionPlan as buildArbitragePlan } from '../strategies/arbitrage/buildActionPlan';
-import { buildActionPlan as buildRateArbPlan } from '../strategies/rateArb/buildActionPlan'; // ✅ ADD THIS
+import { buildActionPlan as buildRateArbPlan } from '../strategies/rateArb/buildActionPlan';
 import { canStartNewTrade, hasExecutionCapacity } from './concurrency';
 import { incrementActiveTrades, decrementActiveTrades } from './queue';
 import { isBreakerTripped } from '../risk/circuitBreaker';
@@ -21,9 +21,6 @@ import { env } from '../config/env';
 
 const log = createLogger('processor');
 
-/**
- * Build action plan for a candidate based on its strategy type
- */
 async function buildActionPlanForCandidate(
   candidate: OpportunityCandidate,
   options?: { flashLoanToken?: any; flashLoanProvider?: any }
@@ -41,7 +38,7 @@ async function buildActionPlanForCandidate(
       return buildClassicIncentivePlan(candidate, options);
     case 'arbitrage':
       return buildArbitragePlan(candidate, options);
-    case 'rateArb': // ✅ ADD THIS CASE
+    case 'rateArb':
       return buildRateArbPlan(candidate, options);
     default:
       throw new Error(`Unknown strategy: ${candidate.strategy}`);
@@ -61,16 +58,13 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
     return;
   }
 
-  // Mark as active
   incrementActiveTrades();
 
   try {
-    // Use cached values
     const nativePrice = getCachedNativePrice();
     const gasPrice = getCachedGasPrice();
     const liquidityData = getCachedLiquidity();
 
-    // 1. Build action plan
     let plan;
     try {
       plan = await buildActionPlanForCandidate(candidate, {
@@ -82,7 +76,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
       return;
     }
 
-    // 2. Build bundle
     let built;
     try {
       built = await buildBundleFromPlan(plan);
@@ -91,7 +84,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
       return;
     }
 
-    // 3. Simulate
     try {
       const enso = (await import('./ensoClient')).getEnsoClient();
       if (built.bundleData?.simulation?.success === false) {
@@ -102,7 +94,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
       return;
     }
 
-    // 4. Execute
     let executionResult;
     try {
       executionResult = await executeBundle(built);
@@ -118,8 +109,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
       return;
     }
 
-    // 5. Fire-and-forget DB logging
-    const opportunityId = candidate.id;
     logOpportunityAndTrade(
       {
         pairId: candidate.id,
@@ -149,7 +138,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
       log.error('DB logging failed (non-blocking)', { error: String(err) });
     });
 
-    // 6. Fire-and-forget Discord alert
     alertTradeExecuted(
       candidate.id,
       candidate.estimatedNetProfitUsd || 0,
@@ -161,7 +149,6 @@ export async function processCandidate(candidate: OpportunityCandidate): Promise
       profit: candidate.estimatedNetProfitUsd,
     });
   } finally {
-    // Always decrement active trades count
     decrementActiveTrades();
   }
 }
