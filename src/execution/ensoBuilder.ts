@@ -1,7 +1,7 @@
 // src/execution/ensoBuilder.ts
 import { ethers } from 'ethers';
 import { TokenInfo } from '../config/tokens';
-import bb{ executionWallet } from '../treasury/wallets';
+import { executionWallet } from '../treasury/wallets';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
 import { getEnsoClient } from './ensoClient';
