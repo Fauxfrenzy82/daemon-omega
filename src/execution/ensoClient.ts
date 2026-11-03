@@ -3,6 +3,7 @@ import axios from 'axios';
 import { env } from '../config/env';
 import { activeChain } from '../config/chains';
 import { createLogger } from '../utils/logger';
+import { ensoApiLimiter } from '../utils/rateLimiter';
 
 const log = createLogger('ensoClient');
 
@@ -56,6 +57,8 @@ export class EnsoClient {
         chainId,
         url,
       });
+
+      await ensoApiLimiter.acquire();
 
       const response = await axios.get<EnsoTokenResponse[]>(
         url,
@@ -162,6 +165,8 @@ export class EnsoClient {
     });
 
     try {
+      await ensoApiLimiter.acquire();
+
       const response = await axios.post(
         url,
         actions,
@@ -222,6 +227,10 @@ export class EnsoClient {
     amountIn.forEach((a: string) => queryParams.append('amountIn', String(a)));
 
     const url = `${BASE_URL}/v1/shortcuts/route?${queryParams.toString()}`;
+
+    // Throttle BEFORE logging/sending so the log reflects the real send time
+    // and the axios timeout doesn't count time spent waiting in the queue.
+    await ensoApiLimiter.acquire();
 
     log.info('🌐 ENSO ROUTE REQUEST (DIRECT)', {
       tokenIn: tokenIn[0],
