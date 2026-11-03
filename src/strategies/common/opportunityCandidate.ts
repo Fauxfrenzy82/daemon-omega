@@ -54,6 +54,14 @@ export type ActionStep =
       slippage: string;
       primaryAddress?: string;
       poolFee?: number;
+      // When set, the swap is pinned to this exact venue (protocol + router/pool)
+      // instead of letting Enso pick its own best route.
+      venue?: {
+        protocol: string;
+        action: string;
+        primaryAddress: string;
+        poolFee?: string;
+      };
     }
   | {
       type: 'deposit';
