@@ -5,6 +5,7 @@ import { FlashLoanProvider } from '../../execution/ensoBuilder';
 import { TokenInfo } from '../../config/tokens';
 import { TOKENS } from '../../config/tokens';
 import { createLogger } from '../../utils/logger';
+import { VenueHop } from '../../scanner/sources/ensoMultiVenue';
 
 const log = createLogger('arbitrage-build');
 
@@ -35,31 +36,27 @@ export async function buildActionPlan(
   let steps: ActionStep[] = [];
 
   if (type === 'crossdex') {
-    // Cross-DEX: Buy on venue A, sell on venue B
+    // Cross-DEX: Buy on venue A, sell on venue B - each leg pinned to the
+    // exact venue (protocol + router/pool) that the scanner quoted.
     const buyVenue = params.buyVenue;
     const sellVenue = params.sellVenue;
-    const tokenA = params.tokenA;
     const tokenB = params.tokenB;
 
-    const buyStep: ActionStep = {
-      type: 'swap',
-      protocol: 'enso',
-      tokenIn: flashLoanToken.address,
-      tokenOut: tokenB.address,
-      amountIn: flashLoanAmount,
-      slippage: '100',
-      primaryAddress: buyVenue === 'uniswap-v3' ? '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45' : undefined,
-    };
+    const buyHops: VenueHop[] = params.buyQuote?.hops ?? [];
+    const sellHops: VenueHop[] = params.sellQuote?.hops ?? [];
 
-    const sellStep: ActionStep = {
-      type: 'swap',
-      protocol: 'enso',
-      tokenIn: tokenB.address,
-      tokenOut: flashLoanToken.address,
-      amountIn: { useOutputOfCallAt: 0 },
-      slippage: '100',
-      primaryAddress: sellVenue === 'uniswap-v3' ? '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45' : undefined,
-    };
+    // Fail closed: without a verified venue route we must not execute, because
+    // a generic Enso route would trade somewhere other than the quoted venue.
+    if (buyHops.length === 0 || sellHops.length === 0) {
+      throw new Error(
+        `No pinned venue route for ${params.pair} (${buyVenue} -> ${sellVenue}); refusing generic route`
+      );
+    }
+    assertLegMatches('buy', buyHops, flashLoanToken.address, tokenB.address);
+    assertLegMatches('sell', sellHops, tokenB.address, flashLoanToken.address);
+
+    const buySteps = hopsToSteps(buyHops, flashLoanAmount, 0);
+    const sellSteps = hopsToSteps(sellHops, { useOutputOfCallAt: buySteps.length - 1 }, buySteps.length);
 
     const flashloanStep: ActionStep = {
       type: 'flashloan',
@@ -67,16 +64,18 @@ export async function buildActionPlan(
       flashloanToken: flashLoanToken.address,
       flashloanAmount: flashLoanAmount,
       primaryAddress: MORPHO_BLUE,
-      callback: [buyStep, sellStep],
+      callback: [...buySteps, ...sellSteps],
     };
 
     steps = [flashloanStep];
 
-    log.info('Cross-DEX arbitrage action plan built', {
+    log.info('Cross-DEX arbitrage action plan built (venue-pinned)', {
       amountUsd: params.amountUsd,
       pair: params.pair,
       buyVenue,
       sellVenue,
+      buyPools: buyHops.map((h) => h.primaryAddress),
+      sellPools: sellHops.map((h) => h.primaryAddress),
       flashloanProtocol: flashLoanProvider.protocol,
     });
   } else {
@@ -150,4 +149,38 @@ function getTokenBySymbol(symbol: string): TokenInfo {
   };
   if (!map[symbol]) throw new Error(`Unknown token: ${symbol}`);
   return map[symbol];
+}
+
+// Convert venue hops into pinned swap steps. The first hop consumes `firstAmountIn`;
+// every later hop consumes the output of the action right before it.
+// `offset` is the index this leg's first step will have inside the callback.
+function hopsToSteps(
+  hops: VenueHop[],
+  firstAmountIn: string | { useOutputOfCallAt: number },
+  offset: number
+): ActionStep[] {
+  return hops.map((hop, i) => ({
+    type: 'swap',
+    protocol: 'enso',
+    tokenIn: hop.tokenIn,
+    tokenOut: hop.tokenOut,
+    amountIn: i === 0 ? firstAmountIn : { useOutputOfCallAt: offset + i - 1 },
+    slippage: '100',
+    venue: {
+      protocol: hop.protocol,
+      action: hop.action,
+      primaryAddress: hop.primaryAddress,
+      ...(hop.poolFee !== undefined ? { poolFee: hop.poolFee } : {}),
+    },
+  }));
+}
+
+// A leg must start and end on the tokens the plan expects, otherwise the
+// callback would not hand the flash-loan token back.
+function assertLegMatches(leg: string, hops: VenueHop[], tokenIn: string, tokenOut: string): void {
+  const startsOk = hops[0].tokenIn.toLowerCase() === tokenIn.toLowerCase();
+  const endsOk = hops[hops.length - 1].tokenOut.toLowerCase() === tokenOut.toLowerCase();
+  if (!startsOk || !endsOk) {
+    throw new Error(`Pinned ${leg} route does not match expected tokens (${tokenIn} -> ${tokenOut})`);
+  }
 }
