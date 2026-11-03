@@ -19,6 +19,26 @@ export const CONFIRMED_VENUES = [
 
 export type VenueSlug = typeof CONFIRMED_VENUES[number];
 
+// Every swap aggregator Enso can route through. For a venue-isolated quote we
+// must switch ALL of them off, otherwise an aggregator can reroute the trade
+// through any DEX and the "venue" label is meaningless.
+const ALL_AGGREGATORS = [
+  '0x', '1inch', 'openocean', 'kyberswap', 'native', 'paraswap', 'bebop',
+  'barter', 'sushiswap-router', 'ooga-booga', 'renegade', 'uniswap', 'rooster',
+  'wowmax', 'grapher', 'hyperbloom', 'hyperswap', 'hyperflow', 'fly', 'eisen',
+  'nordstern', 'everlong', 'bitget',
+];
+
+// One executable swap on a specific venue, taken from Enso's own route response.
+export interface VenueHop {
+  protocol: string;
+  action: string;
+  primaryAddress: string;
+  tokenIn: string;
+  tokenOut: string;
+  poolFee?: string;
+}
+
 export interface VenueQuote {
   venue: VenueSlug;
   tokenIn: TokenInfo;
@@ -26,6 +46,59 @@ export interface VenueQuote {
   amountIn: string;
   amountOut: string;
   price: number;
+  // The exact hops Enso would use on this venue. The bundle builder replays
+  // these so the trade executes on the venue that was quoted.
+  hops: VenueHop[];
+}
+
+const warnedVenues = new Set<string>();
+
+function isAddress(a: unknown): a is string {
+  return typeof a === 'string' && /^0x[a-fA-F0-9]{40}$/.test(a);
+}
+
+function first(v: unknown): string {
+  return Array.isArray(v) ? String(v[0]) : String(v);
+}
+
+/**
+ * Turn Enso's route response into venue hops, or null if the route does not
+ * run purely on the requested venue (fail closed: no verified venue, no quote).
+ */
+function extractVenueHops(venue: VenueSlug, routeData: any): VenueHop[] | null {
+  const route = routeData?.route;
+  if (!Array.isArray(route) || route.length === 0) return null;
+
+  const hops: VenueHop[] = [];
+  for (const h of route) {
+    const protocol = String(h?.protocol ?? '').toLowerCase();
+    const action = String(h?.action ?? '').toLowerCase();
+    const primary = h?.primary;
+
+    if (protocol !== venue || action !== 'swap' || !isAddress(primary)) {
+      if (!warnedVenues.has(`${venue}:${protocol}:${action}`)) {
+        warnedVenues.add(`${venue}:${protocol}:${action}`);
+        log.warn('Venue quote discarded: route is not a pure swap on the requested venue', {
+          requestedVenue: venue,
+          hopProtocol: protocol,
+          hopAction: action,
+          hasPrimary: isAddress(primary),
+        });
+      }
+      return null;
+    }
+
+    const poolFee = h?.args?.poolFee;
+    hops.push({
+      protocol,
+      action,
+      primaryAddress: primary,
+      tokenIn: first(h.tokenIn),
+      tokenOut: first(h.tokenOut),
+      ...(poolFee !== undefined && poolFee !== null ? { poolFee: String(poolFee) } : {}),
+    });
+  }
+  return hops;
 }
 
 export async function getVenueQuote(
@@ -54,6 +127,7 @@ export async function getVenueQuote(
           slippage: '100',
           routingStrategy: 'router',
           ignoreStandards,
+          ignoreAggregators: ALL_AGGREGATORS,
         } as any),
       {
         label: `ensoMultiVenue.${venue}.${tokenIn.symbol}->${tokenOut.symbol}`,
@@ -68,6 +142,11 @@ export async function getVenueQuote(
       return null;
     }
 
+    const hops = extractVenueHops(venue, routeData);
+    if (!hops) {
+      return null;
+    }
+
     const amountInHuman = Number(amountIn) / 10 ** tokenIn.decimals;
     const amountOutHuman = Number(amountOut) / 10 ** tokenOut.decimals;
     const price = amountInHuman > 0 ? amountOutHuman / amountInHuman : 0;
@@ -79,6 +158,7 @@ export async function getVenueQuote(
       amountIn,
       amountOut: String(amountOut),
       price,
+      hops,
     };
   } catch (err: any) {
     log.debug('Venue quote failed', {
