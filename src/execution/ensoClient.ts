@@ -222,14 +222,19 @@ export class EnsoClient {
     const tokenOut = Array.isArray(params.tokenOut) ? params.tokenOut : [params.tokenOut];
     const amountIn = Array.isArray(params.amountIn) ? params.amountIn : [params.amountIn];
 
+    // Venue isolation: Enso only honours these when they are actually sent.
+    // (Previously dropped silently, so every "venue" quote was the same route.)
+    const ignoreStandards: string[] = Array.isArray(params.ignoreStandards) ? params.ignoreStandards : [];
+    const ignoreAggregators: string[] = Array.isArray(params.ignoreAggregators) ? params.ignoreAggregators : [];
+    ignoreStandards.forEach((v: string) => queryParams.append('ignoreStandards', v));
+    ignoreAggregators.forEach((v: string) => queryParams.append('ignoreAggregators', v));
+
     tokenIn.forEach((t: string) => queryParams.append('tokenIn', t));
     tokenOut.forEach((t: string) => queryParams.append('tokenOut', t));
     amountIn.forEach((a: string) => queryParams.append('amountIn', String(a)));
 
     const url = `${BASE_URL}/v1/shortcuts/route?${queryParams.toString()}`;
 
-    // Throttle BEFORE logging/sending so the log reflects the real send time
-    // and the axios timeout doesn't count time spent waiting in the queue.
     await ensoApiLimiter.acquire();
 
     log.info('🌐 ENSO ROUTE REQUEST (DIRECT)', {
