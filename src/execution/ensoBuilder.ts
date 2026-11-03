@@ -100,13 +100,39 @@ function convertStepToEnsoAction(step: ActionStep, context: { flashLoanAmount: s
         throw new Error(`Invalid tokenOut: ${step.tokenOut} - must be 0x + 40 hex characters`);
       }
       
+      const amountInArg =
+        typeof step.amountIn === 'string'
+          ? step.amountIn
+          : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt };
+
+      // Pinned venue: call the specific DEX protocol directly so the trade
+      // really executes on the venue the scanner quoted.
+      if (step.venue) {
+        if (!isValidEVMAddress(step.venue.primaryAddress)) {
+          throw new Error(`Invalid venue primaryAddress: ${step.venue.primaryAddress}`);
+        }
+        const venueArgs: Record<string, any> = {
+          tokenIn: step.tokenIn.toLowerCase(),
+          tokenOut: step.tokenOut.toLowerCase(),
+          amountIn: amountInArg,
+          slippage: step.slippage,
+          primaryAddress: step.venue.primaryAddress.toLowerCase(),
+          ...(step.venue.poolFee !== undefined ? { poolFee: step.venue.poolFee } : {}),
+        };
+
+        log.info(`PINNED SWAP PARSED - Venue: ${step.venue.protocol} | Pool/Router: ${venueArgs.primaryAddress} | In: ${venueArgs.tokenIn} | Out: ${venueArgs.tokenOut}`);
+
+        return {
+          protocol: step.venue.protocol,
+          action: step.venue.action,
+          args: venueArgs,
+        };
+      }
+
       const args = {
         tokenIn: step.tokenIn.toLowerCase(),
         tokenOut: step.tokenOut.toLowerCase(),
-        amountIn:
-          typeof step.amountIn === 'string'
-            ? step.amountIn
-            : { useOutputOfCallAt: step.amountIn.useOutputOfCallAt },
+        amountIn: amountInArg,
         slippage: step.slippage,
         ...(step.primaryAddress ? { primaryAddress: step.primaryAddress.toLowerCase() } : {}),
         ...(step.poolFee !== undefined ? { poolFee: step.poolFee } : {}),
