@@ -19,15 +19,24 @@ export const CONFIRMED_VENUES = [
 
 export type VenueSlug = typeof CONFIRMED_VENUES[number];
 
-// Every swap aggregator Enso can route through. For a venue-isolated quote we
-// must switch ALL of them off, otherwise an aggregator can reroute the trade
-// through any DEX and the "venue" label is meaningless.
-const ALL_AGGREGATORS = [
+// Swap aggregators Enso knows about. For a venue-isolated quote we switch most
+// of them off so an aggregator cannot reroute the trade through another DEX.
+// IMPORTANT: 'native' is Enso's own on-chain DEX routing. It must stay ON,
+// otherwise Enso answers 404 "Swap not found" for every pair.
+// Override with ENSO_KEEP_AGGREGATORS (comma separated) without a code change.
+const KNOWN_AGGREGATORS = [
   '0x', '1inch', 'openocean', 'kyberswap', 'native', 'paraswap', 'bebop',
   'barter', 'sushiswap-router', 'ooga-booga', 'renegade', 'uniswap', 'rooster',
   'wowmax', 'grapher', 'hyperbloom', 'hyperswap', 'hyperflow', 'fly', 'eisen',
   'nordstern', 'everlong', 'bitget',
 ];
+
+const KEEP_AGGREGATORS = (process.env.ENSO_KEEP_AGGREGATORS ?? 'native')
+  .split(',')
+  .map((a) => a.trim().toLowerCase())
+  .filter(Boolean);
+
+const IGNORED_AGGREGATORS = KNOWN_AGGREGATORS.filter((a) => !KEEP_AGGREGATORS.includes(a));
 
 // One executable swap on a specific venue, taken from Enso's own route response.
 export interface VenueHop {
@@ -127,7 +136,7 @@ export async function getVenueQuote(
           slippage: '100',
           routingStrategy: 'router',
           ignoreStandards,
-          ignoreAggregators: ALL_AGGREGATORS,
+          ignoreAggregators: IGNORED_AGGREGATORS,
         } as any),
       {
         label: `ensoMultiVenue.${venue}.${tokenIn.symbol}->${tokenOut.symbol}`,
