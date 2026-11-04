@@ -264,12 +264,23 @@ export class EnsoClient {
 
       return response.data;
     } catch (error: any) {
-      log.error('🌐 ENSO ROUTE ERROR (DIRECT)', {
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : null,
-        message: error.message,
-      });
+      const status = error.response?.status;
+      if (status === 404) {
+        // "Swap not found" is a normal answer when a venue has no pool for the
+        // pair, so keep it to one short warning instead of an error dump.
+        log.warn('🌐 ENSO ROUTE NOT FOUND (DIRECT)', {
+          tokenIn: tokenIn[0],
+          tokenOut: tokenOut[0],
+          message: error.response?.data?.message ?? error.message,
+        });
+      } else {
+        log.error('🌐 ENSO ROUTE ERROR (DIRECT)', {
+          status,
+          statusText: error.response?.statusText,
+          data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : null,
+          message: error.message,
+        });
+      }
       throw error;
     }
   }
