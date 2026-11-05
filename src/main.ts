@@ -12,6 +12,7 @@ import { startHealthServer } from './utils/healthServer';
 import { createLogger } from './utils/logger';
 import { getHourlySummary, getDailySummary } from './reporting/summary';
 import { fetchNativePriceUsd } from './config/priceFeeds';
+import { runEnsoCalibration } from './diagnostics/ensoCalibration';
 
 const log = createLogger('main');
 
@@ -47,6 +48,10 @@ async function bootstrap(): Promise<void> {
   try {
     initEnsoClient();
     log.info('Enso client initialized successfully');
+    if (process.env.ENSO_CALIBRATION === 'true') {
+      // Diagnostic only: trades nothing. Runs in the background.
+      runEnsoCalibration().catch((err) => log.error('Calibration failed', { error: String(err) }));
+    }
   } catch (err) {
     log.error('Failed to initialize Enso client', {
       error: err instanceof Error ? err.message : String(err),
